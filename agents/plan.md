@@ -1,7 +1,7 @@
 # VPS Pilot implementation plan
 
-Status: Milestone 1, shell reviewed and committed; Software UI increment awaiting
-user review.
+Status: Milestone 1, shell and Software UI committed; terminal UI reviewed. The
+expanded helper, VPS-tab reordering, and workspace-persistence batch awaits review.
 
 This plan records the scope agreed with the user on 2026-10-29. Read
 `agents/goal.md` first. This document expands that goal; it does not authorize
@@ -272,7 +272,7 @@ accessible server tabs, closing/reopening sample profiles, per-server navigation
 state, sample Overview, disconnected state, collapsible per-server command
 activity, and locally bundled Manrope typography.
 
-The second checkpoint adds the sample Software catalog, category filtering,
+The second checkpoint was approved and committed as `0b8da7e`: sample Software catalog, category filtering,
 versions/ownership/scope details, server-specific Nginx port-conflict review,
 protected system Python, and pending runtime installation review. Production's
 conflict identifies Dokploy-managed Traefik; Staging identifies Caddy. Filters
@@ -281,14 +281,63 @@ remain disabled; this is not a discovery or preflight implementation.
 
 Browser checks passed for these sample flows, empty/disconnected states, dialog
 focus restoration, and narrow layouts. The UI checks do not establish real-server
-installation safety. Other tools still show explicit placeholders. Server-tab
-reordering and terminal docking are not implemented yet. No backend or remote
-operations were added.
+installation safety.
+
+The third checkpoint was reviewed and adds Dockview's MIT core and xterm.js with
+its fit addon (currently in the working tree):
+
+- Read-only sample shell/log output, up to 12 sessions per VPS.
+- New tabs, horizontal/vertical splits, pointer-based docking/grouping and
+  resizing, rename, maximize/restore, keyboard-accessible session controls,
+  closing all tabs, and reset with confirmation.
+- Terminal instances stay mounted when navigating tools or switching VPS tabs.
+- Per-VPS layout persistence stores only allowlisted metadata (panel IDs/titles,
+  sample type, server ID, layout geometry); no output, commands, or credentials.
+  Restore never opens SSH connections or executes commands. Invalid layouts
+  fall back to defaults. Storage failures remain visible without blocking use.
+- Server-to-server panel drops are rejected. Popouts/floating windows and
+  enterprise docking features are not enabled.
+- Lazy loading keeps the terminal dependencies out of the initial Overview
+  screen. The terminal bundle still produces Vite's large-chunk advisory.
+- Focused layout-boundary tests cover metadata filtering, cross-server panels,
+  invalid components/geometry, missing/duplicate panels, and empty layouts.
+  Browser coverage checks workspace interactions and sample state isolation.
+
+The user requested larger UI batches after reviewing the terminal workspace.
+The fourth checkpoint includes:
+
+- VPS tab reordering with the maintained `@dnd-kit/react` sortable controls,
+  dedicated drag handles, and keyboard reordering. Reordering preserves server
+  identity and the active workspace. Terminal docking remains a separate scope.
+- Allowlisted local workspace preferences: open-tab order, selected VPS, each
+  server's selected tool, command-panel visibility, Software category, and helper
+  sample scenario. Intentionally closed tabs remain closed after restart.
+- Preference validation drops foreign profiles, duplicates, and unknown fields;
+  corrupt storage falls back to defaults, while unavailable storage allows
+  continued in-memory use. Preferences never contain credentials or commands.
+- Helper lifecycle screens with not-installed, installed, update-available, and
+  disconnected examples. Overview reflects the selected helper sample state.
+- Shared action-review and themed checkbox controls. Helper install/update/remove
+  reviews show their target, expected changes, protected resources, pending exact
+  command plan, and confirmation acknowledgments for update/removal. These are
+  reviews, not execution or per-command sudo approval implementations.
+- The manual-removal section explains offline availability after a verified
+  installation. Its placeholder command cannot be copied as a working command.
+  Actual signed releases, verified paths, executable commands, and ownership
+  manifests remain part of the helper backend milestone.
+- Browser coverage of helper reviews, pointer/keyboard reordering, restoring
+  per-server state, empty/disconnected views, narrow layouts, and storage errors.
+  Focused preference tests enforce metadata and server-identity boundaries.
+
+No Rust changes, backend, SSH execution, or remote operations were added. Core
+Milestone 1 shell, terminal, Software, and helper review flows are available for
+UI review. Detailed Docker/Proxy/Services/Storage/Firewall screens still show
+explicit placeholders and remain for their integration milestones.
 
 Pause for user review before the next increment. After that review, continue
-Milestone 1 with the agreed corrections and a bounded next step, such as helper
-lifecycle screens or terminal docking. Do not complete the entire milestone
-without review checkpoints.
+with agreed corrections. Confirm the core UI review before starting Milestone 2
+SSH implementation. Maintain significant review checkpoints as requested by the
+user; do not implement the remaining backend and management milestones at once.
 
 Do not install software or helpers on any VPS while building the UI. Revisit
 library compatibility and the exact supported-server matrix at their respective

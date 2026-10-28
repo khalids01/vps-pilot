@@ -1,0 +1,54 @@
+.pilot-terminal-theme {
+  color-scheme: dark;
+  --dv-group-view-background-color: var(--background);
+  --dv-tabs-and-actions-container-background-color: var(--card);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--accent);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--card);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--secondary);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--card);
+  --dv-activegroup-visiblepanel-tab-color: var(--primary);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-paneview-active-outline-color: var(--ring);
+  --dv-separator-border: var(--border);
+  --dv-tabs-and-actions-container-height: 36px;
+  --dv-tab-font-size: 12px;
+  --dv-tab-divider-color: var(--border);
+  --dv-icon-hover-background-color: var(--muted);
+  --dv-drag-over-background-color: color-mix(
+    in oklch,
+    var(--primary) 15%,
+    transparent
+  );
+  --dv-drag-over-border-color: var(--primary);
+  --dv-drag-over-border: 1px solid var(--primary);
+  --dv-active-sash-color: var(--primary);
+  --dv-sash-color: var(--border);
+  --dv-scrollbar-background-color: var(--muted);
+  --dv-tabs-container-scrollbar-color: var(--muted-foreground);
+  --dv-overlay-z-index: 30;
+  --dv-tab-margin: 0;
+  --dv-tab-close-icon-size: 14px;
+  --dv-border-radius: 0px;
+  --dv-tab-border-radius: 0px;
+  --dv-tab-group-chip-font-size: 12px;
+}
+
+.pilot-terminal-theme .dv-tab:focus-visible,
+.pilot-terminal-theme .dv-default-tab-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.pilot-terminal-theme .dv-content-container {
+  background: var(--background);
+}
+
+.pilot-terminal-theme .xterm {
+  height: 100%;
+}
+
+.pilot-terminal-theme .xterm-viewport {
+  scrollbar-color: var(--muted) var(--background);
+}

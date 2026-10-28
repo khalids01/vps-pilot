@@ -1,3 +1,5 @@
+import { DragDropProvider } from "@dnd-kit/react";
+import { isSortable } from "@dnd-kit/react/sortable";
 import {
   ArrowRight,
   ChevronDown,
@@ -15,9 +17,8 @@ import {
   SquareTerminal,
   Terminal,
   Workflow,
-  X,
 } from "lucide-react";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,10 +28,19 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
+import { HelperWorkspace } from "@/features/helper/helper-workspace";
 import { type SampleServer, sampleServers, type ToolId } from "./fixtures";
 import { Overview } from "./overview";
+import { type ServerPreferences, useWorkspacePreferences } from "./preferences";
+import { ServerTab } from "./server-tab";
 import { Software } from "./software";
+
+const TerminalWorkspace = lazy(() =>
+  import("@/features/terminal/terminal-workspace").then((module) => ({
+    default: module.TerminalWorkspace,
+  })),
+);
 
 const tools = [
   {
@@ -130,8 +140,15 @@ function ToolPlaceholder({
   );
 }
 
-function CommandPanel({ server }: { server: SampleServer }) {
-  const [expanded, setExpanded] = useState(true);
+function CommandPanel({
+  server,
+  expanded,
+  onExpandedChange,
+}: {
+  server: SampleServer;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+}) {
   const outputId = `activity-${server.id}`;
   return (
     <section
@@ -156,7 +173,7 @@ function CommandPanel({ server }: { server: SampleServer }) {
           size="xs"
           aria-expanded={expanded}
           aria-controls={outputId}
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => onExpandedChange(!expanded)}
         >
           {expanded ? "Hide output" : "Show output"}
           {expanded ? (
@@ -195,8 +212,23 @@ function CommandPanel({ server }: { server: SampleServer }) {
   );
 }
 
-function ServerWorkspace({ server }: { server: SampleServer }) {
-  const [selectedTool, setSelectedTool] = useState<ToolId>("overview");
+function ServerWorkspace({
+  server,
+  preferences,
+  onPreferencesChange,
+}: {
+  server: SampleServer;
+  preferences: ServerPreferences;
+  onPreferencesChange: (patch: Partial<ServerPreferences>) => void;
+}) {
+  const selectedTool = preferences.tool;
+  const [terminalOpened, setTerminalOpened] = useState(
+    selectedTool === "terminal",
+  );
+  function navigateToTool(id: ToolId) {
+    if (id === "terminal") setTerminalOpened(true);
+    onPreferencesChange({ tool: id });
+  }
   const tool = tools.find((item) => item.id === selectedTool) ?? tools[0];
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -221,7 +253,7 @@ function ServerWorkspace({ server }: { server: SampleServer }) {
               <Button
                 variant="ghost"
                 aria-current={selectedTool === id ? "page" : undefined}
-                onClick={() => setSelectedTool(id)}
+                onClick={() => navigateToTool(id)}
                 className={`h-10 w-full justify-start gap-3 px-3 ${selectedTool === id ? "bg-sidebar-accent text-primary hover:bg-sidebar-accent hover:text-primary" : "text-muted-foreground"}`}
               >
                 <Icon className="size-4" aria-hidden="true" />
@@ -234,7 +266,9 @@ function ServerWorkspace({ server }: { server: SampleServer }) {
           aria-label={`${server.name}: ${tool.label}`}
           className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8"
         >
-          <div className="mx-auto w-full max-w-6xl">
+          <div
+            className={`mx-auto w-full max-w-6xl ${selectedTool === "terminal" ? "flex min-h-full flex-col" : ""}`}
+          >
             <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
@@ -256,16 +290,59 @@ function ServerWorkspace({ server }: { server: SampleServer }) {
               </span>
             </div>
             {selectedTool === "overview" ? (
-              <Overview server={server} onNavigate={setSelectedTool} />
+              <Overview
+                server={server}
+                helperScenario={preferences.helperScenario}
+                onNavigate={navigateToTool}
+              />
             ) : selectedTool === "software" ? (
-              <Software server={server} />
-            ) : (
+              <Software
+                server={server}
+                category={preferences.softwareCategory}
+                onCategoryChange={(softwareCategory) =>
+                  onPreferencesChange({ softwareCategory })
+                }
+              />
+            ) : selectedTool === "helper" ? (
+              <HelperWorkspace
+                server={server}
+                scenario={preferences.helperScenario}
+                onScenarioChange={(helperScenario) =>
+                  onPreferencesChange({ helperScenario })
+                }
+              />
+            ) : selectedTool !== "terminal" ? (
               <ToolPlaceholder tool={tool} server={server} />
+            ) : null}
+            {terminalOpened && (
+              <div
+                className={
+                  selectedTool === "terminal"
+                    ? "flex min-h-96 flex-1 flex-col"
+                    : "hidden"
+                }
+              >
+                <Suspense
+                  fallback={
+                    <p role="status" className="text-sm text-muted-foreground">
+                      Loading terminal workspace…
+                    </p>
+                  }
+                >
+                  <TerminalWorkspace server={server} />
+                </Suspense>
+              </div>
             )}
           </div>
         </main>
       </div>
-      <CommandPanel server={server} />
+      <CommandPanel
+        server={server}
+        expanded={preferences.commandExpanded}
+        onExpandedChange={(commandExpanded) =>
+          onPreferencesChange({ commandExpanded })
+        }
+      />
       <footer className="flex shrink-0 flex-wrap justify-between gap-x-6 gap-y-1 border-t bg-sidebar px-4 py-2 text-[11px] text-muted-foreground">
         <span className="break-all">
           {server.name} · {server.address}
@@ -277,12 +354,8 @@ function ServerWorkspace({ server }: { server: SampleServer }) {
 }
 
 export function Workspace() {
-  const [openServerIds, setOpenServerIds] = useState(
-    sampleServers.map((server) => server.id),
-  );
-  const [activeServerId, setActiveServerId] = useState<string | null>(
-    sampleServers[0].id,
-  );
+  const { preferences, setPreferences, notice } = useWorkspacePreferences();
+  const { openServerIds, activeServerId } = preferences;
   const [pickerOpen, setPickerOpen] = useState(false);
   const closedServers = sampleServers.filter(
     (server) => !openServerIds.includes(server.id),
@@ -295,8 +368,11 @@ export function Workspace() {
       activeServerId === serverId
         ? (remaining[Math.min(index, remaining.length - 1)] ?? null)
         : activeServerId;
-    setOpenServerIds(remaining);
-    setActiveServerId(nextId);
+    setPreferences((current) => ({
+      ...current,
+      openServerIds: remaining,
+      activeServerId: nextId,
+    }));
     // Closing is safe here: fixtures have no live connection or running session.
     requestAnimationFrame(() =>
       document
@@ -306,8 +382,13 @@ export function Workspace() {
   }
 
   function openSample(serverId: string) {
-    setOpenServerIds((ids) => [...ids, serverId]);
-    setActiveServerId(serverId);
+    setPreferences((current) => ({
+      ...current,
+      openServerIds: current.openServerIds.includes(serverId)
+        ? current.openServerIds
+        : [...current.openServerIds, serverId],
+      activeServerId: serverId,
+    }));
     setPickerOpen(false);
     requestAnimationFrame(() =>
       document.getElementById(`tab-${serverId}`)?.focus(),
@@ -335,47 +416,77 @@ export function Workspace() {
           Fictional servers and sample data. No connections or commands run.
         </span>
       </div>
+      {notice && (
+        <p
+          role="status"
+          className="border-b bg-muted/40 px-5 py-2 text-xs text-muted-foreground"
+        >
+          {notice}
+        </p>
+      )}
       <Tabs
         value={activeServerId}
         onValueChange={(value) => {
           if (typeof value === "string" && openServerIds.includes(value))
-            setActiveServerId(value);
+            setPreferences((current) => ({
+              ...current,
+              activeServerId: value,
+            }));
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
         <div className="flex shrink-0 items-end gap-2 border-b bg-sidebar px-3 pt-2">
           <div className="min-w-0 flex-1 overflow-x-auto">
-            <TabsList
-              aria-label="Sample VPS workspaces"
-              activateOnFocus
-              className="w-max"
+            <DragDropProvider
+              onDragEnd={(event) => {
+                const source = event.operation.source;
+                if (
+                  event.canceled ||
+                  !isSortable(source) ||
+                  source.group !== "vps-tabs" ||
+                  source.index === source.initialIndex
+                )
+                  return;
+                const sourceId = String(source.id);
+                const targetIndex = source.index;
+                setPreferences((current) => {
+                  const order = [...current.openServerIds];
+                  const from = order.indexOf(sourceId);
+                  if (
+                    from < 0 ||
+                    targetIndex < 0 ||
+                    targetIndex >= order.length
+                  )
+                    return current;
+                  const [id] = order.splice(from, 1);
+                  order.splice(targetIndex, 0, id);
+                  return { ...current, openServerIds: order };
+                });
+              }}
             >
-              {openServerIds.map((id) => {
-                const server = sampleServers.find((item) => item.id === id);
-                if (!server) return null;
-                return (
-                  <div key={server.id} className="relative">
-                    <TabsTrigger
-                      id={`tab-${server.id}`}
-                      value={server.id}
-                      className="pr-10"
-                    >
-                      <Server className="size-3.5" aria-hidden="true" />
-                      {server.name}
-                    </TabsTrigger>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`Close ${server.name} sample tab`}
-                      className="absolute top-2 right-1.5 text-muted-foreground"
-                      onClick={() => closeServer(server.id)}
-                    >
-                      <X aria-hidden="true" />
-                    </Button>
-                  </div>
-                );
-              })}
-            </TabsList>
+              <TabsList
+                aria-label="Sample VPS workspaces"
+                activateOnFocus
+                className="w-max"
+              >
+                {openServerIds.map((id, index) => {
+                  const server = sampleServers.find((item) => item.id === id);
+                  return server ? (
+                    <ServerTab
+                      key={id}
+                      server={server}
+                      index={index}
+                      onClose={() => closeServer(id)}
+                    />
+                  ) : null;
+                })}
+              </TabsList>
+            </DragDropProvider>
+            <p id="server-reorder-help" className="sr-only">
+              Drag the handle to reorder VPS tabs. With the handle focused,
+              press Space, use arrow keys, then Space to drop or Escape to
+              cancel.
+            </p>
           </div>
           <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
             <DialogTrigger
@@ -444,7 +555,19 @@ export function Workspace() {
               keepMounted
               className="flex flex-1 flex-col data-hidden:hidden"
             >
-              <ServerWorkspace server={server} />
+              <ServerWorkspace
+                server={server}
+                preferences={preferences.servers[server.id]}
+                onPreferencesChange={(patch) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    servers: {
+                      ...current.servers,
+                      [server.id]: { ...current.servers[server.id], ...patch },
+                    },
+                  }))
+                }
+              />
             </TabsContent>
           ) : null;
         })}

@@ -10,13 +10,16 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SampleServer, ToolId } from "./fixtures";
+import type { HelperScenario } from "./preferences";
 
 export function Overview({
   server,
   onNavigate,
+  helperScenario,
 }: {
   server: SampleServer;
   onNavigate: (tool: ToolId) => void;
+  helperScenario: HelperScenario;
 }) {
   if (!server.available) {
     return (
@@ -123,13 +126,22 @@ export function Overview({
                   <div>
                     <h3 className="text-sm font-medium">{item.name}</h3>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      {item.description}
+                      {item.tool === "helper" &&
+                      helperScenario !== "not-installed"
+                        ? "Sample helper · version sample-1"
+                        : item.description}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
                   <span className="text-xs text-muted-foreground">
-                    {item.status}
+                    {item.tool === "helper"
+                      ? helperScenario === "update"
+                        ? "Update available"
+                        : helperScenario === "installed"
+                          ? "Installed sample"
+                          : "Not installed"
+                      : item.status}
                   </span>
                   <Button
                     variant="outline"

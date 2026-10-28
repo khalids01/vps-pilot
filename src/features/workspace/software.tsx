@@ -196,8 +196,15 @@ function SoftwareReview({
   );
 }
 
-export function Software({ server }: { server: SampleServer }) {
-  const [category, setCategory] = useState<SoftwareCategory>("All");
+export function Software({
+  server,
+  category,
+  onCategoryChange,
+}: {
+  server: SampleServer;
+  category: SoftwareCategory;
+  onCategoryChange: (category: SoftwareCategory) => void;
+}) {
   const [reviewId, setReviewId] = useState<string | null>(null);
   const catalog = sampleCatalogs[server.id] ?? [];
   const review = catalog.find((item) => item.id === reviewId);
@@ -232,7 +239,7 @@ export function Software({ server }: { server: SampleServer }) {
             size="sm"
             variant={category === name ? "secondary" : "ghost"}
             aria-pressed={category === name}
-            onClick={() => setCategory(name)}
+            onClick={() => onCategoryChange(name)}
           >
             {name}
           </Button>
