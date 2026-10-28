@@ -1,10 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "@fontsource-variable/manrope";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans:
+    "Manrope Variable", "Avenir Next", Avenir, ui-sans-serif, system-ui,
+    sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -72,8 +76,7 @@
 
   body {
     @apply m-0 overflow-hidden bg-background text-foreground antialiased;
-    font-family:
-      Manrope, "Avenir Next", Avenir, ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-sans);
     background-image: radial-gradient(
       circle at 88% -12%,
       oklch(0.48 0.12 158 / 20%),

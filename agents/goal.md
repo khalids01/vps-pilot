@@ -3,10 +3,14 @@
 A separate Tauri 2 desktop application using React and TypeScript for managing multiple Linux VPS servers over SSH.
 
 ## Current milestone
-Fresh project foundation only. Implement management features only when requested by the user.
+Milestone 1: build the approved application UI in reviewable increments, following
+`agents/plan.md`. The user reviews each significant increment before further work.
+Use clearly labeled sample data until SSH and management backends are implemented.
 
 ## Agreed scope
 - Multiple simultaneous SSH connections and interactive terminal tabs per server.
+- Each top-level tab owns one VPS workspace, including its sidebar, content,
+  terminal sessions, and command panel. Keep their state isolated per server.
 - Docker containers, Compose projects, images, volumes, and logs.
 - Nginx, Caddy, and Traefik management.
 - UFW firewall status and rule management.

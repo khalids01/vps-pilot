@@ -1,6 +1,6 @@
 # VPS Pilot implementation plan
 
-Status: approved UI direction; implementation not started by this plan.
+Status: Milestone 1, first UI increment implemented; awaiting user review.
 
 This plan records the scope agreed with the user on 2026-10-29. Read
 `agents/goal.md` first. This document expands that goal; it does not authorize
@@ -266,7 +266,17 @@ reviews, required approvals, result verification, and realistic failure handling
 
 ## Next implementation increment
 
-Start with Milestone 1: the themed application shell and fixture-backed screens.
+The first review checkpoint includes the themed shell, accessible server tabs,
+closing/reopening sample profiles, per-server navigation state, sample Overview,
+disconnected state, and collapsible per-server command activity. Other tools
+currently show explicit placeholders. Server-tab reordering and terminal docking
+are not implemented yet. No backend or remote operations were added.
+
+Pause for user review before the next increment. After that review, continue
+Milestone 1 with the agreed corrections and a bounded next step, such as Software
+and its conflict review, or terminal docking. Do not complete the entire milestone
+without review checkpoints.
+
 Do not install software or helpers on any VPS while building the UI. Revisit
 library compatibility and the exact supported-server matrix at their respective
 milestones rather than introducing unrequested integrations during setup.
