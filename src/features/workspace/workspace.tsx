@@ -30,6 +30,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type SampleServer, sampleServers, type ToolId } from "./fixtures";
 import { Overview } from "./overview";
+import { Software } from "./software";
 
 const tools = [
   {
@@ -256,6 +257,8 @@ function ServerWorkspace({ server }: { server: SampleServer }) {
             </div>
             {selectedTool === "overview" ? (
               <Overview server={server} onNavigate={setSelectedTool} />
+            ) : selectedTool === "software" ? (
+              <Software server={server} />
             ) : (
               <ToolPlaceholder tool={tool} server={server} />
             )}

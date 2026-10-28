@@ -1,6 +1,6 @@
 # VPS Pilot
 
-A Tauri 2 desktop app using React and TypeScript. The current UI preview includes per-VPS tabs, navigation, sample Overview data, and a command panel. Server connections and management are not implemented yet.
+A Tauri 2 desktop app using React and TypeScript. The current UI preview includes per-VPS tabs, navigation, sample Overview data, a Software catalog with conflict and ownership reviews, and a command panel. Server connections and management are not implemented yet.
 
 ## Development
 

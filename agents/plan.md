@@ -1,6 +1,7 @@
 # VPS Pilot implementation plan
 
-Status: Milestone 1, first UI increment implemented; awaiting user review.
+Status: Milestone 1, shell reviewed and committed; Software UI increment awaiting
+user review.
 
 This plan records the scope agreed with the user on 2026-10-29. Read
 `agents/goal.md` first. This document expands that goal; it does not authorize
@@ -266,15 +267,27 @@ reviews, required approvals, result verification, and realistic failure handling
 
 ## Next implementation increment
 
-The first review checkpoint includes the themed shell, accessible server tabs,
-closing/reopening sample profiles, per-server navigation state, sample Overview,
-disconnected state, and collapsible per-server command activity. Other tools
-currently show explicit placeholders. Server-tab reordering and terminal docking
-are not implemented yet. No backend or remote operations were added.
+The first review checkpoint was approved and committed as `12e2af0`: themed shell,
+accessible server tabs, closing/reopening sample profiles, per-server navigation
+state, sample Overview, disconnected state, collapsible per-server command
+activity, and locally bundled Manrope typography.
+
+The second checkpoint adds the sample Software catalog, category filtering,
+versions/ownership/scope details, server-specific Nginx port-conflict review,
+protected system Python, and pending runtime installation review. Production's
+conflict identifies Dokploy-managed Traefik; Staging identifies Caddy. Filters
+remain independent across open VPS tabs. Installation, management, and removal
+remain disabled; this is not a discovery or preflight implementation.
+
+Browser checks passed for these sample flows, empty/disconnected states, dialog
+focus restoration, and narrow layouts. The UI checks do not establish real-server
+installation safety. Other tools still show explicit placeholders. Server-tab
+reordering and terminal docking are not implemented yet. No backend or remote
+operations were added.
 
 Pause for user review before the next increment. After that review, continue
-Milestone 1 with the agreed corrections and a bounded next step, such as Software
-and its conflict review, or terminal docking. Do not complete the entire milestone
+Milestone 1 with the agreed corrections and a bounded next step, such as helper
+lifecycle screens or terminal docking. Do not complete the entire milestone
 without review checkpoints.
 
 Do not install software or helpers on any VPS while building the UI. Revisit
