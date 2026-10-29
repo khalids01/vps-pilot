@@ -1,5 +1,12 @@
+pub mod actions;
+mod auth;
+mod catalog;
+mod command;
 mod config;
+pub mod discovery;
+mod services;
 mod store;
+pub mod streams;
 #[cfg(test)]
 mod tests;
 
@@ -62,8 +69,14 @@ struct Runtime {
     challenges: HashMap<String, Challenge>,
     connections: HashMap<String, client::Handle<Client>>,
     errors: HashMap<String, String>,
+    streams: HashMap<String, streams::StreamHandle>,
+    connection_ids: HashMap<String, String>,
+    approvals: HashMap<String, actions::PendingApproval>,
+    unresolved_changes: HashMap<String, String>,
 }
 pub struct SshService {
+    // Production builds remain read-only until destructive integration gates pass.
+    changes_enabled: bool,
     store: Mutex<Store>,
     runtime: AsyncMutex<Runtime>,
 }
@@ -86,12 +99,17 @@ pub struct ConnectionStatus {
 impl SshService {
     pub fn new(path: PathBuf) -> Self {
         Self {
+            changes_enabled: false,
             store: Mutex::new(Store::open(path)),
             runtime: AsyncMutex::new(Runtime {
                 jobs: HashMap::new(),
                 challenges: HashMap::new(),
                 connections: HashMap::new(),
                 errors: HashMap::new(),
+                streams: HashMap::new(),
+                connection_ids: HashMap::new(),
+                approvals: HashMap::new(),
+                unresolved_changes: HashMap::new(),
             }),
         }
     }
@@ -276,9 +294,20 @@ impl SshService {
         challenge_id: &str,
         password: String,
     ) -> Result<(), String> {
+        self.connect_with_credentials(id, challenge_id, password, None)
+            .await
+    }
+    pub async fn connect_with_credentials(
+        &self,
+        id: &str,
+        challenge_id: &str,
+        password: String,
+        passphrase: Option<String>,
+    ) -> Result<(), String> {
         let password = Zeroizing::new(password);
-        if password.is_empty() || password.len() > 4096 {
-            return Err("Enter a password of at most 4096 bytes.".into());
+        let passphrase = passphrase.map(Zeroizing::new);
+        if password.len() > 4096 || passphrase.as_ref().is_some_and(|value| value.len() > 4096) {
+            return Err("Credentials must be at most 4096 bytes.".into());
         }
         let (profile, token, expected, cancelled) = {
             let mut runtime = self.runtime.lock().await;
@@ -327,7 +356,7 @@ impl SshService {
         };
         let result = tokio::select! {
             _ = cancelled => Err("Connection attempt was cancelled.".into()),
-            result = self.authenticate(&profile, expected, &password, &token) => result,
+            result = self.authenticate(&profile, expected, &password, passphrase.as_ref().map(|value| value.as_str()), &token) => result,
         };
         let mut runtime = self.runtime.lock().await;
         if runtime.jobs.get(id).map(|job| &job.token) != Some(&token) {
@@ -341,6 +370,9 @@ impl SshService {
         runtime.jobs.remove(id);
         match result {
             Ok(handle) => {
+                runtime
+                    .connection_ids
+                    .insert(id.into(), Uuid::new_v4().to_string());
                 runtime.connections.insert(id.into(), handle);
                 Ok(())
             }
@@ -355,6 +387,7 @@ impl SshService {
         profile: &Profile,
         expected: Option<HostKey>,
         password: &str,
+        passphrase: Option<&str>,
         token: &str,
     ) -> Result<client::Handle<Client>, String> {
         let expected =
@@ -379,11 +412,16 @@ impl SshService {
             .as_ref()
             .is_some_and(|key| key != &expected)
         {
-            return Err("Host identity changed since verification. No password was sent.".into());
+            return Err(
+                "Host identity changed since verification. Authentication was not attempted."
+                    .into(),
+            );
         }
         let mut handle = result
             .map_err(|_| "SSH connection timed out.")?
-            .map_err(|_| "Could not establish a verified SSH connection. No password was sent.")?;
+            .map_err(|_| {
+                "Could not establish a verified SSH connection. Authentication was not attempted."
+            })?;
         if self
             .runtime
             .lock()
@@ -400,16 +438,19 @@ impl SshService {
         }
         let authenticated = timeout(
             NETWORK_TIMEOUT,
-            handle.authenticate_password(profile.username.clone(), password.to_owned()),
+            auth::authenticate(&mut handle, profile, password, passphrase),
         )
         .await;
         match authenticated {
-            Ok(Ok(result)) if result.success() => Ok(handle),
-            _ => {
+            Ok(Ok(())) => Ok(handle),
+            failure => {
                 let _ = handle
                     .disconnect(Disconnect::ByApplication, "Authentication failed", "")
                     .await;
-                Err("SSH authentication failed or timed out. Check the username, password, and whether password authentication is allowed.".into())
+                Err(match failure {
+                    Ok(Err(message)) => message,
+                    _ => "SSH authentication timed out. Try again.".into(),
+                })
             }
         }
     }
@@ -419,6 +460,23 @@ impl SshService {
             runtime.jobs.remove(id);
             runtime.challenges.remove(id);
             runtime.errors.remove(id);
+            runtime.connection_ids.remove(id);
+            runtime
+                .approvals
+                .retain(|_, approval| approval.profile_id != id);
+            let uncertain = runtime
+                .streams
+                .values()
+                .find(|stream| {
+                    stream.profile_id == id
+                        && stream.mutation_probe.is_some()
+                        && !*stream.verified.lock().unwrap_or_else(|e| e.into_inner())
+                })
+                .and_then(|stream| stream.mutation_probe.clone());
+            if let Some(probe) = uncertain {
+                runtime.unresolved_changes.insert(id.into(), probe);
+            }
+            runtime.streams.retain(|_, stream| stream.profile_id != id);
             runtime.connections.remove(id)
         };
         if let Some(handle) = handle {
@@ -520,9 +578,23 @@ pub async fn ssh_connect(
     service: tauri::State<'_, SshService>,
     profile_id: String,
     challenge_id: String,
-    password: String,
+    password: Option<String>,
+    passphrase: Option<String>,
 ) -> Result<(), String> {
-    service.connect(&profile_id, &challenge_id, password).await
+    if passphrase.is_some() {
+        service
+            .connect_with_credentials(
+                &profile_id,
+                &challenge_id,
+                password.unwrap_or_default(),
+                passphrase,
+            )
+            .await
+    } else {
+        service
+            .connect(&profile_id, &challenge_id, password.unwrap_or_default())
+            .await
+    }
 }
 #[tauri::command]
 pub async fn ssh_disconnect(
@@ -551,4 +623,22 @@ pub async fn ssh_config_hosts(app: tauri::AppHandle) -> Result<Vec<config::Confi
     tauri::async_runtime::spawn_blocking(move || config::read_hosts(&home, &username))
         .await
         .map_err(|_| "SSH config discovery could not complete.")?
+}
+
+#[tauri::command]
+pub async fn ssh_parse_command(
+    app: tauri::AppHandle,
+    command: String,
+) -> Result<ProfileInput, String> {
+    use tauri::Manager;
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Cannot locate your SSH configuration.")?;
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || command::parse(&command, &home, &user))
+        .await
+        .map_err(|_| "Could not read the SSH command.")?
 }

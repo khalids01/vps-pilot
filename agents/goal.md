@@ -3,13 +3,19 @@
 A separate Tauri 2 desktop application using React and TypeScript for managing multiple Linux VPS servers over SSH.
 
 ## Current milestone
-Milestone 2: build SSH connections and real terminals in reviewable increments,
-following `agents/plan.md`. Core UI was reviewed and committed. The first SSH
-increment adds profiles, read-only SSH config discovery, host identity verification,
-and password authentication;
-interactive terminals and management commands remain later work. Keep real server
-workspaces separate from clearly labeled sample data. The user reviews each
-significant increment before further work.
+
+Milestone 2 now includes real SSH PTYs and a native execution/approval foundation.
+Milestone 3 includes read-only Linux inspections, measured Overview values,
+opt-in periodic monitoring, and catalog ownership/conflict preflight, including
+Herdr. See `agents/plan.md` for implemented and outstanding work.
+
+The user authorized the remaining scope on 2026-10-29 without intermediate
+approval pauses. Their available VPS is important and is **not disposable**.
+Do not use it for installation, firewall, proxy rollback, cleanup, or destructive
+integration tests. Production builds enforce read-only app actions in Rust;
+interactive terminal commands retain normal user-entered shell behavior.
+Mutating integrations require a separate disposable VM/VPS and their safety gates
+before they can be enabled. Keep real workspaces separate from sample fixtures.
 
 ## Agreed scope
 - Multiple simultaneous SSH connections and interactive terminal tabs per server.
@@ -38,7 +44,8 @@ significant increment before further work.
 - Protect Docker volumes, mounted storage, active files, and application data during cleanup.
 - Action history must omit secrets. Do not replay destructive commands automatically after reconnecting.
 - Clearly identify the server for every action; initially scope changes to one server at a time.
-- Support SSH config import and host fingerprint verification; plan key/agent authentication and jump hosts.
+- Support SSH config import, host fingerprint verification, keys/agents, and optional passwords.
+  Parse pasted SSH commands into fields without execution; jump hosts remain later work.
 - Define supported Linux distributions and versions before implementing management integrations.
 - If a helper is needed, keep it lightweight, preferably Rust, with no public listener or permanently privileged daemon.
 

@@ -9,6 +9,8 @@ export const toolIds = [
   "storage",
   "firewall",
   "helper",
+  "network",
+  "processes",
 ] as const;
 export type ToolId = (typeof toolIds)[number];
 

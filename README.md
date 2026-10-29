@@ -1,6 +1,15 @@
 # VPS Pilot
 
-A Tauri 2 desktop app using React and TypeScript. It supports saved SSH profiles, host fingerprint verification, and direct password authentication. Sample workspaces provide the planned monitoring, Software, terminal docking, and helper UI. Real interactive terminals and server management are not implemented yet.
+A Tauri 2 desktop app using React and TypeScript for verified SSH connections,
+interactive terminal tabs/splits, and read-only Linux inspection. It supports
+passwords, private keys, encrypted keys, Unix agents, and SSH config discovery.
+Real server workspaces remain separate from clearly labeled sample workspaces.
+
+**App-triggered changes are disabled in Rust in normal builds.** You can connect
+an important VPS for terminals and read-only inspections without enabling software
+installation, service changes, proxy edits, firewall changes, or cleanup. Commands
+you manually enter in an interactive terminal behave normally. No saved tab or
+layout reconnects, opens a shell, or replays a command automatically.
 
 ## Development
 
@@ -11,7 +20,8 @@ Prerequisites: Bun, Rust, and Tauri 2 platform dependencies (WebKitGTK 4.1 and b
 - `bun run dev` — browser preview on localhost:1430
 - `bun run check` — formatting and lint checks
 - `bun run build` — frontend production build and typecheck
-- `bun test` — terminal-layout and workspace-preference boundary tests
+- `bun test` — layout, preferences, measurement parsing and conflict-rule tests
+- `bun run test:e2e` — browser tests with a mocked desktop bridge
 - `cargo check --manifest-path src-tauri/Cargo.toml --locked` — Rust validation
 - `cargo test --manifest-path src-tauri/Cargo.toml --lib` — native tests using disposable local SSH fixtures
 - `bun run tauri build` — desktop build
@@ -24,41 +34,86 @@ Manrope is bundled locally for consistent typography without a network connectio
 
 ## Review real SSH connections
 
-1. Run `bun tauri dev` and click **+** in the top VPS tab row. Choose
-   **Choose a connection** for SSH config entries and app-saved profiles, or
-   **Add a new connection** for a separate hostname/IP, port, username, and name
-   form. Opening a profile creates a real VPS tab without connecting automatically.
-2. Select **Verify and connect**. For a new host, independently compare the
-   displayed SHA256 fingerprint with a trusted source before accepting it.
-3. Enter the SSH password. The host key is checked again before authentication.
-   Passwords are used transiently and are never saved in profiles or preferences.
+1. Run `bun tauri dev` and click **+**. **Connections** lists SSH config
+   entries and app-saved profiles; **New connection** opens the form. Paste
+   `ssh deploy@example.com -p 2222 -i ~/.ssh/deploy` and select **Fill details**,
+   or enter the fields yourself. Opening a workspace does not connect automatically.
+2. Select **Connect**. For a new host, independently compare its SHA256
+   fingerprint with a trusted source before accepting it.
+3. Leave **Password** blank to use your SSH agent, selected private key, or
+   default `~/.ssh/id_ed25519` / `~/.ssh/id_rsa`. If your server needs a password,
+   enter it. Encrypted keys have a separate **Key passphrase** field. The host
+   key is checked again before authentication. Neither credential is saved.
 4. Switch VPS tabs to check connection isolation. Disconnect explicitly, or close
    the real tab and confirm disconnect. Saved profiles remain available.
 
-This increment opens authenticated SSH connections only; it runs no remote
-commands and does not open a shell. Real tabs show no sample metrics or inventory.
-The browser preview cannot create real connections because it has no native bridge.
+Connections alone do not open shells or run commands. Select Terminal and New
+shell to request a remote PTY, or select Inspect in a tool to run its fixed
+read-only inspection. Real tabs show measured data and never use sample metrics.
+The browser preview cannot make real SSH connections because it has no native bridge.
 
-Only direct password authentication is currently supported. Keys, agents, jump
-hosts, host certificates, interactive PTYs, and replacing a
-changed trusted key are later work. A changed host key blocks authentication.
-Host pins belong to VPS Pilot's trust store; system `known_hosts` is not modified.
+Direct password, private-key, Unix SSH-agent, and server-supported `none`
+authentication are available. With an explicit identity, the agent is restricted
+to that key; otherwise up to three agent identities and two default key files
+are tried. Certificates, jump hosts, MFA/keyboard-interactive,
+and replacing a changed trusted host key remain later work. Changed host keys block
+authentication. Host pins belong to VPS Pilot; system `known_hosts` is unchanged.
 
-The connection picker reads `~/.ssh/config`, including named hosts in `Include`
-files, using `ssh2-config`. Wildcards supply defaults, not individual rows. The
-list is read-only; **Refresh list** reloads it. Opening a config entry saves a
-metadata copy in VPS Pilot; subsequent config edits do not alter that copy.
-Only HostName, User, and Port are imported. Keys and other settings are not
-applied; entries requiring proxies, jump hosts, a specific local interface, or
-disabling password authentication are blocked. Unsupported Match conditions,
-include cycles, and parse errors stop config discovery without hiding app-saved
-profiles. No SSH config commands are executed and no identity file is read.
-Adding, editing, or deleting app profiles never writes to your SSH config.
+The picker reads `~/.ssh/config` and Include files using `ssh2-config`.
+Wildcards supply defaults, not individual rows. Refresh reloads the read-only list.
+Opening a config entry saves a metadata copy; later config edits do not change it.
+HostName, User, Port, the first IdentityFile, and the password-authentication policy
+are imported. Proxy/jump/interface requirements remain blocked. Match conditions,
+include cycles, and parse errors stop config discovery without hiding app profiles.
+Config commands are never executed; private keys are read only during an explicitly
+requested, host-verified authentication attempt.
+
+Command paste accepts a destination or config alias, `-p`, `-l`, `-i`, and SSH URLs.
+Quoted absolute key paths and `~/` paths are supported. Relative key paths require
+an absolute path so the app can locate them. Shell expansion, operators, remote
+commands, tunnels, and other SSH options are rejected. Pasted text only fills the
+form: it is never executed, recorded in command history, or saved as a command.
+Adding, editing, and deleting app profiles never writes to SSH config.
 
 Profiles and public host fingerprints are stored in `ssh-profiles.json` inside
 Tauri's app configuration directory. Unix files use mode 0600. Corrupt or externally
 changed storage is preserved; restart after another instance changes the file.
 No saved profile reconnects automatically after an application restart.
+
+## Real terminals and inspections
+
+- Open Terminal on a connected real VPS, then New shell. Add tabs or split
+  right/down; drag panels to group them. Rename, previous/next, maximize/restore,
+  and confirmed closing are available. Up to 12 SSH streams per VPS are allowed.
+- Tool and VPS navigation preserves sessions. Restored layout panes have no live
+  SSH session until Start shell is selected. Disconnect ends channels; remote
+  child processes may continue running, so inspect before retrying work.
+- Overview, Software, Docker, Proxy, Services, Storage, Firewall, Network and
+  Processes have fixed read-only inspections. Missing tools and permission errors
+  remain visible as partial results. CPU usage needs two completed samples.
+- Monitoring is opt-in for Overview, Network and Processes. Snapshots are scoped
+  to their server, timestamped, and marked stale while disconnected.
+- Reviewed reads provide numbered UFW rules, the last 200 service/container log
+  lines and one-level directory scans that do not cross filesystem boundaries.
+  Logs and scans can contain sensitive application output; nothing is persisted.
+- Every sudo read requires a fresh approval showing server, exact command and
+  purpose, including when sudo authorization is cached. Passwords travel only
+  through SSH stdin after a sudo prompt. A missing/wrong password ends the attempt.
+- Software preflight includes Herdr, Docker/Compose, proxies, Dokploy and runtimes.
+  It reports conflicts and missing evidence, including stopped-container port
+  reservations. It does not install software or authorize a mutation.
+
+Command output is bounded; interactive output uses acknowledgements for
+backpressure. Cancellation reports that a remote process may still be running.
+Layouts and tool preferences store metadata only, without terminal input/output
+or credentials. Native controls reject another server's stream IDs.
+
+See [supported systems](agents/supported-systems.md), [the implementation
+plan](agents/plan.md), and [disposable fixture instructions](tests/fixtures/README.md).
+The fixture-tested systemd mutator is disabled in normal builds. Software changes,
+Docker mutations, proxy changes, firewall changes and cleanup need their remaining
+ownership/recovery checks and disposable VM/VPS validation before being enabled.
+The important user VPS must never be used as a destructive test fixture.
 
 ## Review the terminal workspace
 
@@ -88,4 +143,4 @@ affects only the selected VPS. Development shows the disconnected state.
 
 TanStack Query and file-based TanStack Router are wired into the app. Zustand is available for future client state. Tailwind 4, shadcn/Base UI, Lucide, and Biome match Disk Vacuum's stack. Global styles copy its exact dark green theme. Shared Button, Input, Select, and Dialog components are ready to use.
 
-See [agents/goal.md](agents/goal.md) for product scope and safeguards. Signing keys, release endpoints, remote command execution, and server management are not configured. The initial generated icon is a placeholder.
+See [agents/goal.md](agents/goal.md) for product scope and safeguards. Signing keys, release endpoints and mutating server-management integrations are not configured. The initial generated icon is a placeholder.

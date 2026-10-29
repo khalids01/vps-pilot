@@ -31,3 +31,7 @@ dist-ssr
 .tauri/
 
 *.tsbuildinfo
+
+# Browser validation artifacts
+test-results/
+playwright-report/

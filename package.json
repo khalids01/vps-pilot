@@ -11,7 +11,8 @@
     "format": "biome format --write .",
     "lint": "biome lint .",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/router-plugin": "^1.168.35",
     "@tauri-apps/cli": "^2",

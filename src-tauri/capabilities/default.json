@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main local window permissions for app-owned SSH connection lifecycle. No generic shell, arbitrary file, or remote execution permission.",
+  "description": "Main local window permissions for app-owned SSH connection lifecycle. Includes server-bound interactive SSH terminals and fixed inspections; no local shell or arbitrary file access.",
   "windows": [
     "main"
   ],

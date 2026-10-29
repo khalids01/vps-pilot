@@ -6,7 +6,7 @@ import { sampleServers } from "@/features/workspace/fixtures";
 import type { SessionKind } from "./layout";
 
 // xterm expects resolved colors; canvas converts the shared OKLCH theme to RGB.
-function terminalColors(element: HTMLElement) {
+export function terminalColors(element: HTMLElement) {
   const style = getComputedStyle(element);
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 1;

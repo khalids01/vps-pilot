@@ -1,9 +1,10 @@
 [[permission]]
 identifier = "ssh-connection"
-description = "Allow saved-profile management, host identity review, and authenticated SSH connection lifecycle. Does not expose remote execution, local shell commands, arbitrary files, or terminal channels."
+description = "Allow saved-profile management, host identity review, and authenticated SSH connection lifecycle. Includes interactive remote PTYs and fixed read-only inspections; no local shell or arbitrary file access."
 commands.allow = [
   "ssh_profiles",
   "ssh_config_hosts",
+  "ssh_parse_command",
   "ssh_save_profile",
   "ssh_delete_profile",
   "ssh_inspect",
@@ -11,4 +12,13 @@ commands.allow = [
   "ssh_connect",
   "ssh_disconnect",
   "ssh_statuses",
+  "ssh_terminal_open",
+  "ssh_terminal_input",
+  "ssh_terminal_resize",
+  "ssh_stream_ack",
+  "ssh_stream_close",
+  "ssh_inspection_run",
+  "ssh_action_review",
+  "ssh_action_execute",
+  "ssh_action_reject",
 ]

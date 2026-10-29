@@ -1,8 +1,16 @@
 # VPS Pilot implementation plan
 
-Status: core Milestone 1 UI reviewed and committed as `ca55a59`. The first
-Milestone 2 SSH connection increment and config-based tab picker are implemented
-for review.
+Status: core Milestone 1 UI was committed as `ca55a59`; initial SSH connections
+were committed as `11778af`. The working tree now adds real remote PTYs,
+read-only inspections/monitoring, native single-use approvals, catalog preflight,
+and fixture-tested systemd controls. This does **not** complete all milestones.
+App-triggered changes are disabled in Rust in normal builds because the user's
+available VPS is important and not disposable.
+
+The user authorized the remaining scope on 2026-10-29 without repeated review
+pauses. The old checkpoint pauses below are historical, not a current approval
+requirement. Do not run destructive or privileged mutation tests on their VPS.
+See `agents/supported-systems.md` and the current progress section below.
 
 This plan records the scope agreed with the user on 2026-10-29. Read
 `agents/goal.md` first. This document expands that goal; it does not authorize
@@ -214,8 +222,11 @@ Initial scope:
 - Git, Node.js, nvm, Python, and Go. Show versions, executable paths, Linux user,
   and system/package-manager ownership. Protect OS-managed Python and system
   dependencies. Never change a user's default runtime silently.
-- The utility described as "harder" remains unidentified. Confirm its exact name
-  before implementing its catalog entry. Other tools are added only on request.
+- Herdr, identified by the user as https://herdr.dev/docs/install/. Inspect the
+  target Linux user, executable path and installation-manager ownership. Preserve
+  direct-installer, Homebrew, mise and Nix ownership and existing sessions. Verify
+  release/artifact integrity before installation; do not pipe an unchecked online
+  installer into a shell. Other tools are added only on request.
 
 Uninstall defaults to preserving data/configuration. Any purge must be separate,
 explicit, and supported by exact ownership and dependency checks. Block removal
@@ -355,7 +366,7 @@ The first Milestone 2 checkpoint implements:
   in this increment. Authentication uses a fresh, single-use, expiring challenge
   bound to the exact profile revision and rechecks the pinned key before sending
   a password. Passwords are not saved, logged, or routed through query mutations.
-- Main-window-only Tauri capabilities for the nine specific SSH discovery/lifecycle IPC
+- Main-window-only Tauri capabilities for the ten specific SSH discovery/lifecycle/import IPC
   commands; no generic shell, arbitrary file, or remote-execution permission.
 - Plus-button connection picker, separate add form, and real VPS tabs with profile address and connection
   state. Closing a real tab confirms disconnect; closing does not delete its
@@ -371,25 +382,120 @@ The first Milestone 2 checkpoint implements:
   Browser UI tests use a mocked desktop bridge; native WebKit interaction still
   needs user review. No production VPS was used for validation.
 
-The tab picker reads named aliases from `~/.ssh/config` and Include files with
-`ssh2-config` 0.9 (logging disabled). Pattern/default rules resolve HostName, User,
-and Port; excluded aliases are not offered. Opening explicitly stores a metadata
-copy in the app; it never writes back to SSH config. Refresh reloads the source.
-App-created profiles use their own form. Search spans config and app lists, and
-reopening the same imported metadata reuses its profile. Proxy/jump/interface and
-password-disabled entries are blocked. Match/unknown directives and cycles fail
-closed without hiding app profiles; config commands and identity files are never
-executed/read. Disposable fixtures cover discovery, defaults, duplicates, includes,
-scopes, malformed config, and unsupported routing/authentication settings.
+The connection picker uses a compact list with search, source headings, and inline
+edit/remove actions. Its Connections / New connection tabs replace the earlier
+choice cards and long explanations. The new form accepts a pasted SSH command,
+then fills editable fields without saving the raw command or executing anything.
+Only destination/config alias, -p, -l, -i, and SSH URLs are accepted; operators,
+expansion, tunnels, unknown options, and remote commands are rejected. Private keys
+can also be selected through the existing native file picker.
 
-Current limits: password authentication only, app-owned host pins, no changed-key
-replacement UI, key files/agents, full SSH config execution, jump hosts, host certificates,
-PTYs, discovery, or server management. These remain explicit future increments.
+Config discovery uses `ssh2-config` 0.9 with logging disabled, including scoped
+Include files. Opening stores an app-owned metadata copy and never writes back.
+HostName/User/Port, the first IdentityFile, and password-authentication policy are
+imported. Proxy/jump/interface requirements are blocked. Match/unknown directives
+and cycles fail closed without hiding app profiles. Config commands never execute.
 
-Pause for review of this checkpoint before adding real terminal channels or
-additional authentication methods. Maintain significant review checkpoints as
-requested; do not implement the remaining milestones at once.
+Password entry is optional: authentication supports none (when allowed by the
+server), selected private keys, Unix agents, and default id_ed25519/id_rsa files.
+Explicit identities restrict agent signatures to the selected key. Without an
+identity, at most three agent keys and two default files are tried. Encrypted keys
+use a separate transient passphrase. File reads/decryption run off the async worker;
+key buffers, passwords, and passphrases are zeroized where owned by Rust. No key
+contents or credentials are serialized or returned to the frontend. App-owned
+profiles store only an optional key path and authentication policy alongside the
+existing metadata. Existing profiles remain compatible. Config key-only profiles
+never send a supplied password. Host pins, challenge binding, cancellation, and
+independent connection lifecycles remain enforced before all authentication methods.
+
+Validation includes disposable local key-only/none/password SSH fixtures, encrypted
+key failure/retry, a disposable Unix agent, metadata preservation, parser rejection,
+and a mocked desktop UI covering blank-password submission and command paste.
+Browser screenshots were checked at desktop and narrow sizes. No production VPS
+is used for testing.
+
+Current limits: app-owned host pins, no changed-key replacement UI, full SSH config
+execution, jump hosts, certificates, MFA/keyboard-interactive, PTYs, discovery, or
+server management. These remain explicit future increments.
+
+This checkpoint originally paused for review. The user subsequently authorized
+the remaining work; implementation now follows the progress recorded below.
 
 Do not install software or helpers on any VPS while building the UI. Revisit
 library compatibility and the exact supported-server matrix at their respective
 milestones rather than introducing unrequested integrations during setup.
+
+
+## Current implementation progress — 2026-10-29
+
+Implemented in the current working tree:
+
+- Real xterm/Dockview terminals use separate russh PTYs, bounded input queues,
+  acknowledged output, resize propagation, session limits, and server-bound
+  controls. Sessions remain mounted through tool/server navigation. Rename,
+  grouping, splits, maximize/restore, previous/next and confirmed closing are
+  available. Layout persistence discards output, credentials and start triggers;
+  restored panes require an explicit Start shell action. Reconnect never replays
+  commands or silently creates replacement sessions.
+- Fixed Rust-defined inspections cover Overview, package/runtime inventory,
+  containers/Compose/images/volumes, proxy/listener ownership, systemd status,
+  mounts/filesystems, UFW, network counters and processes without command-line
+  arguments. Section failures survive the aggregate exit status. Overview derives
+  memory/disk measurements and CPU deltas from actual samples. Monitoring is
+  opt-in, bounded and scoped to the selected tool/server.
+- Native single-use action reviews bind server/profile revision, connection,
+  exact command and two-minute expiry. Rejection executes nothing. Sudo prompts
+  use a separate SSH stdin path; no password is passed as a command argument or
+  persisted. Missing/incorrect passwords terminate the attempt. Cached sudo still
+  requires a new approval. Reviewed reads include UFW rules, service journals,
+  bounded container logs and one-level scans without crossing filesystems.
+- Software preflight covers Docker/Compose, Nginx, Caddy, Traefik, Dokploy, Git,
+  Node.js, nvm, Python, Go and Herdr. It inspects package/executable ownership,
+  listeners, service configuration and stopped-container port reservations.
+  Known conflicts and missing evidence are separate; neither grants permission
+  to install. System Python is protected. No software installer runs.
+- A narrow Debian 12 x86_64 systemd change implementation has protected-service,
+  dependency, canonical identity, unit configuration, stable job-state and stale
+  plan checks. It serializes mutations, reconciles interrupted state, and verifies
+  resulting ActiveState/UnitFileState. **Normal builds hard-disable all such
+  changes in Rust**, including direct IPC calls. Only disposable fixture tests
+  enable this implementation. The UI disables these options.
+- Shared themed controls, per-server tool preferences, lazy terminal loading,
+  command/output state, timestamped partial/disconnected results and sample/real
+  separation remain in place. No helper is needed for these SSH functions.
+
+Validation:
+
+- Unit tests cover metrics parsing, partial/missing measurements, allowlisted
+  remote layout metadata, sample workspace boundaries and catalog conflict rules.
+- Native SSH fixtures cover PTY isolation/resize/disposal, acknowledgements,
+  session limits, trust/authentication, sudo stdin, approval binding/expiry/reuse,
+  protected services, stale plans, serialization and the production read-only gate.
+- A rootless Debian 12 systemd container validates real start/restart/stop and
+  boot enable/disable with postcondition checks on its disposable fixture unit.
+- A separate loopback-only OpenSSH container validates actual key-authenticated
+  remote PTY output and partial inspection handling. Its generated key and
+  container are deleted automatically. No user VPS is used.
+- Playwright uses two fictional server profiles and a mocked desktop bridge to
+  check restore-without-connect, server isolation, rejection/approval, secret-free
+  persistence, session survival and inactive layout restoration, and narrow UI.
+  This does not establish native WebKit behavior.
+
+Outstanding:
+
+- Native Tauri/WebKit interaction and full disposable VM/VPS integration checks.
+- Complete structured inventory/source ownership and the Dokploy/Traefik fixture.
+- Catalog-specific install/update/uninstall executors, verified downloads,
+  dependencies, resource manifests, recovery and data-preservation checks.
+- Docker/Compose mutations and dependency-aware removal; proxy editing with
+  configuration backups, validation/reload and tested rollback; UFW rule changes
+  with SSH protection and tested automatic rollback; cleanup with exact ownership,
+  open-file/mount protections and execution-time target checks.
+- Optional helper lifecycle only if SSH measurements establish a need. No helper
+  binary, release, installation path or uninstall command has been invented.
+- Broader distro/architecture support and release/signing validation.
+
+The important user VPS may be connected for explicitly requested SSH and read-only
+inspection. It is not an acceptable substitute for disposable destructive test
+fixtures. Do not claim these remaining milestones are complete or enable their
+actions on the strength of mocked tests or read-only preflight output.

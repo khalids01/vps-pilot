@@ -2,8 +2,10 @@ import { Orientation, type SerializedDockview } from "dockview-react";
 
 export const MAX_SAMPLE_SESSIONS = 12;
 export type SessionKind = "shell" | "logs";
-export const layoutKey = (serverId: string) =>
-  `vps-pilot:sample-terminal:v1:${serverId}`;
+export const layoutKey = (
+  serverId: string,
+  mode: "sample" | "remote" = "sample",
+) => `vps-pilot:${mode}-terminal:v1:${serverId}`;
 
 type GridNode = SerializedDockview["grid"]["root"];
 
@@ -16,6 +18,7 @@ function record(value: unknown): value is Record<string, unknown> {
 export function sanitizeLayout(
   value: unknown,
   serverId: string,
+  mode: "sample" | "remote" = "sample",
 ): SerializedDockview | null {
   if (!record(value) || !record(value.panels) || !record(value.grid))
     return null;
@@ -28,15 +31,19 @@ export function sanitizeLayout(
       id.length > 120 ||
       !record(panel) ||
       panel.id !== id ||
-      panel.contentComponent !== "sample-terminal" ||
+      panel.contentComponent !==
+        (mode === "remote" ? "terminal" : "sample-terminal") ||
       !record(panel.params) ||
       panel.params.serverId !== serverId ||
-      !["shell", "logs"].includes(String(panel.params.kind))
+      !(mode === "remote" ? ["shell"] : ["shell", "logs"]).includes(
+        String(panel.params.kind),
+      )
     )
       return null;
     panels[id] = {
       id,
-      contentComponent: "sample-terminal",
+      contentComponent: mode === "remote" ? "terminal" : "sample-terminal",
+      ...(mode === "remote" ? { tabComponent: "session" } : {}),
       title:
         typeof panel.title === "string"
           ? panel.title.slice(0, 60)
@@ -125,31 +132,32 @@ export function sanitizeLayout(
   };
 }
 
-export function readLayout(serverId: string): {
+export function readLayout(
+  serverId: string,
+  mode: "sample" | "remote" = "sample",
+): {
   layout: SerializedDockview | null;
   notice?: string;
 } {
   try {
-    const raw = localStorage.getItem(layoutKey(serverId));
+    const raw = localStorage.getItem(layoutKey(serverId, mode));
     if (!raw) return { layout: null };
     if (raw.length > 128_000)
       return {
         layout: null,
-        notice:
-          "Saved layout was invalid. A fresh sample workspace was opened.",
+        notice: "Saved layout was invalid. A fresh workspace was opened.",
       };
-    const layout = sanitizeLayout(JSON.parse(raw), serverId);
+    const layout = sanitizeLayout(JSON.parse(raw), serverId, mode);
     return layout
       ? { layout }
       : {
           layout: null,
-          notice:
-            "Saved layout was invalid. A fresh sample workspace was opened.",
+          notice: "Saved layout was invalid. A fresh workspace was opened.",
         };
   } catch {
     return {
       layout: null,
-      notice: "Saved layout could not be read. Using a fresh sample workspace.",
+      notice: "Saved layout could not be read. Using a fresh workspace.",
     };
   }
 }

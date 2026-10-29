@@ -1,19 +1,27 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Pencil, Plus, Server, Trash2 } from "lucide-react";
+import { open as chooseFile } from "@tauri-apps/plugin-dialog";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  FolderOpen,
+  Pencil,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   address,
+  type ConfigHost,
   desktopAvailable,
   type ProfileInput,
   profileQueryKey,
@@ -24,534 +32,602 @@ import {
   useServerProfiles,
 } from "./api";
 
-export function ProfileManager({
-  open,
-  onOpenChange,
-  onOpenServer,
-  onDeleteServer,
-  samples,
-  onOpenSample,
-}: {
-  samples: { id: string; name: string; address: string }[];
-  onOpenSample: (id: string) => void;
+interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onOpenServer: (profile: ServerProfile) => void;
   onDeleteServer: (profile: ServerProfile) => void;
-}) {
+  samples: { id: string; name: string; address: string }[];
+  onOpenSample: (id: string) => void;
+}
+const blankProfile = (): ProfileInput => ({
+  id: null,
+  name: "",
+  host: "",
+  port: 22,
+  username: "",
+  identityFile: null,
+  passwordAllowed: true,
+});
+export function ProfileManager(props: Props) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      {open && (
-        <ProfileManagerContent
-          onOpenChange={onOpenChange}
-          onOpenServer={onOpenServer}
-          onDeleteServer={onDeleteServer}
-          samples={samples}
-          onOpenSample={onOpenSample}
-        />
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!busy) props.onOpenChange(open);
+      }}
+    >
+      {props.open && (
+        <ConnectionPicker {...props} busy={busy} setBusy={setBusy} />
       )}
     </Dialog>
   );
 }
-function ProfileManagerContent({
+function ConnectionPicker({
   onOpenChange,
   onOpenServer,
   onDeleteServer,
   samples,
   onOpenSample,
-}: Omit<Parameters<typeof ProfileManager>[0], "open">) {
-  const profiles = useServerProfiles();
-  const [choosing, setChoosing] = useState(true);
+  busy,
+  setBusy,
+}: Props & { busy: boolean; setBusy: (busy: boolean) => void }) {
+  const [view, setView] = useState("connections");
+  const [draft, setDraft] = useState<ProfileInput>(blankProfile);
   const [search, setSearch] = useState("");
-  const matches = (name: string, host: string) =>
-    `${name} ${host}`.toLowerCase().includes(search.toLowerCase());
-  const newDraft = () => {
-    setChoosing(false);
-    setError("");
-    setDraft({ id: null, name: "", host: "", port: 22, username: "" });
-  };
-  const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<ProfileInput | null>(null);
-  const [removing, setRemoving] = useState<ServerProfile | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [command, setCommand] = useState("");
+  const [commandError, setCommandError] = useState("");
   const [error, setError] = useState("");
-  const config = useConfigHosts(!choosing && !draft && !removing);
+  const [removing, setRemoving] = useState<ServerProfile | null>(null);
+  const profiles = useServerProfiles();
+  const config = useConfigHosts(view === "connections");
+  const queryClient = useQueryClient();
+  const matches = (name: string, host: string) =>
+    `${name} ${host}`.toLowerCase().includes(search.trim().toLowerCase());
+  const saved =
+    profiles.data?.filter((profile) => matches(profile.name, profile.host)) ??
+    [];
+  const configured =
+    config.data?.filter((profile) => matches(profile.alias, profile.host)) ??
+    [];
+  async function save(input: ProfileInput) {
+    setBusy(true);
+    setError("");
+    try {
+      const profile = await sshApi.saveProfile(input);
+      await queryClient.invalidateQueries({ queryKey: profileQueryKey });
+      onOpenServer(profile);
+      onOpenChange(false);
+    } catch (error) {
+      setError(safeError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function openConfig(entry: ConfigHost) {
+    const existing = profiles.data?.find(
+      (profile) =>
+        profile.name === entry.alias.trim() &&
+        profile.host === entry.host.trim().toLowerCase().replace(/\.$/, "") &&
+        profile.username === entry.username.trim() &&
+        profile.port === entry.port &&
+        (profile.identityFile ?? null) === (entry.identityFile ?? null) &&
+        (profile.passwordAllowed !== false) ===
+          (entry.passwordAllowed !== false),
+    );
+    if (existing) {
+      onOpenServer(existing);
+      onOpenChange(false);
+      return;
+    }
+    await save({
+      id: null,
+      name: entry.alias,
+      host: entry.host,
+      username: entry.username,
+      port: entry.port,
+      identityFile: entry.identityFile ?? null,
+      passwordAllowed: entry.passwordAllowed !== false,
+    });
+  }
+  function changeView(value: string) {
+    setView(value);
+    setError("");
+    setRemoving(null);
+    setCommand("");
+    setCommandError("");
+    if (value === "new") setDraft(blankProfile());
+  }
   return (
     <DialogContent
-      className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-xl"
+      className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] gap-5 p-6 sm:max-w-xl"
       showCloseButton={!busy}
     >
       <DialogHeader>
         <DialogTitle>
           {removing
-            ? "Remove saved server profile?"
-            : draft
-              ? draft.id
-                ? "Edit server profile"
-                : "Add a new connection"
-              : choosing
-                ? "New VPS tab"
-                : "Choose a connection"}
+            ? `Remove ${removing.name}?`
+            : draft.id && view === "new"
+              ? "Edit connection"
+              : "Open connection"}
         </DialogTitle>
         <DialogDescription>
           {removing
-            ? `${removing.name} · ${address(removing)}. Removes only this desktop profile; nothing on the VPS is changed. Disconnect first if a connection is active.`
-            : "Choose an SSH config entry or an app-saved profile, or add a new connection. Connections start only after host verification; passwords are never saved."}
+            ? "Removes the saved profile from this app. Your server and SSH config stay unchanged."
+            : "Choose a server or add a connection."}
         </DialogDescription>
       </DialogHeader>
-      <div className="min-h-0 overflow-y-auto">
-        {choosing ? (
-          <div className="space-y-3">
-            {!desktopAvailable && (
-              <p className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-                Saved server connections are available in the desktop app. Run
-                bun tauri dev; the browser continues to offer the sample
-                workspaces.
-              </p>
-            )}
-            <Button
-              variant="outline"
-              className="h-auto w-full justify-start gap-3 p-4"
-              disabled={!desktopAvailable}
-              onClick={() => setChoosing(false)}
+      <Tabs
+        value={view}
+        className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-5"
+        onValueChange={(value) => {
+          if (!busy && typeof value === "string") changeView(value);
+        }}
+      >
+        {!removing && (
+          <TabsList aria-label="Connection source" className="w-full">
+            <TabsTrigger value="connections" className="flex-1" disabled={busy}>
+              Connections
+            </TabsTrigger>
+            <TabsTrigger
+              value="new"
+              className="flex-1"
+              disabled={busy || !desktopAvailable}
             >
-              <Server aria-hidden="true" />
-              <span className="text-left">
-                <span className="block">Choose a connection</span>
-                <span className="block text-xs font-normal text-muted-foreground">
-                  From ~/.ssh/config or saved in VPS Pilot
-                </span>
-              </span>
-            </Button>
-            <Button
-              variant="outline"
-              className="h-auto w-full justify-start gap-3 p-4"
-              disabled={!desktopAvailable}
-              onClick={newDraft}
-            >
-              <Plus aria-hidden="true" />
-              <span className="text-left">
-                <span className="block">Add a new connection</span>
-                <span className="block text-xs font-normal text-muted-foreground">
-                  Enter an address, username, and SSH port
-                </span>
-              </span>
-            </Button>
-            {samples.length > 0 && (
-              <details className="pt-3 text-sm text-muted-foreground">
-                <summary className="cursor-pointer">
-                  Explore sample workspaces
-                </summary>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {samples.map((sample) => (
-                    <Button
-                      key={sample.id}
-                      size="sm"
-                      variant="outline"
-                      onClick={() => onOpenSample(sample.id)}
-                    >
-                      {sample.name}
-                    </Button>
-                  ))}
-                </div>
-              </details>
-            )}
-          </div>
-        ) : !desktopAvailable ? (
-          <p className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-            Saved server connections are available in the desktop app. Run bun
-            tauri dev; the browser continues to offer the sample workspaces.
-          </p>
-        ) : removing ? (
-          <div className="space-y-4">
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
+              New connection
+            </TabsTrigger>
+          </TabsList>
+        )}
+        <TabsContent value={view} className="min-h-0 overflow-y-auto">
+          {removing ? (
+            <div className="space-y-5">
+              <p className="break-all font-mono text-xs text-muted-foreground">
+                {address(removing)}
               </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() => {
-                  setRemoving(null);
-                  setError("");
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  setError("");
-                  try {
-                    await sshApi.deleteProfile(removing.id);
-                    onDeleteServer(removing);
-                    await queryClient.invalidateQueries({
-                      queryKey: profileQueryKey,
-                    });
-                    setRemoving(null);
-                  } catch (error) {
-                    setError(safeError(error));
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                Remove profile
-              </Button>
-            </div>
-          </div>
-        ) : draft ? (
-          <form
-            className="space-y-4"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              setBusy(true);
-              setError("");
-              try {
-                const saved = await sshApi.saveProfile(draft);
-                await queryClient.invalidateQueries({
-                  queryKey: profileQueryKey,
-                });
-                onOpenServer(saved);
-                onOpenChange(false);
-              } catch (error) {
-                setError(safeError(error));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            <label className="block text-sm" htmlFor="profile-name">
-              Server name
-              <Input
-                id="profile-name"
-                className="mt-1"
-                value={draft.name}
-                required
-                maxLength={80}
-                disabled={busy}
-                onChange={(event) =>
-                  setDraft({ ...draft, name: event.target.value })
-                }
-              />
-            </label>
-            <label className="block text-sm" htmlFor="profile-host">
-              Hostname or IP address
-              <Input
-                id="profile-host"
-                className="mt-1"
-                value={draft.host}
-                placeholder="server.example.com"
-                required
-                maxLength={253}
-                disabled={busy}
-                autoCapitalize="none"
-                spellCheck={false}
-                onChange={(event) =>
-                  setDraft({ ...draft, host: event.target.value })
-                }
-              />
-            </label>
-            <div className="grid grid-cols-2 gap-4">
-              <label className="block text-sm" htmlFor="profile-user">
-                Linux username
-                <Input
-                  id="profile-user"
-                  className="mt-1"
-                  value={draft.username}
-                  autoComplete="off"
-                  required
-                  maxLength={64}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setDraft({ ...draft, username: event.target.value })
-                  }
-                />
-              </label>
-              <label className="block text-sm" htmlFor="profile-port">
-                SSH port
-                <Input
-                  id="profile-port"
-                  className="mt-1"
-                  value={draft.port || ""}
-                  type="number"
-                  min={1}
-                  max={65535}
-                  required
-                  disabled={busy}
-                  onChange={(event) =>
-                    setDraft({ ...draft, port: Number(event.target.value) })
-                  }
-                />
-              </label>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Direct SSH uses password authentication. SSH config entries supply
-              address, username, and port only. Key files, agents, jump hosts,
-              and terminal sessions will follow in separate increments. Saving
-              creates an app-owned profile and never changes ~/.ssh/config.
-            </p>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() => {
-                  setDraft(null);
-                  setError("");
-                }}
-              >
-                <ArrowLeft aria-hidden="true" />
-                Back
-              </Button>
-              <Button type="submit" disabled={busy}>
-                {busy ? "Saving…" : "Save and open workspace"}
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex flex-wrap justify-between gap-2">
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setChoosing(true);
-                  setError("");
-                }}
-              >
-                <ArrowLeft aria-hidden="true" />
-                Back
-              </Button>
-              <Button
-                variant="outline"
-                disabled={busy || config.isFetching}
-                onClick={() => {
-                  void config.refetch();
-                  void profiles.refetch();
-                }}
-              >
-                Refresh list
-              </Button>
-              <Button onClick={newDraft}>
-                <Plus aria-hidden="true" />
-                Add a new connection
-              </Button>
-            </div>
-            <Input
-              aria-label="Search connections"
-              placeholder="Search name or address…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <section className="space-y-3" aria-label="SSH config connections">
-              <h3 className="text-sm font-medium">
-                SSH config{" "}
-                <span className="font-normal text-muted-foreground">
-                  · ~/.ssh/config
-                </span>
-              </h3>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Read-only list, including named hosts from Include files.
-                Opening saves an address, username, and port copy in VPS Pilot.
-                Uses password authentication and its own host verification; key
-                files and other config settings are not applied.
-              </p>
-              {config.isPending && (
-                <p role="status" className="text-sm text-muted-foreground">
-                  Loading SSH config…
-                </p>
-              )}
-              {config.error && (
+              {error && (
                 <p role="alert" className="text-sm text-destructive">
-                  {safeError(config.error)}
+                  {error}
                 </p>
               )}
-              {config.data?.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No named connections in ~/.ssh/config.
-                </p>
-              )}
-              {config.data
-                ?.filter((entry) => matches(entry.alias, entry.host))
-                .map((entry) => (
-                  <div
-                    key={entry.alias}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words text-sm font-medium">
-                        {entry.alias}
-                      </p>
-                      <p className="mt-1 break-all text-xs text-muted-foreground">
-                        {address({
-                          ...entry,
-                          name: entry.alias,
-                          id: "",
-                          revision: "",
-                        })}
-                      </p>
-                      {entry.blockedReason && (
-                        <p className="mt-2 text-xs text-amber-300">
-                          {entry.blockedReason}
-                        </p>
-                      )}
-                    </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    setRemoving(null);
+                    setError("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setError("");
+                    try {
+                      await sshApi.deleteProfile(removing.id);
+                      onDeleteServer(removing);
+                      await queryClient.invalidateQueries({
+                        queryKey: profileQueryKey,
+                      });
+                      setRemoving(null);
+                    } catch (error) {
+                      setError(safeError(error));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Remove connection
+                </Button>
+              </div>
+            </div>
+          ) : view === "new" ? (
+            <form
+              className="space-y-5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void save(draft);
+              }}
+            >
+              {!draft.id && (
+                <div className="space-y-2 border-b pb-5">
+                  <label htmlFor="ssh-command" className="text-sm">
+                    Paste an SSH command
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="ssh-command"
+                      className="min-w-0 font-mono text-xs"
+                      placeholder="ssh deploy@example.com -p 2222"
+                      value={command}
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={busy}
+                      onChange={(event) => {
+                        setCommand(event.target.value);
+                        setCommandError("");
+                      }}
+                    />
                     <Button
                       variant="outline"
-                      size="sm"
-                      aria-label={`Open ${entry.alias}`}
-                      disabled={
-                        busy ||
-                        profiles.isPending ||
-                        Boolean(profiles.error) ||
-                        Boolean(entry.blockedReason)
-                      }
+                      type="button"
+                      disabled={busy || !command.trim()}
                       onClick={async () => {
                         setBusy(true);
                         setError("");
+                        setCommandError("");
                         try {
-                          const existing = profiles.data?.find(
-                            (profile) =>
-                              profile.name === entry.alias &&
-                              profile.host ===
-                                entry.host.toLowerCase().replace(/\.$/, "") &&
-                              profile.port === entry.port &&
-                              profile.username === entry.username,
-                          );
-                          const profile =
-                            existing ??
-                            (await sshApi.saveProfile({
-                              id: null,
-                              name: entry.alias,
-                              host: entry.host,
-                              port: entry.port,
-                              username: entry.username,
-                            }));
-                          await queryClient.invalidateQueries({
-                            queryKey: profileQueryKey,
-                          });
-                          onOpenServer(profile);
-                          onOpenChange(false);
+                          const parsed = await sshApi.parseCommand(command);
+                          setDraft(parsed);
+                          setCommand("");
                         } catch (error) {
-                          setError(safeError(error));
+                          setCommandError(safeError(error));
                         } finally {
                           setBusy(false);
                         }
                       }}
                     >
-                      Open
+                      Fill details
                     </Button>
                   </div>
-                ))}
-            </section>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <h3 className="border-t pt-4 text-sm font-medium">
-              Saved in VPS Pilot
-            </h3>
-            {profiles.isPending && (
-              <p role="status" className="text-sm text-muted-foreground">
-                Loading saved profiles…
-              </p>
-            )}
-            {profiles.error && (
-              <p role="alert" className="text-sm text-destructive">
-                {safeError(profiles.error)}
-              </p>
-            )}
-            {!profiles.isPending &&
-              !profiles.error &&
-              !profiles.data?.length && (
-                <div className="rounded-lg border border-dashed p-6 text-center">
-                  <Server
-                    className="mx-auto mb-3 size-6 text-primary"
-                    aria-hidden="true"
-                  />
-                  <p className="text-sm">No saved servers yet</p>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Add a new connection or choose an SSH config entry above.
+                  <p className="text-xs text-muted-foreground">
+                    Fills the fields below. Nothing is executed.
                   </p>
+                  {commandError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {commandError}
+                    </p>
+                  )}
                 </div>
               )}
-            {profiles.data
-              ?.filter((profile) => matches(profile.name, profile.host))
-              .map((profile) => (
-                <div
-                  key={profile.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-                >
-                  <div className="min-w-0">
-                    <p className="break-words text-sm font-medium">
-                      {profile.name}
-                    </p>
-                    <p className="mt-1 break-all text-xs text-muted-foreground">
-                      {address(profile)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => {
-                        onOpenServer(profile);
-                        onOpenChange(false);
-                      }}
-                    >
-                      Open
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={busy}
-                      aria-label={`Edit ${profile.name}`}
-                      onClick={() => {
-                        setDraft({
-                          id: profile.id,
-                          name: profile.name,
-                          host: profile.host,
-                          port: profile.port,
-                          username: profile.username,
+              <label className="block text-sm" htmlFor="profile-host">
+                Host
+                <Input
+                  id="profile-host"
+                  className="mt-2"
+                  value={draft.host}
+                  placeholder="example.com or 203.0.113.10"
+                  required
+                  maxLength={253}
+                  disabled={busy}
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  onChange={(event) =>
+                    setDraft({ ...draft, host: event.target.value })
+                  }
+                />
+              </label>
+              <div className="grid grid-cols-[1fr_7rem] gap-4">
+                <label className="block text-sm" htmlFor="profile-user">
+                  User
+                  <Input
+                    id="profile-user"
+                    className="mt-2"
+                    value={draft.username}
+                    autoComplete="off"
+                    required
+                    maxLength={64}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setDraft({ ...draft, username: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="block text-sm" htmlFor="profile-port">
+                  Port
+                  <Input
+                    id="profile-port"
+                    className="mt-2"
+                    value={draft.port || ""}
+                    type="number"
+                    min={1}
+                    max={65535}
+                    required
+                    disabled={busy}
+                    onChange={(event) =>
+                      setDraft({ ...draft, port: Number(event.target.value) })
+                    }
+                  />
+                </label>
+              </div>
+              <label className="block text-sm" htmlFor="profile-name">
+                Name
+                <Input
+                  id="profile-name"
+                  className="mt-2"
+                  value={draft.name}
+                  placeholder="Production"
+                  required
+                  maxLength={80}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDraft({ ...draft, name: event.target.value })
+                  }
+                />
+              </label>
+              <div className="space-y-2">
+                <label htmlFor="profile-key" className="text-sm">
+                  Private key{" "}
+                  <span className="text-muted-foreground">(optional)</span>
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    id="profile-key"
+                    className="min-w-0 font-mono text-xs"
+                    value={draft.identityFile ?? ""}
+                    placeholder="Use SSH agent or default keys"
+                    disabled={busy}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        identityFile: event.target.value || null,
+                      })
+                    }
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="Choose private key"
+                    disabled={busy}
+                    onClick={async () => {
+                      try {
+                        const path = await chooseFile({
+                          multiple: false,
+                          directory: false,
+                          title: "Choose SSH private key",
                         });
-                        setError("");
-                      }}
-                    >
-                      <Pencil aria-hidden="true" />
-                    </Button>
+                        if (path) setDraft({ ...draft, identityFile: path });
+                      } catch (error) {
+                        setError(safeError(error));
+                      }
+                    }}
+                  >
+                    <FolderOpen aria-hidden="true" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Passwords and key passphrases are requested when connecting.
+                </p>
+              </div>
+              {error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+              <div className="flex justify-between border-t pt-4">
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => changeView("connections")}
+                >
+                  <ArrowLeft aria-hidden="true" />
+                  Back
+                </Button>
+                <Button type="submit" disabled={busy}>
+                  {busy ? "Saving…" : "Open workspace"}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <div className="space-y-5">
+              {!desktopAvailable && (
+                <p className="text-sm text-muted-foreground">
+                  SSH connections are available in the desktop app.
+                </p>
+              )}
+              {desktopAvailable && (
+                <>
+                  <div className="flex gap-2">
+                    <Input
+                      aria-label="Search connections"
+                      placeholder="Find a connection…"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                    />
                     <Button
                       variant="ghost"
-                      size="icon-sm"
-                      disabled={busy}
-                      aria-label={`Remove ${profile.name} profile`}
+                      size="icon"
+                      aria-label="Refresh connections"
+                      disabled={
+                        busy || config.isFetching || profiles.isFetching
+                      }
                       onClick={() => {
-                        setRemoving(profile);
-                        setError("");
+                        void config.refetch();
+                        void profiles.refetch();
                       }}
                     >
-                      <Trash2 aria-hidden="true" />
+                      <RefreshCw
+                        className={config.isFetching ? "animate-spin" : ""}
+                        aria-hidden="true"
+                      />
                     </Button>
                   </div>
-                </div>
-              ))}
-            <DialogFooter>
-              <DialogClose render={<Button variant="outline" />}>
-                Close
-              </DialogClose>
-            </DialogFooter>
-          </div>
-        )}
-      </div>
+                  <section aria-label="SSH config connections">
+                    <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+                      SSH CONFIG
+                    </h3>
+                    {config.isPending && (
+                      <p
+                        role="status"
+                        className="py-3 text-sm text-muted-foreground"
+                      >
+                        Reading ~/.ssh/config…
+                      </p>
+                    )}
+                    {config.error && (
+                      <p role="alert" className="py-3 text-sm text-destructive">
+                        {safeError(config.error)}
+                      </p>
+                    )}
+                    {!config.isPending &&
+                      !config.error &&
+                      !configured.length && (
+                        <p className="py-3 text-sm text-muted-foreground">
+                          {search
+                            ? "No matches."
+                            : "No named hosts in ~/.ssh/config."}
+                        </p>
+                      )}
+                    <div className="divide-y">
+                      {configured.map((entry) => (
+                        <div key={entry.alias}>
+                          <Button
+                            variant="ghost"
+                            className="h-auto w-full justify-between gap-3 rounded-none px-1 py-3 text-left"
+                            aria-label={`Open ${entry.alias}`}
+                            disabled={
+                              busy ||
+                              profiles.isPending ||
+                              Boolean(profiles.error) ||
+                              Boolean(entry.blockedReason)
+                            }
+                            onClick={() => void openConfig(entry)}
+                          >
+                            <span className="min-w-0">
+                              <span className="block break-words">
+                                {entry.alias}
+                              </span>
+                              <span className="mt-1 block break-all font-mono text-xs font-normal text-muted-foreground">
+                                {address(entry)}
+                              </span>
+                            </span>
+                            <ArrowUpRight
+                              className="size-4 shrink-0 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                          </Button>
+                          {entry.blockedReason && (
+                            <p className="pb-3 text-xs text-amber-300">
+                              {entry.blockedReason}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                  <section aria-label="App connections">
+                    <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+                      SAVED IN VPS PILOT
+                    </h3>
+                    {profiles.isPending && (
+                      <p
+                        role="status"
+                        className="py-3 text-sm text-muted-foreground"
+                      >
+                        Loading connections…
+                      </p>
+                    )}
+                    {profiles.error && (
+                      <p role="alert" className="py-3 text-sm text-destructive">
+                        {safeError(profiles.error)}
+                      </p>
+                    )}
+                    {!profiles.isPending &&
+                      !profiles.error &&
+                      !saved.length && (
+                        <p className="py-3 text-sm text-muted-foreground">
+                          {search ? "No matches." : "No saved connections."}
+                        </p>
+                      )}
+                    <div className="divide-y">
+                      {saved.map((profile) => (
+                        <div
+                          key={profile.id}
+                          className="flex items-center gap-1"
+                        >
+                          <Button
+                            variant="ghost"
+                            className="h-auto min-w-0 flex-1 justify-start rounded-none px-1 py-3 text-left"
+                            disabled={busy}
+                            aria-label={`Open ${profile.name}`}
+                            onClick={() => {
+                              onOpenServer(profile);
+                              onOpenChange(false);
+                            }}
+                          >
+                            <span className="min-w-0">
+                              <span className="block break-words">
+                                {profile.name}
+                              </span>
+                              <span className="mt-1 block break-all font-mono text-xs font-normal text-muted-foreground">
+                                {address(profile)}
+                              </span>
+                            </span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            disabled={busy}
+                            aria-label={`Edit ${profile.name}`}
+                            onClick={() => {
+                              setDraft({
+                                id: profile.id,
+                                name: profile.name,
+                                host: profile.host,
+                                port: profile.port,
+                                username: profile.username,
+                                identityFile: profile.identityFile ?? null,
+                                passwordAllowed:
+                                  profile.passwordAllowed !== false,
+                              });
+                              setView("new");
+                              setError("");
+                            }}
+                          >
+                            <Pencil aria-hidden="true" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            disabled={busy}
+                            aria-label={`Remove ${profile.name}`}
+                            onClick={() => {
+                              setRemoving(profile);
+                              setError("");
+                            }}
+                          >
+                            <Trash2 aria-hidden="true" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                  {error && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {error}
+                    </p>
+                  )}
+                </>
+              )}
+              {samples.length > 0 && (
+                <details className="border-t pt-4 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">
+                    Sample workspaces
+                  </summary>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {samples.map((sample) => (
+                      <Button
+                        key={sample.id}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onOpenSample(sample.id)}
+                      >
+                        {sample.name}
+                      </Button>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </DialogContent>
   );
 }

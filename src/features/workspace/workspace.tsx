@@ -567,6 +567,20 @@ export function Workspace() {
                   <RemoteWorkspace
                     key={profile.revision}
                     profile={profile}
+                    active={activeServerId === id}
+                    selectedTool={preferences.servers[id]?.tool ?? "overview"}
+                    onSelectTool={(tool) =>
+                      setPreferences((current) => ({
+                        ...current,
+                        servers: {
+                          ...current.servers,
+                          [id]: {
+                            ...(current.servers[id] ?? newServerPreferences()),
+                            tool,
+                          },
+                        },
+                      }))
+                    }
                     status={statuses.data?.find(
                       (status) => status.profileId === profile.id,
                     )}

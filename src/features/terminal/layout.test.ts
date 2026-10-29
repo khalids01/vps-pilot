@@ -94,3 +94,48 @@ describe("sample terminal layout boundaries", () => {
     expect(sanitizeLayout(input, "sample-production")).toBeNull();
   });
 });
+
+test("remote layouts discard connection triggers and credentials and restore only their own server", () => {
+  const layout = {
+    grid: {
+      root: {
+        type: "branch",
+        data: [
+          {
+            type: "leaf",
+            data: {
+              id: "group",
+              views: ["remote:panel"],
+              activeView: "remote:panel",
+            },
+          },
+        ],
+      },
+      width: 800,
+      height: 600,
+      orientation: "HORIZONTAL",
+    },
+    panels: {
+      "remote:panel": {
+        id: "remote:panel",
+        contentComponent: "terminal",
+        title: "Shell",
+        params: {
+          serverId: "remote",
+          kind: "shell",
+          start: true,
+          password: "discard-me",
+          output: "discard-me",
+        },
+      },
+    },
+  };
+  const sanitized = sanitizeLayout(layout, "remote", "remote");
+  expect(sanitized?.panels["remote:panel"].params).toEqual({
+    serverId: "remote",
+    kind: "shell",
+  });
+  expect(sanitized?.panels["remote:panel"].tabComponent).toBe("session");
+  expect(sanitizeLayout(layout, "foreign", "remote")).toBeNull();
+  expect(sanitizeLayout(layout, "remote")).toBeNull();
+});

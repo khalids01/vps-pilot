@@ -22,13 +22,20 @@ pub struct Profile {
     pub host: String,
     pub port: u16,
     pub username: String,
+    #[serde(default)]
+    pub identity_file: Option<String>,
+    #[serde(default = "password_allowed_default")]
+    pub password_allowed: bool,
+}
+fn password_allowed_default() -> bool {
+    true
 }
 impl Profile {
     pub fn endpoint(&self) -> String {
         format!("[{}]:{}", self.host, self.port)
     }
 }
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileInput {
     pub id: Option<String>,
@@ -36,6 +43,10 @@ pub struct ProfileInput {
     pub host: String,
     pub port: u16,
     pub username: String,
+    #[serde(default)]
+    pub identity_file: Option<String>,
+    #[serde(default = "password_allowed_default")]
+    pub password_allowed: bool,
 }
 impl ProfileInput {
     pub fn validate(self) -> Result<Profile, String> {
@@ -75,6 +86,18 @@ impl ProfileInput {
                 "Use a Linux username with letters, numbers, dots, underscores, or hyphens.".into(),
             );
         }
+        let identity_file = self.identity_file.filter(|path| !path.trim().is_empty());
+        if identity_file
+            .as_ref()
+            .is_some_and(|path| path.len() > 4096 || path.chars().any(char::is_control))
+        {
+            return Err("Choose a valid private key path.".into());
+        }
+        if identity_file.as_ref().is_some_and(|path| {
+            !std::path::Path::new(path).is_absolute() && !path.starts_with("~/")
+        }) {
+            return Err("Use an absolute private key path or a path starting with ~/.".into());
+        }
         let id = match self.id {
             Some(id) if Uuid::parse_str(&id).is_ok() => id,
             Some(_) => return Err("Invalid server profile ID.".into()),
@@ -87,6 +110,8 @@ impl ProfileInput {
             host,
             port: self.port,
             username,
+            identity_file,
+            password_allowed: self.password_allowed,
         })
     }
 }
@@ -136,6 +161,8 @@ impl Store {
                         host: profile.host.clone(),
                         port: profile.port,
                         username: profile.username.clone(),
+                        identity_file: profile.identity_file.clone(),
+                        password_allowed: profile.password_allowed,
                     })
                     .validate()
                     .is_err()

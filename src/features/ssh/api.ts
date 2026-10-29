@@ -9,12 +9,16 @@ export interface ServerProfile {
   host: string;
   port: number;
   username: string;
+  identityFile?: string | null;
+  passwordAllowed?: boolean;
 }
 export interface ConfigHost {
   alias: string;
   host: string;
   port: number;
   username: string;
+  identityFile?: string | null;
+  passwordAllowed?: boolean;
   blockedReason: string | null;
 }
 export interface ProfileInput {
@@ -23,6 +27,8 @@ export interface ProfileInput {
   host: string;
   port: number;
   username: string;
+  identityFile?: string | null;
+  passwordAllowed?: boolean;
 }
 export interface HostKey {
   algorithm: string;
@@ -45,6 +51,8 @@ export const statusQueryKey = ["ssh", "statuses"] as const;
 export const sshApi = {
   profiles: () => invoke<ServerProfile[]>("ssh_profiles"),
   configHosts: () => invoke<ConfigHost[]>("ssh_config_hosts"),
+  parseCommand: (command: string) =>
+    invoke<ProfileInput>("ssh_parse_command", { command }),
   saveProfile: (input: ProfileInput) =>
     invoke<ServerProfile>("ssh_save_profile", { input }),
   deleteProfile: (profileId: string) =>
@@ -53,8 +61,18 @@ export const sshApi = {
     invoke<Inspection>("ssh_inspect", { profileId }),
   trust: (profileId: string, challengeId: string) =>
     invoke<void>("ssh_trust", { profileId, challengeId }),
-  connect: (profileId: string, challengeId: string, password: string) =>
-    invoke<void>("ssh_connect", { profileId, challengeId, password }),
+  connect: (
+    profileId: string,
+    challengeId: string,
+    password = "",
+    passphrase?: string,
+  ) =>
+    invoke<void>("ssh_connect", {
+      profileId,
+      challengeId,
+      password,
+      passphrase: passphrase || null,
+    }),
   disconnect: (profileId: string) =>
     invoke<void>("ssh_disconnect", { profileId }),
 };
@@ -76,7 +94,9 @@ export function useConnectionStatuses(enabled: boolean) {
   });
 }
 export const remoteTabId = (id: string) => `remote:${id}`;
-export const address = (profile: ServerProfile) =>
+export const address = (
+  profile: Pick<ServerProfile, "username" | "host" | "port">,
+) =>
   `${profile.username}@${profile.host.includes(":") ? `[${profile.host}]` : profile.host}:${profile.port}`;
 export const safeError = (error: unknown) =>
   typeof error === "string"
