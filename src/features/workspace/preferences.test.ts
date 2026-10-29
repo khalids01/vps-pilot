@@ -63,3 +63,25 @@ describe("sample workspace preference boundaries", () => {
     ).toBeNull();
   });
 });
+
+test("restores remote tab IDs and UI preferences without accepting connection metadata", () => {
+  const id = "remote:e06e432d-5ca4-4394-8fb1-b96e24becd7f";
+  const input = {
+    ...defaultPreferences(),
+    openServerIds: [id],
+    activeServerId: id,
+    servers: {
+      [id]: {
+        tool: "overview",
+        commandExpanded: false,
+        host: "not-ui-data",
+        password: "must not persist",
+      },
+    },
+  };
+  const output = sanitizePreferences(input);
+  expect(output?.activeServerId).toBe(id);
+  expect(output?.servers[id].commandExpanded).toBe(false);
+  expect(JSON.stringify(output)).not.toContain("not-ui-data");
+  expect(JSON.stringify(output)).not.toContain("must not persist");
+});

@@ -1,7 +1,8 @@
 # VPS Pilot implementation plan
 
-Status: Milestone 1, shell and Software UI committed; terminal UI reviewed. The
-expanded helper, VPS-tab reordering, and workspace-persistence batch awaits review.
+Status: core Milestone 1 UI reviewed and committed as `ca55a59`. The first
+Milestone 2 SSH connection increment and config-based tab picker are implemented
+for review.
 
 This plan records the scope agreed with the user on 2026-10-29. Read
 `agents/goal.md` first. This document expands that goal; it does not authorize
@@ -14,7 +15,9 @@ Use the existing exact dark green theme and shared themed controls. Preserve VPS
 Pilot's independent identifier, repository, build output, and release setup.
 
 - Top browser-style tabs: one VPS connection per tab, with name, connection state,
-  close action, reordering, overflow handling, and an add-server action.
+  close action, reordering, overflow handling, and a plus button. Tabs occupy the
+  top row; no separate Manage SSH servers header. Plus offers an existing
+  connection list (SSH config and app-saved profiles) or a separate add form.
 - Left navigation within the selected server: Overview, Terminal, Software,
   Docker, Proxy, Services, Storage, Firewall, and Server helper.
 - Main workspace: the selected tool, with local tabs only when needed. Terminal
@@ -334,10 +337,58 @@ Milestone 1 shell, terminal, Software, and helper review flows are available for
 UI review. Detailed Docker/Proxy/Services/Storage/Firewall screens still show
 explicit placeholders and remain for their integration milestones.
 
-Pause for user review before the next increment. After that review, continue
-with agreed corrections. Confirm the core UI review before starting Milestone 2
-SSH implementation. Maintain significant review checkpoints as requested by the
-user; do not implement the remaining backend and management milestones at once.
+The user approved committing the full UI batch and continuing. Commit `ca55a59`
+contains the terminal, helper, tab-reordering, and persistence work.
+
+The first Milestone 2 checkpoint implements:
+
+- Rust `russh` 0.65 client with direct password authentication, bounded network
+  waits, keepalives, immediate cancellation, independent per-profile handles,
+  connection status polling, and explicit disconnect. No shell or remote command
+  channel is opened.
+- Native saved-profile create/edit/delete with input validation. Profiles and
+  SHA256 host pins use app-owned storage, private Unix permissions, atomic
+  replacement, size limits, a write lock, and external-change detection. Invalid
+  or externally changed files are not silently overwritten.
+- A credential-free probe rejects the presented key while recording a host-review
+  challenge. Unknown keys require explicit trust; changed pins cannot be replaced
+  in this increment. Authentication uses a fresh, single-use, expiring challenge
+  bound to the exact profile revision and rechecks the pinned key before sending
+  a password. Passwords are not saved, logged, or routed through query mutations.
+- Main-window-only Tauri capabilities for the nine specific SSH discovery/lifecycle IPC
+  commands; no generic shell, arbitrary file, or remote-execution permission.
+- Plus-button connection picker, separate add form, and real VPS tabs with profile address and connection
+  state. Closing a real tab confirms disconnect; closing does not delete its
+  saved profile. Real tabs never use sample metrics, inventory, or terminal data.
+- Failed authentication clears the password and requires explicit verification
+  before retry. Cancelled or stale UI requests cannot reopen a dismissed dialog
+  or publish a late connection. Profile edits invalidate outstanding reviews.
+- Restored workspace tabs do not initiate new connections. Authentication handles
+  remain in Rust memory only and are not restored on application restart.
+- Local disposable SSH fixtures cover trust-before-authentication, changed keys
+  between review and login, challenge expiration, profile changes, wrong passwords,
+  independent connections, cancellation, persistence, and storage error handling.
+  Browser UI tests use a mocked desktop bridge; native WebKit interaction still
+  needs user review. No production VPS was used for validation.
+
+The tab picker reads named aliases from `~/.ssh/config` and Include files with
+`ssh2-config` 0.9 (logging disabled). Pattern/default rules resolve HostName, User,
+and Port; excluded aliases are not offered. Opening explicitly stores a metadata
+copy in the app; it never writes back to SSH config. Refresh reloads the source.
+App-created profiles use their own form. Search spans config and app lists, and
+reopening the same imported metadata reuses its profile. Proxy/jump/interface and
+password-disabled entries are blocked. Match/unknown directives and cycles fail
+closed without hiding app profiles; config commands and identity files are never
+executed/read. Disposable fixtures cover discovery, defaults, duplicates, includes,
+scopes, malformed config, and unsupported routing/authentication settings.
+
+Current limits: password authentication only, app-owned host pins, no changed-key
+replacement UI, key files/agents, full SSH config execution, jump hosts, host certificates,
+PTYs, discovery, or server management. These remain explicit future increments.
+
+Pause for review of this checkpoint before adding real terminal channels or
+additional authentication methods. Maintain significant review checkpoints as
+requested; do not implement the remaining milestones at once.
 
 Do not install software or helpers on any VPS while building the UI. Revisit
 library compatibility and the exact supported-server matrix at their respective

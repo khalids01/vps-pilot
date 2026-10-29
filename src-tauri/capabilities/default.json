@@ -1,12 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Base desktop window permissions. No shell or server execution permissions.",
+  "description": "Main local window permissions for app-owned SSH connection lifecycle. No generic shell, arbitrary file, or remote execution permission.",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
-    "dialog:allow-open"
-  ]
+    "dialog:allow-open",
+    "ssh-connection"
+  ],
+  "local": true
 }

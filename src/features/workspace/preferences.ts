@@ -17,6 +17,16 @@ export interface WorkspacePreferences {
 }
 export const workspacePreferenceKey = "vps-pilot:sample-workspace:v1";
 
+export const isRemoteTabId = (id: string) =>
+  /^remote:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    id,
+  );
+export const newServerPreferences = (): ServerPreferences => ({
+  tool: "overview",
+  commandExpanded: true,
+  softwareCategory: "All",
+  helperScenario: "not-installed",
+});
 export function defaultPreferences(): WorkspacePreferences {
   return {
     version: 1,
@@ -53,7 +63,7 @@ export function sanitizePreferences(
     !record(value) ||
     value.version !== 1 ||
     !Array.isArray(value.openServerIds) ||
-    value.openServerIds.length > 20
+    value.openServerIds.length > 103
   )
     return null;
   const result = defaultPreferences();
@@ -62,7 +72,8 @@ export function sanitizePreferences(
       value.openServerIds.filter(
         (id): id is string =>
           typeof id === "string" &&
-          sampleServers.some((server) => server.id === id),
+          (isRemoteTabId(id) ||
+            sampleServers.some((server) => server.id === id)),
       ),
     ),
   ];
@@ -71,11 +82,18 @@ export function sanitizePreferences(
     result.openServerIds.includes(value.activeServerId)
       ? value.activeServerId
       : (result.openServerIds[0] ?? null);
+  for (const id of result.openServerIds)
+    if (isRemoteTabId(id)) result.servers[id] = newServerPreferences();
   if (record(value.servers)) {
-    for (const server of sampleServers) {
-      const raw = value.servers[server.id];
+    for (const id of [
+      ...new Set([...result.openServerIds, ...Object.keys(value.servers)]),
+    ].slice(0, 128)) {
+      if (isRemoteTabId(id)) result.servers[id] = newServerPreferences();
+    }
+    for (const id of Object.keys(result.servers)) {
+      const raw = value.servers[id];
       if (!record(raw)) continue;
-      const preference = result.servers[server.id];
+      const preference = result.servers[id];
       if (toolIds.some((tool) => tool === raw.tool))
         preference.tool = raw.tool as ToolId;
       if (typeof raw.commandExpanded === "boolean")
@@ -102,7 +120,7 @@ function loadPreferences(): {
     const raw = localStorage.getItem(workspacePreferenceKey);
     if (!raw) return { preferences: defaultPreferences(), notice: "" };
     const parsed =
-      raw.length <= 16_000 ? sanitizePreferences(JSON.parse(raw)) : null;
+      raw.length <= 64_000 ? sanitizePreferences(JSON.parse(raw)) : null;
     return {
       preferences: parsed ?? defaultPreferences(),
       notice: parsed

@@ -1,7 +1,7 @@
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable } from "@dnd-kit/react/sortable";
+import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRight,
   ChevronDown,
   ChevronUp,
   Container,
@@ -22,17 +22,34 @@ import { lazy, Suspense, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { HelperWorkspace } from "@/features/helper/helper-workspace";
+import {
+  address,
+  remoteTabId,
+  type ServerProfile,
+  safeError,
+  sshApi,
+  statusQueryKey,
+  useConnectionStatuses,
+  useServerProfiles,
+} from "@/features/ssh/api";
+import { ProfileManager } from "@/features/ssh/profile-manager";
+import { RemoteWorkspace } from "@/features/ssh/remote-workspace";
 import { type SampleServer, sampleServers, type ToolId } from "./fixtures";
 import { Overview } from "./overview";
-import { type ServerPreferences, useWorkspacePreferences } from "./preferences";
+import {
+  newServerPreferences,
+  type ServerPreferences,
+  useWorkspacePreferences,
+} from "./preferences";
 import { ServerTab } from "./server-tab";
 import { Software } from "./software";
 
@@ -356,29 +373,76 @@ function ServerWorkspace({
 export function Workspace() {
   const { preferences, setPreferences, notice } = useWorkspacePreferences();
   const { openServerIds, activeServerId } = preferences;
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [managerOpen, setManagerOpen] = useState(false);
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const [closeError, setCloseError] = useState("");
+  const [closing, setClosing] = useState(false);
+  const profiles = useServerProfiles();
+  const statuses = useConnectionStatuses(Boolean(profiles.data?.length));
+  const queryClient = useQueryClient();
+  const tabInfo = (id: string) => {
+    const sample = sampleServers.find((server) => server.id === id);
+    if (sample) return sample;
+    const profile = profiles.data?.find(
+      (profile) => remoteTabId(profile.id) === id,
+    );
+    return profile
+      ? {
+          id,
+          name: profile.name,
+          detail: address(profile),
+          connectionStatus: statuses.data?.find(
+            (status) => status.profileId === profile.id,
+          )?.status,
+        }
+      : { id, name: "Saved server" };
+  };
+  function openRemote(profile: ServerProfile) {
+    const id = remoteTabId(profile.id);
+    setPreferences((current) => ({
+      ...current,
+      openServerIds: current.openServerIds.includes(id)
+        ? current.openServerIds
+        : [...current.openServerIds, id],
+      activeServerId: id,
+      servers: {
+        ...current.servers,
+        [id]: current.servers[id] ?? newServerPreferences(),
+      },
+    }));
+  }
+  function requestClose(id: string) {
+    if (id.startsWith("remote:")) {
+      setCloseError("");
+      setClosingId(id);
+    } else closeServer(id);
+  }
   const closedServers = sampleServers.filter(
     (server) => !openServerIds.includes(server.id),
   );
 
   function closeServer(serverId: string) {
-    const index = openServerIds.indexOf(serverId);
-    const remaining = openServerIds.filter((id) => id !== serverId);
-    const nextId =
-      activeServerId === serverId
-        ? (remaining[Math.min(index, remaining.length - 1)] ?? null)
-        : activeServerId;
-    setPreferences((current) => ({
-      ...current,
-      openServerIds: remaining,
-      activeServerId: nextId,
-    }));
-    // Closing is safe here: fixtures have no live connection or running session.
-    requestAnimationFrame(() =>
-      document
-        .getElementById(nextId ? `tab-${nextId}` : "add-sample-server")
-        ?.focus(),
-    );
+    // Real tabs reach this point after disconnect or a successful native delete.
+    // Use current state because the native operation may have completed later.
+    setPreferences((current) => {
+      const index = current.openServerIds.indexOf(serverId);
+      const remaining = current.openServerIds.filter((id) => id !== serverId);
+      return {
+        ...current,
+        openServerIds: remaining,
+        activeServerId:
+          current.activeServerId === serverId
+            ? (remaining[Math.min(index, remaining.length - 1)] ?? null)
+            : current.activeServerId,
+      };
+    });
+    requestAnimationFrame(() => {
+      const target =
+        document.querySelector<HTMLElement>(
+          '[data-slot="tabs-trigger"][aria-selected="true"]',
+        ) ?? document.getElementById("new-vps-tab");
+      target?.focus();
+    });
   }
 
   function openSample(serverId: string) {
@@ -389,7 +453,7 @@ export function Workspace() {
         : [...current.openServerIds, serverId],
       activeServerId: serverId,
     }));
-    setPickerOpen(false);
+    setManagerOpen(false);
     requestAnimationFrame(() =>
       document.getElementById(`tab-${serverId}`)?.focus(),
     );
@@ -397,25 +461,6 @@ export function Workspace() {
 
   return (
     <div className="flex h-dvh min-h-0 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-sidebar/80 px-5 py-3">
-        <div className="flex items-center gap-3">
-          <span className="rounded-lg border bg-primary/10 p-2 text-primary">
-            <PanelsTopLeft className="size-4" aria-hidden="true" />
-          </span>
-          <span className="text-sm font-semibold tracking-wide">VPS PILOT</span>
-        </div>
-        <span className="text-xs text-muted-foreground">
-          Your server workspace
-        </span>
-      </header>
-      <div className="flex shrink-0 items-center gap-2 border-b bg-primary/5 px-5 py-2 text-xs text-muted-foreground">
-        <span className="rounded border border-primary/20 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-          UI preview
-        </span>
-        <span>
-          Fictional servers and sample data. No connections or commands run.
-        </span>
-      </div>
       {notice && (
         <p
           role="status"
@@ -436,6 +481,12 @@ export function Workspace() {
         className="flex min-h-0 flex-1 flex-col"
       >
         <div className="flex shrink-0 items-end gap-2 border-b bg-sidebar px-3 pt-2">
+          <div className="mb-2 mr-2 flex shrink-0 items-center gap-2 px-2 text-primary">
+            <PanelsTopLeft className="size-4" aria-hidden="true" />
+            <span className="hidden text-xs font-semibold tracking-wide sm:inline">
+              VPS PILOT
+            </span>
+          </div>
           <div className="min-w-0 flex-1 overflow-x-auto">
             <DragDropProvider
               onDragEnd={(event) => {
@@ -465,20 +516,20 @@ export function Workspace() {
               }}
             >
               <TabsList
-                aria-label="Sample VPS workspaces"
+                aria-label="VPS workspaces"
                 activateOnFocus
                 className="w-max"
               >
                 {openServerIds.map((id, index) => {
-                  const server = sampleServers.find((item) => item.id === id);
-                  return server ? (
+                  const server = tabInfo(id);
+                  return (
                     <ServerTab
                       key={id}
                       server={server}
                       index={index}
-                      onClose={() => closeServer(id)}
+                      onClose={() => requestClose(id)}
                     />
-                  ) : null;
+                  );
                 })}
               </TabsList>
             </DragDropProvider>
@@ -488,66 +539,58 @@ export function Workspace() {
               cancel.
             </p>
           </div>
-          <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-            <DialogTrigger
-              id="add-sample-server"
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="mb-1"
-                  aria-label="Open sample server"
-                />
-              }
-            >
-              <Plus aria-hidden="true" />
-            </DialogTrigger>
-            <DialogContent
-              finalFocus={() =>
-                document.getElementById(
-                  activeServerId
-                    ? `tab-${activeServerId}`
-                    : "add-sample-server",
-                )
-              }
-            >
-              <DialogHeader>
-                <DialogTitle>Open a sample server</DialogTitle>
-                <DialogDescription>
-                  Explore the layout with fictional profiles. Real server setup
-                  will be added with SSH connections.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-2">
-                {closedServers.length ? (
-                  closedServers.map((server) => (
-                    <Button
-                      key={server.id}
-                      variant="outline"
-                      className="h-auto w-full justify-between gap-3 py-3"
-                      onClick={() => openSample(server.id)}
-                    >
-                      <span className="text-left">
-                        <span className="block">{server.name}</span>
-                        <span className="block text-xs font-normal text-muted-foreground">
-                          {server.address}
-                        </span>
-                      </span>
-                      <ArrowRight aria-hidden="true" />
-                    </Button>
-                  ))
-                ) : (
-                  <p className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-                    All three sample servers are open. Close a tab to reopen it
-                    here.
-                  </p>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
+          <Button
+            id="new-vps-tab"
+            variant="ghost"
+            size="icon"
+            className="mb-1 shrink-0"
+            aria-label="New VPS tab"
+            onClick={() => setManagerOpen(true)}
+          >
+            <Plus aria-hidden="true" />
+          </Button>
         </div>
         {openServerIds.map((id) => {
           const server = sampleServers.find((item) => item.id === id);
+          const profile = profiles.data?.find(
+            (profile) => remoteTabId(profile.id) === id,
+          );
+          if (!server)
+            return (
+              <TabsContent
+                key={id}
+                value={id}
+                keepMounted
+                className="flex flex-1 flex-col data-hidden:hidden"
+              >
+                {profile ? (
+                  <RemoteWorkspace
+                    key={profile.revision}
+                    profile={profile}
+                    status={statuses.data?.find(
+                      (status) => status.profileId === profile.id,
+                    )}
+                  />
+                ) : (
+                  <main className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+                    <h1 className="text-xl font-medium">
+                      Saved server unavailable
+                    </h1>
+                    <p className="text-sm text-muted-foreground">
+                      {profiles.isFetching
+                        ? "Loading profile metadata…"
+                        : "Use the plus button in the desktop app to choose a connection. No connection has been started."}
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => setManagerOpen(true)}
+                    >
+                      Choose a connection
+                    </Button>
+                  </main>
+                )}
+              </TabsContent>
+            );
           return server ? (
             <TabsContent
               key={id}
@@ -576,15 +619,86 @@ export function Workspace() {
             <Server className="size-8 text-primary" aria-hidden="true" />
             <h1 className="text-2xl font-medium">Your workspace starts here</h1>
             <p className="max-w-sm text-sm text-muted-foreground">
-              Open a sample server to explore the interface.
+              Choose a saved connection or add a new server to open a VPS
+              workspace.
             </p>
-            <Button onClick={() => setPickerOpen(true)}>
+            <Button onClick={() => setManagerOpen(true)}>
               <Plus aria-hidden="true" />
-              Open sample server
+              Choose a connection
             </Button>
           </main>
         )}
       </Tabs>
+      <ProfileManager
+        samples={closedServers}
+        onOpenSample={openSample}
+        open={managerOpen}
+        onOpenChange={setManagerOpen}
+        onOpenServer={openRemote}
+        onDeleteServer={(profile) => {
+          const id = remoteTabId(profile.id);
+          closeServer(id);
+          setPreferences((current) => {
+            const servers = { ...current.servers };
+            delete servers[id];
+            return { ...current, servers };
+          });
+        }}
+      />
+      <Dialog
+        open={closingId !== null}
+        onOpenChange={(open) => {
+          if (!open && !closing) setClosingId(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Disconnect and close{" "}
+              {closingId ? tabInfo(closingId).name : "server"}?
+            </DialogTitle>
+            <DialogDescription>
+              This ends any active SSH connection or pending attempt for this
+              VPS. Its saved profile is kept. Other server connections are
+              preserved.
+            </DialogDescription>
+          </DialogHeader>
+          {closeError && (
+            <p role="alert" className="text-sm text-destructive">
+              {closeError}
+            </p>
+          )}
+          <DialogFooter>
+            <DialogClose
+              render={<Button variant="outline" disabled={closing} />}
+            >
+              Cancel
+            </DialogClose>
+            <Button
+              disabled={closing}
+              onClick={async () => {
+                if (!closingId) return;
+                setClosing(true);
+                setCloseError("");
+                try {
+                  await sshApi.disconnect(closingId.slice(7));
+                  closeServer(closingId);
+                  setClosingId(null);
+                  await queryClient.invalidateQueries({
+                    queryKey: statusQueryKey,
+                  });
+                } catch (error) {
+                  setCloseError(safeError(error));
+                } finally {
+                  setClosing(false);
+                }
+              }}
+            >
+              Disconnect and close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -3,12 +3,19 @@
 A separate Tauri 2 desktop application using React and TypeScript for managing multiple Linux VPS servers over SSH.
 
 ## Current milestone
-Milestone 1: build the approved application UI in reviewable increments, following
-`agents/plan.md`. The user reviews each significant increment before further work.
-Use clearly labeled sample data until SSH and management backends are implemented.
+Milestone 2: build SSH connections and real terminals in reviewable increments,
+following `agents/plan.md`. Core UI was reviewed and committed. The first SSH
+increment adds profiles, read-only SSH config discovery, host identity verification,
+and password authentication;
+interactive terminals and management commands remain later work. Keep real server
+workspaces separate from clearly labeled sample data. The user reviews each
+significant increment before further work.
 
 ## Agreed scope
 - Multiple simultaneous SSH connections and interactive terminal tabs per server.
+- Put VPS tabs in the top row. Its plus button offers a connection list (SSH config
+  and app-saved profiles) or a separate form to add a connection. Never modify
+  SSH config when managing app profiles.
 - Each top-level tab owns one VPS workspace, including its sidebar, content,
   terminal sessions, and command panel. Keep their state isolated per server.
 - Docker containers, Compose projects, images, volumes, and logs.

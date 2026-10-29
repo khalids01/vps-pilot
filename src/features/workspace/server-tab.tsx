@@ -2,6 +2,7 @@ import { useSortable } from "@dnd-kit/react/sortable";
 import { GripVertical, Server, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TabsTrigger } from "@/components/ui/tabs";
+import type { ConnectionStatus } from "@/features/ssh/api";
 import type { SampleServer } from "./fixtures";
 
 export function ServerTab({
@@ -9,7 +10,10 @@ export function ServerTab({
   index,
   onClose,
 }: {
-  server: SampleServer;
+  server: Pick<SampleServer, "id" | "name"> & {
+    detail?: string;
+    connectionStatus?: ConnectionStatus["status"];
+  };
   index: number;
   onClose: () => void;
 }) {
@@ -28,10 +32,21 @@ export function ServerTab({
       <TabsTrigger
         id={`tab-${server.id}`}
         value={server.id}
+        aria-label={
+          server.detail ? `${server.name} · ${server.detail}` : server.name
+        }
         className="pr-10 pl-8"
       >
         <Server className="size-3.5" aria-hidden="true" />
         {server.name}
+        {server.detail && (
+          <span
+            aria-hidden="true"
+            className={`text-[10px] ${server.connectionStatus === "connected" ? "text-primary" : "text-muted-foreground"}`}
+          >
+            SSH{server.connectionStatus === "connected" ? " ●" : ""}
+          </span>
+        )}
       </TabsTrigger>
       <Button
         ref={handleRef}
@@ -46,7 +61,7 @@ export function ServerTab({
       <Button
         variant="ghost"
         size="icon-xs"
-        aria-label={`Close ${server.name} sample tab`}
+        aria-label={`Close ${server.name} ${server.detail ? "SSH" : "sample"} tab`}
         className="absolute top-2 right-1.5 text-muted-foreground"
         onClick={onClose}
       >
