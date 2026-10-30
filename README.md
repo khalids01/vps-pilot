@@ -166,7 +166,7 @@ GitHub API. First-release and offline states retain a GitHub releases fallback.
 
 `.github/workflows/pages.yml` deploys that directory on main-branch changes.
 Set repository **Settings → Pages → Source** to **GitHub Actions**.
-The live custom domain is http://vpspilot.skycanvasstudio.com/ (HTTPS pending).
+The live custom domain is https://vpspilot.skycanvasstudio.com/.
 The custom domain is configured in GitHub Pages settings.
 
 ### Publishing a desktop release

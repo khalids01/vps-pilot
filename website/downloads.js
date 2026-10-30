@@ -37,7 +37,7 @@ function render(release) {
 }
 async function load() {
   try {
-    const response = await fetch("downloads.json", { signal: AbortSignal.timeout(10000) });
+    const response = await fetch("downloads.json", { cache: "no-store", signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error("Release lookup failed");
     const release = await response.json();
     if (!release) {
