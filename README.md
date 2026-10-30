@@ -186,9 +186,17 @@ Each main-branch push builds an immutable release tag such as
 deploys the site with its download manifest, retaining the previous download
 release until the complete platform set succeeds. No manual tag is required.
 
-No signing credentials or updater keys are required by this initial workflow.
+Release builds require VPS Pilot updater signing credentials; see the setup below.
 Windows packages are unsigned; macOS packages are ad-hoc signed, not notarized.
-This does not enable in-app automatic updates or any server-side mutation.
+Updater signing is separate from OS distribution signing.
 
 For a local Linux package: `bun tauri build --bundles deb,appimage`.
 Installers are written beneath `src-tauri/target/release/bundle/`.
+
+## In-app updates
+
+VPS Pilot checks for signed updates after launch. Use **Check for updates** in the
+app's top bar to check manually, review release notes, or update and restart.
+Updating closes SSH connections and terminal sessions; finish your work first.
+See [self-updater setup](docs/self-updater.md) for signing credentials, release
+versions, supported installers, and validation requirements.

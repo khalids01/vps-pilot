@@ -43,6 +43,10 @@ import {
 } from "@/features/ssh/api";
 import { ProfileManager } from "@/features/ssh/profile-manager";
 import { RemoteWorkspace } from "@/features/ssh/remote-workspace";
+import {
+  UpdateControl,
+  UpdateManager,
+} from "@/features/updates/update-control";
 import { type SampleServer, sampleServers, type ToolId } from "./fixtures";
 import { Overview } from "./overview";
 import {
@@ -461,6 +465,7 @@ export function Workspace() {
 
   return (
     <div className="flex h-dvh min-h-0 flex-col">
+      <UpdateManager />
       {notice && (
         <p
           role="status"
@@ -539,6 +544,7 @@ export function Workspace() {
               cancel.
             </p>
           </div>
+          <UpdateControl />
           <Button
             id="new-vps-tab"
             variant="ghost"

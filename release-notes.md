@@ -1,0 +1,3 @@
+- Added in-app update checks, release notes, and signed update installation.
+- Added download progress, skip/later controls, and restart recovery.
+- Updating warns before closing SSH connections and terminal sessions.
