@@ -1,0 +1,51 @@
+{
+  "scope": "local Linux sampler process only; excludes SSH transport and desktop rendering",
+  "results": [
+    {
+      "intervalSeconds": 1,
+      "samples": 10,
+      "elapsedSeconds": 9.04,
+      "cpuSeconds": 0.0259,
+      "oneCoreCpuPercent": 0.287,
+      "peakRssKiB": 9788,
+      "bytesPerSample": 369,
+      "maxRequestMs": 17.44,
+      "budgetPassed": true
+    },
+    {
+      "intervalSeconds": 2,
+      "samples": 10,
+      "elapsedSeconds": 18.04,
+      "cpuSeconds": 0.0261,
+      "oneCoreCpuPercent": 0.145,
+      "peakRssKiB": 9932,
+      "bytesPerSample": 369,
+      "maxRequestMs": 17.44,
+      "budgetPassed": true
+    },
+    {
+      "intervalSeconds": 5,
+      "samples": 10,
+      "elapsedSeconds": 45.04,
+      "cpuSeconds": 0.0259,
+      "oneCoreCpuPercent": 0.058,
+      "peakRssKiB": 9744,
+      "bytesPerSample": 370,
+      "maxRequestMs": 17.42,
+      "budgetPassed": true
+    }
+  ],
+  "date": "2026-10-30",
+  "fixture": "rootless Debian 12 x86_64 container, Python 3.11, no network, 1 CPU quota, 128 MiB memory limit",
+  "interpreterArguments": [
+    "-I",
+    "-S",
+    "-B",
+    "-u"
+  ],
+  "samplerSha256": "e3b63ef9cdb4c3ab5c06b2e930a0e43e7c8b6e6cf7376542c0b9ee31b0e3bb5e",
+  "budget": {
+    "oneCoreCpuPercentLessThan": 1,
+    "peakRssMiBLessThan": 20
+  }
+}

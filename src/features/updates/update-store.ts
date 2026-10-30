@@ -3,6 +3,10 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import {
+  readPreference,
+  writePreference,
+} from "@/features/settings/persistence";
 
 export type UpdateStatus =
   | "idle"
@@ -163,7 +167,16 @@ export const useUpdateStore = create<UpdateState>()(
     }),
     {
       name: "vps-pilot-updates",
-      storage: createJSONStorage(() => localStorage),
+      skipHydration: true,
+      storage: createJSONStorage(() => ({
+        getItem: readPreference,
+        setItem: writePreference,
+        removeItem: (key: string) =>
+          writePreference(
+            key,
+            JSON.stringify({ state: { skippedVersion: null }, version: 0 }),
+          ),
+      })),
       partialize: (state) => ({ skippedVersion: state.skippedVersion }),
     },
   ),

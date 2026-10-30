@@ -1,4 +1,5 @@
 import { Orientation, type SerializedDockview } from "dockview-react";
+import { readPreference } from "@/features/settings/persistence";
 
 export const MAX_SAMPLE_SESSIONS = 12;
 export type SessionKind = "shell" | "logs";
@@ -140,7 +141,7 @@ export function readLayout(
   notice?: string;
 } {
   try {
-    const raw = localStorage.getItem(layoutKey(serverId, mode));
+    const raw = readPreference(layoutKey(serverId, mode));
     if (!raw) return { layout: null };
     if (raw.length > 128_000)
       return {

@@ -47,3 +47,15 @@ is currently required by the implemented SSH functionality.
 
 Container checks supplement native SSH fixtures. They do not establish firewall
 connectivity rollback or VM boot/recovery behavior.
+
+## Live metrics prerequisites
+
+The automatically enabled live sampler (configurable in Settings) requires Linux /proc counters, /sys/block, and Python 3
+for the authenticated SSH user. Debian 12 x86_64 is exercised with real OpenSSH
+in a rootless disposable container. Other Linux distributions are not certified
+by that test. No remote package installation, permanent helper, privileged
+process, or public monitoring port is introduced. Unsupported prerequisites
+leave manual inspections and interactive terminals available.
+
+See [monitoring-validation.md](monitoring-validation.md) for the sampler budget,
+benchmark method, and transport/performance limitations.

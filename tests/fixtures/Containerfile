@@ -2,7 +2,7 @@
 ARG BASE=debian:12
 FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive
-RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d && apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv openssh-server sudo iproute2 procps util-linux ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d && apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv openssh-server sudo iproute2 procps util-linux python3 ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /run/sshd && systemctl enable ssh.service
 RUN printf '[Unit]\nDescription=VPS Pilot disposable fixture\n[Service]\nExecStart=/usr/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/vps-pilot-fixture.service
 CMD ["/sbin/init"]

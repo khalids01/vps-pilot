@@ -1,3 +1,4 @@
+mod database;
 mod ssh;
 use tauri::Manager;
 
@@ -8,12 +9,21 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            app.manage(ssh::SshService::new(
-                app.path().app_config_dir()?.join("ssh-profiles.json"),
+            let config = app.path().app_config_dir()?;
+            let db = database::LocalDatabase::open(&config.join("vps-pilot.sqlite3"))
+                .map_err(std::io::Error::other)?;
+            app.manage(ssh::SshService::with_database(
+                db.clone(),
+                config.join("ssh-profiles.json"),
             ));
+            app.manage(db);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            database::app_apply_zoom,
+            database::app_bootstrap,
+            database::app_save_settings,
+            database::app_save_document,
             ssh::ssh_profiles,
             ssh::ssh_config_hosts,
             ssh::ssh_parse_command,
@@ -23,6 +33,8 @@ pub fn run() {
             ssh::ssh_trust,
             ssh::ssh_connect,
             ssh::ssh_disconnect,
+            ssh::monitor::ssh_monitor_start,
+            ssh::monitor::ssh_monitor_describe,
             ssh::streams::ssh_terminal_open,
             ssh::streams::ssh_terminal_input,
             ssh::streams::ssh_terminal_resize,

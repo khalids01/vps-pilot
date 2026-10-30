@@ -12,6 +12,17 @@ async function mockDesktop(page: import("@playwright/test").Page, mode = "availa
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           calls.push(cmd);
+          if (cmd === "app_bootstrap") return {
+            settings:{liveStats:true,intervalSeconds:1,visibleStats:["cpu","ram","storage","diskIo","network"],zoomPercent:100},
+            documents:JSON.parse(localStorage.getItem("__fixture_update_docs") ?? "{}")
+          };
+          if (cmd === "app_save_document") {
+            const docs=JSON.parse(localStorage.getItem("__fixture_update_docs") ?? "{}");
+            if(!args.import || docs[args.key] === undefined)docs[args.key]=args.value;
+            localStorage.setItem("__fixture_update_docs",JSON.stringify(docs));
+            return docs[args.key];
+          }
+          if (cmd === "app_apply_zoom" || cmd === "app_save_settings") return;
           if (cmd === "plugin:app|version") return "0.1.0";
           if (cmd === "plugin:updater|check") {
             if (mode === "offline") throw new Error("Release channel is unavailable");

@@ -250,7 +250,7 @@ impl SshService {
             .start_stream_locked(
                 &mut runtime,
                 profile_id,
-                None,
+                streams::Mode::Command,
                 Some(&pending.plan.command),
                 sink,
                 if pending.plan.privileged {

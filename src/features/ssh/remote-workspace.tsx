@@ -17,6 +17,8 @@ import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
 import { CommandActivityProvider } from "./command-activity";
+import { LiveMetricsProvider } from "./live-metrics";
+import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
 
@@ -37,6 +39,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   address,
   type ConnectionStatus,
@@ -63,7 +66,13 @@ export function RemoteWorkspace(props: RemoteWorkspaceProps) {
       serverId={props.profile.id}
       serverName={props.profile.name}
     >
-      <RemoteWorkspaceContent {...props} />
+      <LiveMetricsProvider
+        profile={props.profile}
+        connected={props.status?.status === "connected"}
+        active={props.active}
+      >
+        <RemoteWorkspaceContent {...props} />
+      </LiveMetricsProvider>
     </CommandActivityProvider>
   );
 }
@@ -155,13 +164,13 @@ function RemoteWorkspaceContent({
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-sidebar/40 px-4 py-3 sm:px-6">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <h1 className="text-sm font-medium">{profile.name}</h1>
-          <span
-            className="max-w-60 truncate font-mono text-[11px] text-muted-foreground"
-            title={address(profile)}
-          >
-            {address(profile)}
-          </span>
+          <h1 className="min-w-0 text-sm font-medium">
+            <Tooltip content={address(profile)}>
+              <span className="block max-w-40 truncate rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {profile.name}
+              </span>
+            </Tooltip>
+          </h1>
           <span className="flex items-center gap-1.5 text-[11px]">
             <span
               className={`size-1.5 rounded-full ${connected ? "bg-primary" : "bg-muted-foreground"}`}
@@ -178,7 +187,8 @@ function RemoteWorkspaceContent({
             Read-only actions
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <LiveMetricsBar />
+        <div className="flex shrink-0 items-center gap-2">
           <details className="group relative">
             <summary className="cursor-pointer list-none rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
               Connection details

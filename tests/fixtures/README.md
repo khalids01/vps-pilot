@@ -48,3 +48,26 @@ PLAYWRIGHT_CHROME=/usr/bin/google-chrome bun run test:e2e
 Browser mocks do not establish native WebKit behavior or privileged-installation
 safety. Native default tests use in-process disposable SSH servers and never
 connect to a real server or reuse the user's SSH agent.
+
+## Live sampler benchmark
+
+This benchmark is explicitly local/disposable. Never run it on the important VPS.
+Build the fixture above, then run a network-isolated, resource-limited container:
+
+```sh
+podman run --rm --name vps-pilot-fixture-monitor-benchmark \
+  --label org.vps-pilot.fixture=true --network none \
+  --memory 128m --cpus 1 --pids-limit 32 \
+  --volume "$PWD/src-tauri/src/ssh/sampler.py:/workspace/src-tauri/src/ssh/sampler.py:ro" \
+  --volume "$PWD/tests/fixtures/benchmark-monitor.py:/workspace/tests/fixtures/benchmark-monitor.py:ro" \
+  localhost/vps-pilot-fixture:debian12 \
+  python3 -u /workspace/tests/fixtures/benchmark-monitor.py --samples 10
+```
+
+This command compares 10 requests at each 1-, 2-, and 5-second interval, including process
+startup, with a budget below 1% of one CPU core and below 20 MiB peak RSS.
+The script defaults to 30 samples per interval when --samples is omitted.
+It measures only the sampler, excluding SSH transport and desktop rendering.
+The OpenSSH test separately verifies real typed samples and remote process exit
+after closing the stream. Browser tests cover sharing, pause, backoff,
+interval changes, tooltips, popover details, and narrow layouts.

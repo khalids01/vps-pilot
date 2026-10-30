@@ -4,6 +4,7 @@ mod catalog;
 mod command;
 mod config;
 pub mod discovery;
+pub mod monitor;
 mod services;
 mod store;
 pub mod streams;
@@ -113,6 +114,11 @@ impl SshService {
                 unresolved_changes: HashMap::new(),
             }),
         }
+    }
+    pub fn with_database(db: Arc<crate::database::LocalDatabase>, legacy: PathBuf) -> Self {
+        let mut service = Self::new(legacy.clone());
+        service.store = Mutex::new(Store::open_sql(db, legacy));
+        service
     }
     fn store(&self) -> Result<std::sync::MutexGuard<'_, Store>, String> {
         self.store

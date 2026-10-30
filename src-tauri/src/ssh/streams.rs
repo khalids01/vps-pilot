@@ -3,14 +3,21 @@
 use super::*;
 use russh::{Channel, ChannelMsg};
 use tauri::ipc::Channel as IpcChannel;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 pub(super) struct StreamHandle {
     pub profile_id: String,
+    pub monitoring: bool,
     pub mutation_probe: Option<String>,
     pub verified: Arc<Mutex<bool>>,
     pub controls: mpsc::Sender<Control>,
-    pub _cancel: oneshot::Sender<()>,
+    pub _cancel: Option<oneshot::Sender<()>>,
+    pub finished: watch::Receiver<bool>,
+}
+pub(super) enum Mode {
+    Terminal(u32, u32),
+    Command,
+    Monitor(u64),
 }
 pub(super) enum Control {
     Input(Vec<u8>),
@@ -20,6 +27,11 @@ pub(super) enum Control {
 #[derive(Clone, Serialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StreamEvent {
+    Metrics {
+        id: String,
+        sequence: u64,
+        sample: monitor::Sample,
+    },
     Inspection {
         id: String,
         report: structured::Report,
@@ -69,18 +81,35 @@ impl SshService {
         // Serialize channel creation with disconnect/reconnect and limit sessions
         // while the runtime lock is held. No stale channel can attach to a new login.
         let mut runtime = self.runtime.lock().await;
-        self.start_stream_locked(&mut runtime, profile_id, terminal, command, sink, None)
-            .await
+        self.start_stream_locked(
+            &mut runtime,
+            profile_id,
+            terminal
+                .map(|(cols, rows)| Mode::Terminal(cols, rows))
+                .unwrap_or(Mode::Command),
+            command,
+            sink,
+            None,
+        )
+        .await
     }
     pub(super) async fn start_stream_locked(
         &self,
         runtime: &mut Runtime,
         profile_id: &str,
-        terminal: Option<(u32, u32)>,
+        mode: Mode,
         command: Option<&str>,
         sink: Sink,
         sudo: Option<Zeroizing<String>>,
     ) -> Result<String, String> {
+        let terminal = match mode {
+            Mode::Terminal(cols, rows) => Some((cols, rows)),
+            _ => None,
+        };
+        let monitor_interval = match mode {
+            Mode::Monitor(interval) => Some(interval),
+            _ => None,
+        };
         for stream in runtime.streams.values().filter(|stream| {
             stream.controls.is_closed()
                 && !*stream.verified.lock().unwrap_or_else(|e| e.into_inner())
@@ -93,7 +122,7 @@ impl SshService {
         }
         runtime
             .streams
-            .retain(|_, stream| !stream.controls.is_closed());
+            .retain(|_, stream| !*stream.finished.borrow());
         if runtime
             .streams
             .values()
@@ -138,35 +167,54 @@ impl SshService {
         let id = Uuid::new_v4().to_string();
         let (sender, receiver) = mpsc::channel(32);
         let (cancel, cancelled) = oneshot::channel();
+        let (finished, completion) = watch::channel(false);
         let verified = Arc::new(Mutex::new(false));
         runtime.streams.insert(
             id.clone(),
             StreamHandle {
                 profile_id: profile_id.into(),
+                monitoring: monitor_interval.is_some(),
                 mutation_probe: None,
                 verified: verified.clone(),
                 controls: sender,
-                _cancel: cancel,
+                _cancel: Some(cancel),
+                finished: completion,
             },
         );
         let stream_id = id.clone();
         tokio::spawn(async move {
-            let result = run(
-                &stream_id,
-                &mut channel,
-                terminal.is_some(),
-                sink.clone(),
-                receiver,
-                cancelled,
-                sudo,
-            )
-            .await;
+            let result = if let Some(interval) = monitor_interval {
+                monitor::run(
+                    &stream_id,
+                    &mut channel,
+                    interval,
+                    sink.clone(),
+                    receiver,
+                    cancelled,
+                )
+                .await
+            } else {
+                run(
+                    &stream_id,
+                    &mut channel,
+                    terminal.is_some(),
+                    sink.clone(),
+                    receiver,
+                    cancelled,
+                    sudo,
+                )
+                .await
+            };
+            if monitor_interval.is_some() {
+                let _ = timeout(Duration::from_secs(2), channel.eof()).await;
+            }
             if matches!(result, Ok(Some(0))) {
                 *verified.lock().unwrap_or_else(|e| e.into_inner()) = true;
             }
             // Closing a channel does not prove a remote child process has exited.
             let _ = timeout(Duration::from_secs(2), channel.close()).await;
             let (code, message) = match result {
+                Ok(code) if monitor_interval.is_some() => (code, "Live monitoring stopped. The sampler exits when SSH input closes.".into()),
                 Ok(code) => (code, if code == Some(0) { "Completed." } else if terminal.is_some() { "Session ended. Remote processes may continue running." } else { "Command ended; inspect the exit status. Remote processes may continue running." }.into()),
                 Err(message) => (None, message),
             };
@@ -175,6 +223,7 @@ impl SshService {
                 code,
                 message,
             });
+            let _ = finished.send(true);
         });
         Ok(id)
     }
@@ -202,6 +251,22 @@ impl SshService {
             .is_some_and(|s| s.profile_id != profile_id)
         {
             return Err("This session belongs to another server.".into());
+        }
+        if let Some(stream) = runtime
+            .streams
+            .get_mut(id)
+            .filter(|stream| stream.monitoring)
+        {
+            // Keep the singleton slot reserved until EOF/close have completed.
+            stream._cancel.take();
+            let mut completion = stream.finished.clone();
+            drop(runtime);
+            timeout(Duration::from_secs(5), completion.wait_for(|done| *done))
+                .await
+                .map_err(|_| "The live sampler is still stopping. Wait before retrying.")?
+                .map_err(|_| "The sampler shutdown could not be confirmed.")?;
+            self.runtime.lock().await.streams.remove(id);
+            return Ok(());
         }
         if let Some(stream) = runtime.streams.remove(id) {
             if !*stream.verified.lock().unwrap_or_else(|e| e.into_inner()) {

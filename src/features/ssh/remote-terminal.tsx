@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { writePreference } from "@/features/settings/persistence";
 import {
   layoutKey,
   readLayout,
@@ -258,7 +259,7 @@ export function RemoteTerminal({
       const layout = sanitizeLayout(api.toJSON(), profile.id, "remote");
       if (layout) {
         try {
-          localStorage.setItem(
+          writePreference(
             layoutKey(profile.id, "remote"),
             JSON.stringify(layout),
           );

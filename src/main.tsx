@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { AppSettingsProvider } from "./features/settings/app-settings";
 import { routeTree } from "./routeTree.gen";
 import "./styles/globals.css";
 
@@ -21,7 +22,9 @@ if (!root) throw new Error("Missing root element");
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <AppSettingsProvider>
+        <RouterProvider router={router} />
+      </AppSettingsProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

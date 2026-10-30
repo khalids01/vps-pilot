@@ -132,6 +132,7 @@ impl Default for Database {
     }
 }
 pub struct Store {
+    sql: Option<std::sync::Arc<crate::database::LocalDatabase>>,
     path: PathBuf,
     snapshot: Option<Vec<u8>>,
     pub data: Result<Database, String>,
@@ -144,49 +145,38 @@ impl Store {
                 return Ok(Database::default());
             };
             snapshot = Some(bytes.clone());
-            let database: Database = serde_json::from_slice(&bytes)
-                .map_err(|_| "Server profile storage is invalid; it has not been overwritten.")?;
-            if database.version != 1 || database.profiles.len() > 100 {
-                return Err(
-                    "Unsupported server profile storage; it has not been overwritten.".into(),
-                );
-            }
-            let mut ids = std::collections::HashSet::new();
-            for profile in &database.profiles {
-                if !ids.insert(&profile.id)
-                    || Uuid::parse_str(&profile.revision).is_err()
-                    || (ProfileInput {
-                        id: Some(profile.id.clone()),
-                        name: profile.name.clone(),
-                        host: profile.host.clone(),
-                        port: profile.port,
-                        username: profile.username.clone(),
-                        identity_file: profile.identity_file.clone(),
-                        password_allowed: profile.password_allowed,
-                    })
-                    .validate()
-                    .is_err()
-                {
-                    return Err(
-                        "Invalid saved server profile; storage has not been overwritten.".into(),
-                    );
-                }
-            }
-            if database.trusted_hosts.values().any(|key| {
-                !key.fingerprint.starts_with("SHA256:")
-                    || key.fingerprint.len() > 100
-                    || key.algorithm.len() > 100
-            }) {
-                return Err(
-                    "Invalid saved host identity; storage has not been overwritten.".into(),
-                );
-            }
-            Ok(database)
+            decode(&bytes)
         })();
         Self {
+            sql: None,
             path,
             snapshot,
             data,
+        }
+    }
+    pub fn open_sql(db: std::sync::Arc<crate::database::LocalDatabase>, legacy: PathBuf) -> Self {
+        let data = (|| {
+            let bytes = match db.read("ssh_profiles")? {
+                Some(value) => value,
+                None => {
+                    let previous = Self::open(legacy.clone());
+                    let value = serde_json::to_string(previous.database()?)
+                        .map_err(|_| "Cannot migrate saved profiles.")?;
+                    db.import("ssh_profiles", &value)?
+                }
+            };
+            let data = decode(bytes.as_bytes())?;
+            Ok::<_, String>((data, bytes.into_bytes()))
+        })();
+        let (data, snapshot) = match data {
+            Ok((data, bytes)) => (Ok(data), Some(bytes)),
+            Err(error) => (Err(error), None),
+        };
+        Self {
+            sql: Some(db),
+            path: legacy,
+            data,
+            snapshot,
         }
     }
     pub fn database(&self) -> Result<&Database, String> {
@@ -194,7 +184,11 @@ impl Store {
         self.data.as_ref().map_err(Clone::clone)
     }
     fn check_snapshot(&self) -> Result<(), String> {
-        let current = read_store_bytes(&self.path)?;
+        let current = if let Some(db) = &self.sql {
+            db.read("ssh_profiles")?.map(String::into_bytes)
+        } else {
+            read_store_bytes(&self.path)?
+        };
         if current != self.snapshot {
             return Err(
                 "Server profiles changed outside this app instance. Restart before making changes."
@@ -204,6 +198,24 @@ impl Store {
         Ok(())
     }
     pub fn commit(&mut self, next: Database) -> Result<(), String> {
+        if let Some(db) = &self.sql {
+            self.check_snapshot()?;
+            let bytes =
+                serde_json::to_string(&next).map_err(|_| "Cannot encode server profiles.")?;
+            if bytes.len() > 1_000_000 {
+                return Err("Server storage capacity exceeded.".into());
+            }
+            let expected = std::str::from_utf8(
+                self.snapshot
+                    .as_deref()
+                    .ok_or("Server storage unavailable.")?,
+            )
+            .map_err(|_| "Server storage unavailable.")?;
+            db.compare_and_swap("ssh_profiles", expected, &bytes)?;
+            self.snapshot = Some(bytes.into_bytes());
+            self.data = Ok(next);
+            return Ok(());
+        }
         let parent = self
             .path
             .parent()
@@ -269,4 +281,99 @@ fn read_store_bytes(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
         );
     }
     Ok(Some(bytes))
+}
+
+fn decode(bytes: &[u8]) -> Result<Database, String> {
+    let database: Database = serde_json::from_slice(bytes)
+        .map_err(|_| "Server profile storage is invalid; it has not been overwritten.")?;
+    if database.version != 1 || database.profiles.len() > 100 {
+        return Err("Unsupported server profile storage; it has not been overwritten.".into());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for profile in &database.profiles {
+        if !ids.insert(&profile.id)
+            || Uuid::parse_str(&profile.revision).is_err()
+            || (ProfileInput {
+                id: Some(profile.id.clone()),
+                name: profile.name.clone(),
+                host: profile.host.clone(),
+                port: profile.port,
+                username: profile.username.clone(),
+                identity_file: profile.identity_file.clone(),
+                password_allowed: profile.password_allowed,
+            })
+            .validate()
+            .is_err()
+        {
+            return Err("Invalid saved server profile; storage has not been overwritten.".into());
+        }
+    }
+    if database.trusted_hosts.values().any(|key| {
+        !key.fingerprint.starts_with("SHA256:")
+            || key.fingerprint.len() > 100
+            || key.algorithm.len() > 100
+    }) {
+        return Err("Invalid saved host identity; storage has not been overwritten.".into());
+    }
+    Ok(database)
+}
+
+#[cfg(test)]
+mod sql_tests {
+    use super::*;
+    #[test]
+    fn migrates_profiles_and_host_pins_once_without_changing_legacy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("ssh-profiles.json");
+        let mut old = Store::open(legacy.clone());
+        let profile = ProfileInput {
+            id: None,
+            name: "Existing VPS".into(),
+            host: "example.com".into(),
+            port: 22,
+            username: "deploy".into(),
+            identity_file: None,
+            password_allowed: true,
+        }
+        .validate()
+        .unwrap();
+        let mut data = Database::default();
+        data.profiles.push(profile.clone());
+        data.trusted_hosts.insert(
+            profile.endpoint(),
+            HostKey {
+                algorithm: "ssh-ed25519".into(),
+                fingerprint: "SHA256:fixture".into(),
+            },
+        );
+        old.commit(data).unwrap();
+        let original = fs::read(&legacy).unwrap();
+        let db = crate::database::LocalDatabase::open(&dir.path().join("app.sqlite3")).unwrap();
+        let mut migrated = Store::open_sql(db.clone(), legacy.clone());
+        assert_eq!(migrated.database().unwrap().profiles[0].id, profile.id);
+        assert_eq!(migrated.database().unwrap().trusted_hosts.len(), 1);
+        let stale = Store::open_sql(db.clone(), legacy.clone());
+        let mut next = migrated.database().unwrap().clone();
+        next.profiles[0].name = "Renamed in SQLite".into();
+        migrated.commit(next).unwrap();
+        assert!(stale.database().is_err());
+        assert_eq!(fs::read(&legacy).unwrap(), original);
+        let restored = Store::open_sql(db, legacy);
+        assert_eq!(
+            restored.database().unwrap().profiles[0].name,
+            "Renamed in SQLite"
+        );
+        assert_eq!(restored.database().unwrap().trusted_hosts.len(), 1);
+    }
+    #[test]
+    fn corrupt_legacy_profiles_never_become_an_empty_migrated_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-profiles.json");
+        fs::write(&path, "{broken").unwrap();
+        let db = crate::database::LocalDatabase::open(&dir.path().join("app.sqlite3")).unwrap();
+        let store = Store::open_sql(db.clone(), path.clone());
+        assert!(store.database().is_err());
+        assert!(db.read("ssh_profiles").unwrap().is_none());
+        assert_eq!(fs::read_to_string(path).unwrap(), "{broken");
+    }
 }

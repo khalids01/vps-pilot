@@ -28,9 +28,9 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png",
-      "icons/icon.ico",
-      "icons/icon.icns"
+      "icons/vps-pilot/icon.png",
+      "icons/vps-pilot/icon.ico",
+      "icons/vps-pilot/icon.icns"
     ],
     "createUpdaterArtifacts": true
   },

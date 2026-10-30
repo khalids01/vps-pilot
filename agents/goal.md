@@ -6,7 +6,7 @@ A separate Tauri 2 desktop application using React and TypeScript for managing m
 
 Milestone 2 now includes real SSH PTYs and a native execution/approval foundation.
 Milestone 3 includes read-only Linux inspections, measured Overview values,
-opt-in periodic monitoring, and catalog ownership/conflict preflight, including
+automatic lightweight live monitoring, and catalog ownership/conflict preflight, including
 Herdr. See `agents/plan.md` for implemented and outstanding work.
 
 The user authorized the remaining scope on 2026-10-29 without intermediate
@@ -65,8 +65,9 @@ claim a CPU/memory budget without measurement.
 /proc/net/dev, and /proc/diskstats); batch requests and reuse the SSH connection.
 - Share one sampler per server, with no overlapping polls or duplicated samplers
 for badges, charts, tooltips, and detail popovers. Tooltips use cached data.
-- For new compact live monitoring, default to a conservative 10-second interval;
-do not poll faster than 5 seconds without explicit user selection and evidence.
+- The user authorized a benchmarked 1-second live mode on 2026-10-30. Offer
+1-, 2-, and 5-second choices. Default to 1 second only after the local sampler
+meets the documented CPU/memory budget; lower frequency remains selectable.
 Pause when the app is hidden, the server is disconnected, or monitoring is unused.
 - Cache filesystem capacity for at least 60 seconds. No automatic recursive disk
 scans, du/find traversals, package discovery, service enumeration, Docker queries,
@@ -76,3 +77,20 @@ and concurrent work; back off on failures or slow responses.
 - Validate overhead in disposable local fixtures before enabling new monitoring.
 Never benchmark, stress-test, install a daemon on, or run destructive checks
 against the user's important VPS.
+
+## Local persistence and settings
+
+The user authorized automatic live stats and a simple local SQL database on
+2026-10-30. Every desktop installation must create its app-owned SQLite database
+by default. Keep the schema small, versioned, and local to the desktop; no remote
+database or VPS database process. Preserve existing profiles, trusted host
+fingerprints, workspace layouts, and preferences during migration. Never silently
+reset corrupt or newer-version data. Do not persist passwords, private-key contents,
+terminal output, commands, or per-second metrics. Store future credentials only in
+the OS credential store.
+
+Stats default on for the active connected VPS. Put monitoring preferences and
+visible-stat selection in the Settings page. Pause sampling while Settings is
+open, all stats are hidden, or the window/server workspace is inactive. Keep
+fixed-width values, show both network directions, and retain browser-style app
+zoom and its setting.

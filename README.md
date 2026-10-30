@@ -102,7 +102,8 @@ memory only and are cleared when the workspace closes or the app restarts.
 - Overview, Software, Docker, Proxy, Services, Storage, Firewall, Network and
   Processes have fixed read-only inspections. Missing tools and permission errors
   remain visible as partial results. CPU usage needs two completed samples.
-- Monitoring is opt-in for Overview, Network and Processes. Snapshots are scoped
+- Live monitoring starts for the active connected VPS by default, with 1-, 2-, or 5-second
+  intervals. Inventory snapshots refresh only on request. Snapshots are scoped
   to their server, timestamped, and marked stale while disconnected.
 - Reviewed reads provide numbered UFW rules, the last 200 service/container log
   lines and one-level directory scans that do not cross filesystem boundaries.
@@ -193,6 +194,38 @@ Updater signing is separate from OS distribution signing.
 For a local Linux package: `bun tauri build --bundles deb,appimage`.
 Installers are written beneath `src-tauri/target/release/bundle/`.
 
+## Lightweight live metrics
+
+Connect a VPS and live metrics start automatically for its active workspace. Hover a
+badge for its label; click CPU, RAM, storage, disk I/O, or network to open the
+floating resource panel. Overview shows the same measurements as charts.
+The Settings page offers 1s, 2s, and 5s intervals; there is no additional sampler for
+charts, tooltips, or detail views.
+
+The target needs Linux /proc, /sys/block, and Python 3 available to the SSH user.
+VPS Pilot starts one Python process as the authenticated SSH user over the existing connection,
+with isolated startup, site-package hooks disabled, and no bytecode-cache writes.
+Nothing is uploaded or installed, no listener is opened, and no sudo is used.
+The process stops on SSH input EOF or after 30 seconds without requests.
+Missing prerequisites report an error; the app never installs them automatically.
+
+CPU, memory, base-device disk counters, and one network interface are sampled.
+Root filesystem capacity is cached for 60 seconds. The sampler does not enumerate
+processes, services, packages, containers, or directories. Network prefers the
+default IPv4 route's interface, with a non-loopback fallback; it is not a sum of
+virtual interfaces. Disk I/O excludes partitions and stacked/virtual devices to
+reduce double counting, and is not limited to the root filesystem.
+
+Sampling pauses for hidden/inactive windows and VPS tabs, and resumes only for
+that session's selected server. It is not enabled again after restarting the app.
+Failed streams retry with 5–60 second backoff. Slow samples reduce the refresh
+rate, requests never overlap, and desktop acknowledgements bound delivery.
+Counter history is limited to 180 samples in memory; reconnects reset rate
+baselines. The command console retains only the latest counters for the sampler.
+
+See [monitoring validation](agents/monitoring-validation.md) for local benchmark
+results, the resource budget, and the limits of that evidence.
+
 ## In-app updates
 
 VPS Pilot checks for signed updates after launch. Use **Check for updates** in the
@@ -200,3 +233,23 @@ Settings to check manually, review release notes, or update and restart.
 Updating closes SSH connections and terminal sessions; finish your work first.
 See [self-updater setup](docs/self-updater.md) for signing credentials, release
 versions, supported installers, and validation requirements.
+
+### Local settings and data
+
+The desktop app always creates `vps-pilot.sqlite3` in its OS application-config
+directory. It uses bundled SQLite with one small versioned documents table.
+No database server, account, or VPS installation is needed.
+
+The Settings gear opens a dedicated page for automatic live stats, 1/2/5-second
+refresh intervals, visible CPU/RAM/storage/disk/network stats, and app zoom.
+Zoom also supports Ctrl/Cmd + plus/minus, Ctrl/Cmd + 0, and Ctrl/Cmd + scroll.
+These choices survive a restart. Hiding all stats stops sampling. The header
+uses larger fixed-width values and two columns for download/upload speeds.
+
+Saved SSH profiles and trusted host fingerprints migrate from the existing JSON
+file. Workspace tabs, tools, sanitized terminal layouts, and the skipped update
+version migrate from existing browser preferences. The old sources are retained;
+SQL data takes precedence afterward. Restored layouts never reconnect or replay
+commands. Passwords, private-key contents, terminal output, commands, and live
+metric samples are not saved to SQLite. Read or write errors are reported rather
+than silently resetting saved data. See [local database notes](agents/local-database.md).

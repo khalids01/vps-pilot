@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import {
+  readPreference,
+  writePreference,
+} from "@/features/settings/persistence";
 import { sampleServers, type ToolId, toolIds } from "./fixtures";
 import { type SoftwareCategory, softwareCategories } from "./software-fixtures";
 
@@ -117,7 +121,7 @@ function loadPreferences(): {
   notice: string;
 } {
   try {
-    const raw = localStorage.getItem(workspacePreferenceKey);
+    const raw = readPreference(workspacePreferenceKey);
     if (!raw) return { preferences: defaultPreferences(), notice: "" };
     const parsed =
       raw.length <= 64_000 ? sanitizePreferences(JSON.parse(raw)) : null;
@@ -141,7 +145,7 @@ export function useWorkspacePreferences() {
   const [notice, setNotice] = useState(initial.notice);
   useEffect(() => {
     try {
-      localStorage.setItem(workspacePreferenceKey, JSON.stringify(preferences));
+      writePreference(workspacePreferenceKey, JSON.stringify(preferences));
     } catch {
       setNotice(
         "Workspace changes are kept for this session. Local saving is unavailable.",

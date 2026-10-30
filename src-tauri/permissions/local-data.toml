@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "local-data"
+description = "Typed app-owned SQLite settings, sanitized workspace metadata, and bounded app zoom. No arbitrary SQL, file paths, or credential storage."
+commands.allow = ["app_bootstrap", "app_save_settings", "app_save_document", "app_apply_zoom"]

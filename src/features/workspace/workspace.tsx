@@ -9,7 +9,6 @@ import {
   LayoutDashboard,
   Network,
   Package,
-  PanelsTopLeft,
   Plug,
   Plus,
   Server,
@@ -503,7 +502,13 @@ export function Workspace() {
       >
         <div className="flex shrink-0 items-end gap-2 border-b bg-sidebar px-3 pt-2">
           <div className="mb-2 mr-2 flex shrink-0 items-center gap-2 px-2 text-primary">
-            <PanelsTopLeft className="size-4" aria-hidden="true" />
+            <img
+              src="/app-icon.png"
+              alt=""
+              className="size-5"
+              width={20}
+              height={20}
+            />
             <span className="hidden text-xs font-semibold tracking-wide sm:inline">
               VPS PILOT
             </span>

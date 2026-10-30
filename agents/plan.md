@@ -561,3 +561,40 @@ context, and replacing terminal-style inspection output with application views.
 - Recorded the live custom domain vpspilot.skycanvasstudio.com and added the
   user's low-overhead VPS monitoring requirement to agents/goal.md. Compact live
   metric badges/popovers are only discussed, not implemented in this batch.
+
+### Lightweight live resource monitoring — 2026-10-30
+
+- Replaced periodic full inventory inspections with opt-in live CPU/RAM/storage,
+  base-device disk I/O, and network counters. One server-bound SSH sampler feeds
+  badges, themed tooltips, a floating detail panel, and Overview charts.
+- Fixed Python source runs as the SSH user without installation, sudo, listeners, or persistent
+  history. Requests and output are bounded; one acknowledged response at a time.
+  Native shutdown waits for EOF/close before freeing the sampler slot.
+- 1s/2s/5s choices, 60s capacity cache, 180-point desktop history, focus/tab pause,
+  failure backoff, slow-sample throttling, and EOF/30s idle process exit.
+- Linux/Python prerequisites and overhead evidence are documented separately in
+  monitoring-validation.md. No tests were performed against the user's VPS.
+- Validation: check/build, 18 frontend tests, 45 Rust tests, and 15 browser tests
+  pass. Isolated Debian sampler comparisons at 1s/2s/5s all meet the initial
+  <1% one-core CPU and <20 MiB RSS budget. Native Tauri focus/minimize behavior
+  and other VPS architectures remain outside this fixture evidence.
+
+## Settings and local SQL persistence — 2026-10-30
+
+- SQLite is created by default in the desktop config directory, with a small
+  versioned documents table, typed settings, bounded document API and separate
+  local-data permission. Native SQL work runs outside the UI thread.
+- Existing JSON profiles/trusted host fingerprints and sanitized browser
+  workspace/terminal layouts migrate once; legacy sources are retained.
+  Skipped update versions also migrate, preserving updater behavior.
+- Dedicated Settings page persists automatic metrics, 1/2/5-second interval,
+  visible stats, and browser-style zoom. Stats start automatically for an active
+  connected server; Settings/inactive windows and hiding all stats pause them.
+- Header drops Start/Pause and Live controls, uses larger stable-width values,
+  and places Download/Upload labels above their speeds in two columns.
+- Settings navigation preserves running terminal panes. Ctrl/Cmd + plus/minus,
+  0, and scroll change bounded native webview zoom without sending shell input.
+- SQL and migration tests cover persistence, corruption/newer versions, import
+  idempotency, stale writes, and preservation of the original profile file.
+  Browser tests cover reload persistence, failures, updater compatibility,
+  terminal preservation, fixed-width stats, and zoom shortcuts. No user VPS used.

@@ -18,6 +18,8 @@ struct TestServer {
     accepted_key: Option<keys::PublicKey>,
     allow_none: bool,
     sudo_channels: std::collections::HashSet<russh::ChannelId>,
+    monitor_channels: std::collections::HashSet<russh::ChannelId>,
+    monitor_requests: Arc<AtomicUsize>,
     commands: Arc<Mutex<Vec<String>>>,
     sizes: Arc<Mutex<Vec<(u32, u32)>>>,
     sudo_inputs: Arc<AtomicUsize>,
@@ -70,7 +72,20 @@ impl server::Handler for TestServer {
         data: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
-        if self.sudo_channels.remove(&channel) {
+        if self.monitor_channels.contains(&channel) {
+            assert_eq!(data, b"sample\n");
+            let index = self.monitor_requests.fetch_add(1, Ordering::SeqCst) as u64;
+            let mut frame = serde_json::to_vec(&serde_json::json!({
+                "uptime": 1000 + index, "cpuTotal": 2000 + index * 100, "cpuIdle": 1000 + index * 50,
+                "memoryTotal": 8192, "memoryAvailable": 4096, "swapTotal": 0, "swapFree": 0,
+                "networkInterface": "eth0", "networkReceived": 100 + index * 10, "networkSent": 200 + index * 10,
+                "diskRead": 100 + index * 20, "diskWritten": 200 + index * 20,
+                "capacity": {"total": 10000, "free": 8000, "available": 7000}, "capacityAge": index
+            })).unwrap();
+            frame.push(b'\n');
+            session.data(channel, frame[..40].to_vec())?;
+            session.data(channel, frame[40..].to_vec())?;
+        } else if self.sudo_channels.remove(&channel) {
             self.sudo_inputs.fetch_add(1, Ordering::SeqCst);
             if data == b"fixture-sudo-password\n" {
                 session.data(channel, b"privileged fixture output".to_vec())?;
@@ -107,6 +122,10 @@ impl server::Handler for TestServer {
             .unwrap()
             .push(String::from_utf8_lossy(data).into_owned());
         session.channel_success(channel)?;
+        if data == monitor::command().as_bytes() {
+            self.monitor_channels.insert(channel);
+            return Ok(());
+        }
         if data == services::probe("app.service").as_bytes() {
             session.data(
                 channel,
@@ -171,6 +190,7 @@ impl server::Handler for TestServer {
 }
 struct Fixture {
     port: u16,
+    monitor_requests: Arc<AtomicUsize>,
     auth_count: Arc<AtomicUsize>,
     shutdown: server::RunningServerHandle,
     task: Option<JoinHandle<()>>,
@@ -196,7 +216,10 @@ impl Fixture {
         let sudo_inputs = Arc::new(AtomicUsize::new(0));
         let commands = Arc::new(Mutex::new(Vec::new()));
         let sizes = Arc::new(Mutex::new(Vec::new()));
+        let monitor_requests = Arc::new(AtomicUsize::new(0));
         let mut server = TestServer {
+            monitor_channels: Default::default(),
+            monitor_requests: monitor_requests.clone(),
             sudo_channels: Default::default(),
             service_snapshot: service_snapshot.clone(),
             sudo_inputs: sudo_inputs.clone(),
@@ -221,6 +244,7 @@ impl Fixture {
         });
         Self {
             port,
+            monitor_requests,
             auth_count,
             shutdown: receiver.await.unwrap(),
             task: Some(task),
@@ -1041,6 +1065,7 @@ async fn cached_sudo_still_requires_a_fresh_plan_and_never_receives_a_password()
             .unwrap();
         loop {
             match event(&mut output).await {
+                streams::StreamEvent::Metrics { .. } => unreachable!("not a monitoring stream"),
                 streams::StreamEvent::Inspection { .. } => {
                     unreachable!("event helper filters reports")
                 }
@@ -1225,6 +1250,7 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         .unwrap();
     loop {
         match event(&mut output).await {
+            streams::StreamEvent::Metrics { .. } => unreachable!("not a monitoring stream"),
             streams::StreamEvent::Inspection { .. } => unreachable!("event helper filters reports"),
             streams::StreamEvent::Data { data, sequence, .. } => {
                 text.push_str(&String::from_utf8_lossy(&data));
@@ -1249,6 +1275,7 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
     let mut text = String::new();
     loop {
         match event(&mut output).await {
+            streams::StreamEvent::Metrics { .. } => unreachable!("not a monitoring stream"),
             streams::StreamEvent::Inspection { .. } => unreachable!("event helper filters reports"),
             streams::StreamEvent::Data { data, sequence, .. } => {
                 text.push_str(&String::from_utf8_lossy(&data));
@@ -1285,6 +1312,45 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         .sections
         .iter()
         .any(|section| section.title == "Failed services" && section.state == "unavailable"));
+    let (sink, mut output) = stream_sink();
+    let id = service.start_monitor(&profile.id, 1, sink).await.unwrap();
+    let mut previous_uptime = None;
+    let mut first_uptime = None;
+    for _ in 0..64 {
+        match event(&mut output).await {
+            streams::StreamEvent::Metrics {
+                sample, sequence, ..
+            } => {
+                assert!(sample.memory_total > 0 && sample.cpu_total >= sample.cpu_idle);
+                if let Some(previous) = previous_uptime {
+                    assert!(sample.uptime > previous);
+                }
+                first_uptime.get_or_insert(sample.uptime);
+                previous_uptime = Some(sample.uptime);
+                service
+                    .control(&profile.id, &id, streams::Control::Ack(sequence))
+                    .await
+                    .unwrap();
+            }
+            _ => panic!("The real sampler must return typed metrics"),
+        }
+    }
+    assert!(previous_uptime.unwrap() - first_uptime.unwrap() >= 60.0);
+    service.close_stream(&profile.id, &id).await.unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Closed { .. }
+    ));
+    // This profile is the disposable, pinned, loopback-only fixture, never a real VPS.
+    let runtime = service.runtime.lock().await;
+    let remaining = services::collect(&runtime, &profile.id, "ps -C python3 -o pid= || :")
+        .await
+        .unwrap();
+    assert!(
+        remaining.trim().is_empty(),
+        "Sampler must exit on SSH input EOF"
+    );
+    drop(runtime);
     service.disconnect(&profile.id).await.unwrap();
 }
 
@@ -1306,4 +1372,63 @@ async fn production_default_blocks_mutations_in_rust_before_network_work() {
         .unwrap();
     assert!(error.contains("read-only"));
     assert!(service.runtime.lock().await.approvals.is_empty());
+}
+
+#[tokio::test]
+async fn live_monitor_is_singleton_server_bound_and_waits_for_ack() {
+    let fixture = Fixture::start(0, None).await;
+    let (_dir, mut service) = service();
+    service.changes_enabled = false;
+    let profile = fixture_connection(&service, &fixture).await;
+    let (sink, mut output) = stream_sink();
+    assert!(service
+        .start_monitor(&profile.id, 0, sink.clone())
+        .await
+        .is_err());
+    let id = service
+        .start_monitor(&profile.id, 1, sink.clone())
+        .await
+        .unwrap();
+    assert!(service.start_monitor(&profile.id, 1, sink).await.is_err());
+    assert!(service.close_stream("different-server", &id).await.is_err());
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Metrics { sequence: 1, .. }
+    ));
+    service
+        .control(
+            &profile.id,
+            &id,
+            streams::Control::Input(b"must-not-reach-sampler".to_vec()),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(fixture.monitor_requests.load(Ordering::SeqCst), 1);
+    assert!(output.try_recv().is_err());
+    service
+        .control(&profile.id, &id, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Metrics { sequence: 2, .. }
+    ));
+    service.close_stream(&profile.id, &id).await.unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Closed { .. }
+    ));
+    let (sink, mut output) = stream_sink();
+    let id = service.start_monitor(&profile.id, 5, sink).await.unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Metrics { .. }
+    ));
+    service.disconnect(&profile.id).await.unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Closed { .. }
+    ));
+    assert!(!service.runtime.lock().await.streams.contains_key(&id));
 }

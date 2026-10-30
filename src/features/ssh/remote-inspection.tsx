@@ -1,9 +1,11 @@
-import { Activity, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { type ServerProfile, safeError } from "./api";
 import { useCommandActivity } from "./command-activity";
 import { type CpuSample, cpuUsage } from "./inspection-data";
+import { useLiveMetrics } from "./live-metrics";
+import { LiveMetricsPanel } from "./live-metrics-view";
 import type { InspectionReport } from "./report-types";
 import { type InspectionKind, streamApi } from "./streams";
 import { StructuredReport } from "./structured-report";
@@ -41,7 +43,6 @@ export function RemoteInspection({
   profile,
   connected,
   tool,
-  active,
 }: {
   profile: ServerProfile;
   connected: boolean;
@@ -50,11 +51,11 @@ export function RemoteInspection({
 }) {
   const kind = views[tool] ?? "overview";
   const log = useCommandActivity();
+  const liveMetrics = useLiveMetrics();
   const [snapshots, setSnapshots] = useState<
     Partial<Record<InspectionKind, Snapshot>>
   >({});
   const [busy, setBusy] = useState(false);
-  const [live, setLive] = useState<InspectionKind | null>(null);
   const [cpuPercent, setCpuPercent] = useState<number | null>(null);
   const previousCpu = useRef<CpuSample | null>(null);
   const running = useRef(false);
@@ -76,7 +77,6 @@ export function RemoteInspection({
         if (generation.current !== current || ended) return;
         generation.current++;
         ended = true;
-        setLive(null);
         running.current = false;
         setBusy(false);
         log.update(runId, {
@@ -134,7 +134,7 @@ export function RemoteInspection({
               );
           } else if (event.type === "inspection") {
             report = event.report;
-          } else {
+          } else if (event.type === "closed") {
             ended = true;
             text += decoder.decode();
             const received = report;
@@ -220,17 +220,9 @@ export function RemoteInspection({
     };
   }, [profile.id]);
   useEffect(() => {
-    if (live !== kind || !connected || !active || !views[tool]) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void run(true);
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [live, connected, run, kind, tool, active]);
-  useEffect(() => {
     if (!connected) {
       previousCpu.current = null;
       setCpuPercent(null);
-      setLive(null);
     }
   }, [connected]);
   const snapshot = snapshots[kind];
@@ -255,20 +247,18 @@ export function RemoteInspection({
             <RefreshCw className={busy ? "animate-spin" : ""} />
             {busy ? "Inspecting…" : snapshot?.report ? "Refresh" : "Inspect"}
           </Button>
-          {["overview", "network", "processes"].includes(kind) && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!connected}
-              aria-pressed={live === kind}
-              onClick={() => setLive(live === kind ? null : kind)}
-            >
-              <Activity />
-              {live === kind ? "Pause monitoring" : "Monitor every 5s"}
-            </Button>
-          )}
         </div>
       </div>
+      {kind === "overview" && (liveMetrics.enabled || liveMetrics.point) && (
+        <section aria-label="Live resource charts" className="space-y-3">
+          <h3 className="text-sm font-medium">Live resources</h3>
+          <p className="text-xs text-muted-foreground">
+            {liveMetrics.state}. The inspection below is a separate manual
+            snapshot.
+          </p>
+          <LiveMetricsPanel expanded />
+        </section>
+      )}
       {snapshot && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <p role="status" className="text-muted-foreground">

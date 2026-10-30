@@ -239,7 +239,7 @@ export function RemoteActions({
           });
       } else if (event.type === "inspection") {
         setResultReports((all) => ({ ...all, [tool]: event.report }));
-      } else {
+      } else if (event.type === "closed") {
         ended = true;
         text += decoder.decode();
         log.update(runId, {

@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { writePreference } from "@/features/settings/persistence";
 import type { SampleServer } from "@/features/workspace/fixtures";
 import {
   layoutKey,
@@ -113,7 +114,7 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
   const saveLayout = useCallback(() => {
     if (!pendingLayout.current) return;
     try {
-      localStorage.setItem(layoutKey(server.id), pendingLayout.current);
+      writePreference(layoutKey(server.id), pendingLayout.current);
     } catch {
       setNotice(
         "Layout is kept for this session. Local saving is unavailable.",
@@ -172,7 +173,7 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
     const flush = () => {
       if (pendingLayout.current) {
         try {
-          localStorage.setItem(layoutKey(server.id), pendingLayout.current);
+          writePreference(layoutKey(server.id), pendingLayout.current);
         } catch {
           /* Local storage may be unavailable; in-memory layout still worked. */
         }

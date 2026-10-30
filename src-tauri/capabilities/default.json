@@ -9,6 +9,7 @@
     "core:default",
     "dialog:allow-open",
     "ssh-connection",
+    "local-data",
     "updater:default",
     "process:allow-restart"
   ],

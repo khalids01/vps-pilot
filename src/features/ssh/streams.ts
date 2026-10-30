@@ -1,7 +1,9 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { MetricSample } from "./live-metrics-data";
 import type { InspectionReport } from "./report-types";
 
 export type StreamEvent =
+  | { type: "metrics"; id: string; sequence: number; sample: MetricSample }
   | { type: "inspection"; id: string; report: InspectionReport }
   | { type: "data"; id: string; sequence: number; data: number[] }
   | { type: "closed"; id: string; code: number | null; message: string };
@@ -16,6 +18,20 @@ export type InspectionKind =
   | "network"
   | "processes";
 export const streamApi = {
+  describeMonitor: () => invoke<string>("ssh_monitor_describe"),
+  monitor: (
+    profileId: string,
+    intervalSeconds: number,
+    receive: (event: StreamEvent) => void,
+  ) => {
+    const output = new Channel<StreamEvent>();
+    output.onmessage = receive;
+    return invoke<{ id: string; command: string }>("ssh_monitor_start", {
+      profileId,
+      intervalSeconds,
+      output,
+    });
+  },
   describe: (kind: InspectionKind) =>
     invoke<string>("ssh_inspection_describe", { kind }),
   terminal: (

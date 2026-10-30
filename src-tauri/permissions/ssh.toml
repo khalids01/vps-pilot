@@ -12,6 +12,8 @@ commands.allow = [
   "ssh_connect",
   "ssh_disconnect",
   "ssh_statuses",
+  "ssh_monitor_start",
+  "ssh_monitor_describe",
   "ssh_terminal_open",
   "ssh_terminal_input",
   "ssh_terminal_resize",
