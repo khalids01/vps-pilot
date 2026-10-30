@@ -1,10 +1,10 @@
 # VPS Pilot self-updater
 
 VPS Pilot checks its own GitHub release channel once, four seconds after launch.
-The top bar also has **Check for updates**. Available updates show release notes,
+Settings has **Check for updates**; the sidebar footer only appears for an available update. Available updates show release notes,
 a persistent notice, **Skip this version**, and **Remind me later**. Skipped
 versions persist on this device; a manual check can still show them. Later hides
-the notice until the next launch. Only explicit **Update and restart** downloads,
+the notice until the next launch. Only explicit **Update** downloads,
 verifies the signature, installs, and restarts the app. An update closes SSH
 connections and terminal sessions; finish remote work first.
 

@@ -12,6 +12,9 @@ import {
   Workflow,
 } from "lucide-react";
 import { lazy, Suspense, useRef, useState } from "react";
+import { SettingsPage } from "@/features/settings/settings-page";
+import { SidebarFooter } from "@/features/updates/sidebar-footer";
+import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
 import { CommandActivityProvider } from "./command-activity";
 import { RemoteActions } from "./remote-actions";
@@ -50,6 +53,8 @@ interface RemoteWorkspaceProps {
   selectedTool: ToolId;
   active: boolean;
   onSelectTool: (tool: ToolId) => void;
+  onSettings: () => void;
+  settingsOpen: boolean;
 }
 export function RemoteWorkspace(props: RemoteWorkspaceProps) {
   return (
@@ -68,6 +73,8 @@ function RemoteWorkspaceContent({
   selectedTool,
   active,
   onSelectTool,
+  onSettings,
+  settingsOpen,
 }: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
   const labels: Record<ToolId, string> = {
@@ -222,43 +229,53 @@ function RemoteWorkspaceContent({
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${profile.name} tools`}
-          className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:border-r md:border-b-0 md:p-3"
+          className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
         >
-          {[
-            { label: "Overview", icon: LayoutDashboard },
-            { label: "Terminal", icon: Terminal },
-            { label: "Software", icon: Package },
-            { label: "Docker", icon: Container },
-            { label: "Proxy", icon: Network },
-            { label: "Services", icon: Workflow },
-            { label: "Storage", icon: HardDrive },
-            { label: "Firewall", icon: Shield },
-            { label: "Network", icon: Network },
-            { label: "Processes", icon: Workflow },
-            { label: "Server helper", icon: Plug },
-          ].map(({ label, icon: Icon }) => (
-            <Button
-              key={label}
-              variant="ghost"
-              onClick={() => {
-                setTool(label);
-                const id = (Object.keys(labels) as ToolId[]).find(
-                  (key) => labels[key] === label,
-                );
-                if (id) onSelectTool(id);
-                if (label === "Terminal") setTerminalOpened(true);
-              }}
-              aria-current={label === tool ? "page" : undefined}
-              className={`h-10 justify-start gap-3 px-3 ${label === tool ? "bg-sidebar-accent text-primary" : "text-muted-foreground"}`}
-            >
-              <Icon className="size-4" aria-hidden="true" />
-              {label}
-            </Button>
-          ))}
+          <div className="flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
+            {[
+              { label: "Overview", icon: LayoutDashboard },
+              { label: "Terminal", icon: Terminal },
+              { label: "Software", icon: Package },
+              { label: "Docker", icon: Container },
+              { label: "Proxy", icon: Network },
+              { label: "Services", icon: Workflow },
+              { label: "Storage", icon: HardDrive },
+              { label: "Firewall", icon: Shield },
+              { label: "Network", icon: Network },
+              { label: "Processes", icon: Workflow },
+              { label: "Server helper", icon: Plug },
+            ].map(({ label, icon: Icon }) => (
+              <Button
+                key={label}
+                variant="ghost"
+                onClick={() => {
+                  setTool(label);
+                  const id = (Object.keys(labels) as ToolId[]).find(
+                    (key) => labels[key] === label,
+                  );
+                  if (id) onSelectTool(id);
+                  if (label === "Terminal") setTerminalOpened(true);
+                }}
+                aria-current={
+                  !settingsOpen && label === tool ? "page" : undefined
+                }
+                className={`h-10 justify-start gap-3 px-3 ${!settingsOpen && label === tool ? "bg-sidebar-accent text-primary" : "text-muted-foreground"}`}
+              >
+                <Icon className="size-4" aria-hidden="true" />
+                {label}
+              </Button>
+            ))}
+            <SidebarFooter
+              settingsOpen={settingsOpen}
+              onSettings={onSettings}
+            />
+          </div>
+          <UpdateSidebarNotice />
         </nav>
+        {settingsOpen && <SettingsPage />}
         <main
           aria-label={`${profile.name}: Connection`}
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8"
+          className={`${settingsOpen ? "hidden" : ""} min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8`}
         >
           <div className="mx-auto w-full max-w-6xl">
             <div>

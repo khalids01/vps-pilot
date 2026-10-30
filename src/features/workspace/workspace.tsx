@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { HelperWorkspace } from "@/features/helper/helper-workspace";
+import { SettingsPage } from "@/features/settings/settings-page";
 import {
   address,
   remoteTabId,
@@ -43,9 +44,10 @@ import {
 } from "@/features/ssh/api";
 import { ProfileManager } from "@/features/ssh/profile-manager";
 import { RemoteWorkspace } from "@/features/ssh/remote-workspace";
+import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import {
-  UpdateControl,
   UpdateManager,
+  UpdateSidebarNotice,
 } from "@/features/updates/update-control";
 import { type SampleServer, sampleServers, type ToolId } from "./fixtures";
 import { Overview } from "./overview";
@@ -237,10 +239,14 @@ function ServerWorkspace({
   server,
   preferences,
   onPreferencesChange,
+  onSettings,
+  settingsOpen,
 }: {
   server: SampleServer;
   preferences: ServerPreferences;
   onPreferencesChange: (patch: Partial<ServerPreferences>) => void;
+  onSettings: () => void;
+  settingsOpen: boolean;
 }) {
   const selectedTool = preferences.tool;
   const [terminalOpened, setTerminalOpened] = useState(
@@ -256,36 +262,43 @@ function ServerWorkspace({
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${server.name} tools`}
-          className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-y-auto md:border-r md:border-b-0 md:p-3"
+          className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
         >
-          <p className="hidden px-3 pt-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
-            Workspace
-          </p>
-          {tools.map(({ id, label, icon: Icon }, index) => (
-            <div
-              key={id}
-              className={id === "helper" ? "md:mt-auto md:pt-5" : ""}
-            >
-              {index === 2 && (
-                <p className="mt-4 hidden border-t px-3 pt-4 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
-                  Manage
-                </p>
-              )}
-              <Button
-                variant="ghost"
-                aria-current={selectedTool === id ? "page" : undefined}
-                onClick={() => navigateToTool(id)}
-                className={`h-10 w-full justify-start gap-3 px-3 ${selectedTool === id ? "bg-sidebar-accent text-primary hover:bg-sidebar-accent hover:text-primary" : "text-muted-foreground"}`}
-              >
-                <Icon className="size-4" aria-hidden="true" />
-                {label}
-              </Button>
-            </div>
-          ))}
+          <div className="flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
+            <p className="hidden px-3 pt-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
+              Workspace
+            </p>
+            {tools.map(({ id, label, icon: Icon }, index) => (
+              <div key={id} className={id === "helper" ? "md:pt-5" : ""}>
+                {index === 2 && (
+                  <p className="mt-4 hidden border-t px-3 pt-4 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
+                    Manage
+                  </p>
+                )}
+                <Button
+                  variant="ghost"
+                  aria-current={
+                    !settingsOpen && selectedTool === id ? "page" : undefined
+                  }
+                  onClick={() => navigateToTool(id)}
+                  className={`h-10 w-full justify-start gap-3 px-3 ${!settingsOpen && selectedTool === id ? "bg-sidebar-accent text-primary hover:bg-sidebar-accent hover:text-primary" : "text-muted-foreground"}`}
+                >
+                  <Icon className="size-4" aria-hidden="true" />
+                  {label}
+                </Button>
+              </div>
+            ))}
+            <SidebarFooter
+              settingsOpen={settingsOpen}
+              onSettings={onSettings}
+            />
+          </div>
+          <UpdateSidebarNotice />
         </nav>
+        {settingsOpen && <SettingsPage />}
         <main
           aria-label={`${server.name}: ${tool.label}`}
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8"
+          className={`${settingsOpen ? "hidden" : ""} min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8`}
         >
           <div
             className={`mx-auto w-full max-w-6xl ${selectedTool === "terminal" ? "flex min-h-full flex-col" : ""}`}
@@ -377,6 +390,7 @@ function ServerWorkspace({
 export function Workspace() {
   const { preferences, setPreferences, notice } = useWorkspacePreferences();
   const { openServerIds, activeServerId } = preferences;
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [closeError, setCloseError] = useState("");
@@ -477,11 +491,13 @@ export function Workspace() {
       <Tabs
         value={activeServerId}
         onValueChange={(value) => {
-          if (typeof value === "string" && openServerIds.includes(value))
+          if (typeof value === "string" && openServerIds.includes(value)) {
+            setSettingsOpen(false);
             setPreferences((current) => ({
               ...current,
               activeServerId: value,
             }));
+          }
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
@@ -544,7 +560,6 @@ export function Workspace() {
               cancel.
             </p>
           </div>
-          <UpdateControl />
           <Button
             id="new-vps-tab"
             variant="ghost"
@@ -573,9 +588,12 @@ export function Workspace() {
                   <RemoteWorkspace
                     key={profile.revision}
                     profile={profile}
-                    active={activeServerId === id}
+                    onSettings={() => setSettingsOpen(true)}
+                    settingsOpen={settingsOpen}
+                    active={!settingsOpen && activeServerId === id}
                     selectedTool={preferences.servers[id]?.tool ?? "overview"}
-                    onSelectTool={(tool) =>
+                    onSelectTool={(tool) => {
+                      setSettingsOpen(false);
                       setPreferences((current) => ({
                         ...current,
                         servers: {
@@ -585,8 +603,8 @@ export function Workspace() {
                             tool,
                           },
                         },
-                      }))
-                    }
+                      }));
+                    }}
                     status={statuses.data?.find(
                       (status) => status.profileId === profile.id,
                     )}
@@ -620,33 +638,56 @@ export function Workspace() {
             >
               <ServerWorkspace
                 server={server}
+                onSettings={() => setSettingsOpen(true)}
+                settingsOpen={settingsOpen}
                 preferences={preferences.servers[server.id]}
-                onPreferencesChange={(patch) =>
+                onPreferencesChange={(patch) => {
+                  if (patch.tool) setSettingsOpen(false);
                   setPreferences((current) => ({
                     ...current,
                     servers: {
                       ...current.servers,
                       [server.id]: { ...current.servers[server.id], ...patch },
                     },
-                  }))
-                }
+                  }));
+                }}
               />
             </TabsContent>
           ) : null;
         })}
         {!openServerIds.length && (
-          <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-            <Server className="size-8 text-primary" aria-hidden="true" />
-            <h1 className="text-2xl font-medium">Your workspace starts here</h1>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              Choose a saved connection or add a new server to open a VPS
-              workspace.
-            </p>
-            <Button onClick={() => setManagerOpen(true)}>
-              <Plus aria-hidden="true" />
-              Choose a connection
-            </Button>
-          </main>
+          <div className="flex min-h-0 flex-1">
+            <nav
+              aria-label="Application navigation"
+              className="flex w-48 shrink-0 flex-col border-r bg-sidebar p-3"
+            >
+              <SidebarFooter
+                settingsOpen={settingsOpen}
+                onSettings={() => setSettingsOpen(true)}
+              />
+              <div className="mt-auto">
+                <UpdateSidebarNotice />
+              </div>
+            </nav>
+            {settingsOpen ? (
+              <SettingsPage />
+            ) : (
+              <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+                <Server className="size-8 text-primary" aria-hidden="true" />
+                <h1 className="text-2xl font-medium">
+                  Your workspace starts here
+                </h1>
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  Choose a saved connection or add a new server to open a VPS
+                  workspace.
+                </p>
+                <Button onClick={() => setManagerOpen(true)}>
+                  <Plus aria-hidden="true" />
+                  Choose a connection
+                </Button>
+              </main>
+            )}
+          </div>
         )}
       </Tabs>
       <ProfileManager

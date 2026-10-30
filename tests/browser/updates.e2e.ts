@@ -34,45 +34,51 @@ async function mockDesktop(page: import("@playwright/test").Page, mode = "availa
   }, mode);
 }
 
+async function openUpdates(page: import("@playwright/test").Page) {
+  if (!await page.getByRole("main", { name: "Application settings" }).isVisible())
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("main", { name: "Application settings" }).getByRole("button", { name: "Check for updates", exact: true }).click();
+}
+
 const calls = (page: import("@playwright/test").Page) => page.evaluate(() => (window as any).__updateCalls as string[]);
 
 test("update requires consent, reports progress, and retains restart fallback", async ({ page }) => {
   await mockDesktop(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Check for updates", exact: true }).click();
+  await openUpdates(page);
   await expect(page.getByText("Improved terminal layouts", { exact: true })).toBeVisible();
   await expect(page.getByText(/closes all SSH connections/)).toBeVisible();
   expect(await calls(page)).not.toContain("plugin:updater|download_and_install");
-  await page.getByRole("button", { name: "Update and restart" }).click();
-  await expect(page.getByRole("progressbar")).toHaveAttribute("value", "50");
+  await page.getByRole("button", { name: "Update", exact: true }).click();
+  await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
   await expect(page.getByRole("button", { name: "Restart VPS Pilot" })).toBeVisible();
   expect((await calls(page)).filter(cmd => cmd === "plugin:updater|download_and_install")).toHaveLength(1);
   await page.getByRole("button", { name: "Restart later" }).click();
-  await page.getByRole("button", { name: "App update", exact: true }).click();
+  await page.getByRole("button", { name: /Restart required/ }).click();
   await expect(page.getByRole("button", { name: "Restart VPS Pilot" })).toBeVisible();
 });
 
 test("skipped version survives relaunch and a manual check still offers it", async ({ page }) => {
   await mockDesktop(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Check for updates", exact: true }).click();
+  await openUpdates(page);
   await page.getByRole("button", { name: "Skip this version" }).click();
   await page.reload();
   await page.waitForTimeout(4500);
-  await expect(page.getByRole("button", { name: "View update" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Check for updates", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Update and restart" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Update available/ })).toHaveCount(0);
+  await openUpdates(page);
+  await expect(page.getByRole("button", { name: "Update", exact: true })).toBeVisible();
   expect(await calls(page)).not.toContain("plugin:updater|download_and_install");
 });
 
 test("later dismisses the notice until next launch", async ({ page }) => {
   await mockDesktop(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Check for updates", exact: true }).click();
+  await openUpdates(page);
   await page.getByRole("button", { name: "Remind me later" }).click();
-  await expect(page.getByRole("button", { name: "View update" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Update available/ })).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole("button", { name: "View update" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /Update available/ })).toBeVisible({ timeout: 10_000 });
   expect(await calls(page)).not.toContain("plugin:updater|download_and_install");
 });
 
@@ -80,10 +86,33 @@ for (const mode of ["offline", "current", "bad-signature"]) {
   test(`updater handles ${mode} without restarting`, async ({ page }) => {
     await mockDesktop(page, mode);
     await page.goto("/");
-    await page.getByRole("button", { name: "Check for updates", exact: true }).click();
-    if (mode === "bad-signature") await page.getByRole("button", { name: "Update and restart" }).click();
-    if (mode === "current") await expect(page.getByText("VPS Pilot is up to date.", { exact: true })).toBeVisible();
+    await openUpdates(page);
+    if (mode === "bad-signature") await page.getByRole("button", { name: "Update", exact: true }).click();
+    if (mode === "current") await expect(page.getByText("VPS Pilot is up to date", { exact: true })).toBeVisible();
     else await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
     expect(await calls(page)).not.toContain("plugin:process|restart");
   });
 }
+
+test("Settings preserves server navigation and only available updates appear in the sidebar footer", async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto("/");
+  const sidebar = page.getByRole("navigation", { name: "Production tools", exact: true });
+  await expect(sidebar.getByRole("button", { name: "Check for updates", exact: true })).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: /Update available/ })).toBeVisible({ timeout: 10_000 });
+  const notice = await sidebar.getByRole("button", { name: /Update available/ }).boundingBox();
+  const bounds = await sidebar.boundingBox();
+  expect(notice!.y).toBeGreaterThan(bounds!.y + bounds!.height / 2);
+  const settings = sidebar.getByRole("button", { name: "Settings", exact: true });
+  await settings.click();
+  await expect(sidebar.getByRole("button", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "VPS workspaces" })).toBeVisible();
+  const content = page.getByRole("main", { name: "Application settings" });
+  await expect(content.getByRole("heading", { name: "Application updates" })).toBeVisible();
+  const mainBounds = await content.boundingBox();
+  const sectionBounds = await content.locator("section").first().boundingBox();
+  expect(sectionBounds!.width).toBeGreaterThan(mainBounds!.width - 80);
+  await sidebar.getByRole("button", { name: "Overview", exact: true }).click();
+  await expect(content).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
+});

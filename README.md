@@ -196,7 +196,7 @@ Installers are written beneath `src-tauri/target/release/bundle/`.
 ## In-app updates
 
 VPS Pilot checks for signed updates after launch. Use **Check for updates** in the
-app's top bar to check manually, review release notes, or update and restart.
+Settings to check manually, review release notes, or update and restart.
 Updating closes SSH connections and terminal sessions; finish your work first.
 See [self-updater setup](docs/self-updater.md) for signing credentials, release
 versions, supported installers, and validation requirements.
