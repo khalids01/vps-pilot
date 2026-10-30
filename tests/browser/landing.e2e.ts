@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const api = "https://api.github.com/repos/khalids01/vps-pilot/releases/latest";
+const api = "**/downloads.json";
 
 test("landing page maps real release assets and fits mobile", async ({ page }) => {
   await page.route(api, (route) =>
@@ -36,7 +36,7 @@ test("landing page maps real release assets and fits mobile", async ({ page }) =
 });
 
 test("landing page explains an unpublished first release", async ({ page }) => {
-  await page.route(api, (route) => route.fulfill({ status: 404, json: {} }));
+  await page.route(api, (route) => route.fulfill({ json: null }));
   await page.goto("/website/");
   await expect(page.getByRole("status")).toContainText(
     "first release is being prepared",
@@ -46,7 +46,7 @@ test("landing page explains an unpublished first release", async ({ page }) => {
   ).toHaveCount(3);
 });
 
-test("landing page keeps a release fallback when the API is unavailable", async ({
+test("landing page keeps a release fallback when the manifest is unavailable", async ({
   page,
 }) => {
   await page.route(api, (route) => route.abort());
@@ -57,4 +57,28 @@ test("landing page keeps a release fallback when the API is unavailable", async 
   await expect(
     page.getByRole("link", { name: "Check GitHub releases" }),
   ).toHaveCount(3);
+});
+
+test("all desktop installer formats have direct download buttons without browser API calls", async ({ page }) => {
+  let apiCalls = 0;
+  page.on("request", request => {
+    if (request.url().startsWith("https://api.github.com/")) apiCalls++;
+  });
+  const names = [
+    "VPS.Pilot_0.1.0_amd64.deb", "VPS.Pilot_0.1.0_amd64.AppImage",
+    "VPS.Pilot-0.1.0-1.x86_64.rpm", "VPS.Pilot_0.1.0_x64-setup.exe",
+    "VPS.Pilot_0.1.0_x64_en-US.msi", "VPS.Pilot_0.1.0_aarch64.dmg",
+    "VPS.Pilot_0.1.0_x64.dmg"
+  ];
+  await page.route(api, route => route.fulfill({json: {
+    tag_name: "v0.1.0-build.2",
+    assets: names.map(name => ({
+      name,
+      browser_download_url: "https://github.com/khalids01/vps-pilot/releases/download/v0.1.0-build.2/" + name
+    }))
+  }}));
+  await page.goto("/website/");
+  await expect(page.locator("#downloads .download-button")).toHaveCount(7);
+  await expect(page.getByRole("link", {name: "Check GitHub releases"})).toHaveCount(0);
+  expect(apiCalls).toBe(0);
 });

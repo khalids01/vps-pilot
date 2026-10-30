@@ -55,3 +55,24 @@ before they can be enabled. Keep real workspaces separate from sample fixtures.
 - Match Disk Vacuum's exact dark green theme and shared component style. Use themed shared controls, never visible native selects or unstyled inputs.
 - Select SSH and terminal libraries when their features are requested; do not build them during setup.
 - Maintain an independent app identifier, repository, build output, and future release/signing configuration.
+
+## Resource overhead rule
+
+The user's important VPS must remain responsive. Treat low monitoring overhead as
+a product requirement for every future feature. Never promise zero overhead or
+claim a CPU/memory budget without measurement.
+- Prefer small, read-only kernel counters (such as /proc/stat, /proc/meminfo,
+/proc/net/dev, and /proc/diskstats); batch requests and reuse the SSH connection.
+- Share one sampler per server, with no overlapping polls or duplicated samplers
+for badges, charts, tooltips, and detail popovers. Tooltips use cached data.
+- For new compact live monitoring, default to a conservative 10-second interval;
+do not poll faster than 5 seconds without explicit user selection and evidence.
+Pause when the app is hidden, the server is disconnected, or monitoring is unused.
+- Cache filesystem capacity for at least 60 seconds. No automatic recursive disk
+scans, du/find traversals, package discovery, service enumeration, Docker queries,
+GPU probes, or public-IP HTTP lookups in the lightweight sampler.
+- Load expensive detail only on explicit request. Bound output, history, timeouts,
+and concurrent work; back off on failures or slow responses.
+- Validate overhead in disposable local fixtures before enabling new monitoring.
+Never benchmark, stress-test, install a daemon on, or run destructive checks
+against the user's important VPS.

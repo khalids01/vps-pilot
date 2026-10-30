@@ -1,14 +1,32 @@
 name: Release VPS Pilot
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.ref }}
+  group: desktop-release
   cancel-in-progress: false
 jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Choose an immutable build tag
+        id: version
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+            const tag = `v${version}-build.${context.runNumber}`;
+            core.setOutput('tag', tag);
   build:
+    needs: prepare
     permissions:
       contents: write
     strategy:
@@ -55,8 +73,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: VPS Pilot ${{ github.ref_name }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseCommitish: ${{ github.sha }}
+          releaseName: VPS Pilot ${{ needs.prepare.outputs.tag }}
           releaseBody: |
             Early preview of VPS Pilot. App-triggered operations are read-only; interactive SSH terminals run commands with your normal permissions.
             Windows installers are unsigned. macOS builds use ad-hoc signing and are not notarized.
@@ -66,16 +85,18 @@ jobs:
           uploadUpdaterJson: false
           args: ${{ matrix.args }}
   publish:
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         with:
           script: |
             const {owner, repo} = context.repo;
-            const tag = context.ref.replace('refs/tags/', '');
+            const tag = process.env.RELEASE_TAG;
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo});
             const release = releases.find(r => r.tag_name === tag);
             if (!release) throw new Error('Release draft missing');
@@ -99,4 +120,14 @@ jobs:
               data: Buffer.from(lines.join('\n') + '\n'),
               headers: {'content-type': 'text/plain'}
             });
-            await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, prerelease: false});
+            await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, prerelease: false, make_latest: "true"});
+
+  deploy-downloads:
+    needs: [prepare, publish]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}

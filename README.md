@@ -160,26 +160,31 @@ See [agents/goal.md](agents/goal.md) for product scope and safeguards. Signing k
 
 The independent static landing page lives in `website/`. Preview it with
 `python3 -m http.server 4174 --directory website`.
-Its download list reads public GitHub Releases and handles first-release,
-offline, and API-limit states without dead installer links.
+Its download list reads a same-origin downloads.json manifest generated during
+deployment from the published GitHub release. Visitor browsers do not call the
+GitHub API. First-release and offline states retain a GitHub releases fallback.
 
 `.github/workflows/pages.yml` deploys that directory on main-branch changes.
 Set repository **Settings → Pages → Source** to **GitHub Actions**.
-The default URL is https://khalids01.github.io/vps-pilot/; no custom DNS is assumed.
+The live custom domain is http://vpspilot.skycanvasstudio.com/ (HTTPS pending).
+The custom domain is configured in GitHub Pages settings.
 
 ### Publishing a desktop release
 
 1. Match versions in `package.json`, `src-tauri/tauri.conf.json`, and
    `src-tauri/Cargo.toml` (including the Cargo lockfile).
 2. Run the checks below and commit the intended release changes.
-3. Push a matching version tag, for example `v0.1.0`.
+3. Push to `main` (or run the release workflow manually on main).
 
 The release workflow builds Linux x64 (DEB, RPM, AppImage), Windows x64
 (NSIS and MSI), and macOS Apple Silicon / Intel (DMG). It checks version
 consistency, frontend checks/tests, and native tests before packaging.
 All platform jobs upload to a draft; only a complete set is published, with
 `SHA256SUMS.txt`. A failed matrix leaves the draft unpublished.
-Releases are manual tag events, not every main-branch push.
+Each main-branch push builds an immutable release tag such as
+`v0.1.0-build.12`, bound to that commit. The successful release workflow then
+deploys the site with its download manifest, retaining the previous download
+release until the complete platform set succeeds. No manual tag is required.
 
 No signing credentials or updater keys are required by this initial workflow.
 Windows packages are unsigned; macOS packages are ad-hoc signed, not notarized.

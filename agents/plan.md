@@ -547,3 +547,17 @@ context, and replacing terminal-style inspection output with application views.
   43 native tests passed; three landing-page browser tests passed. Actual local
   DEB (6.50 MiB) and AppImage (87.76 MiB) bundles generated successfully.
   Windows/macOS packaging and hosted workflows have not run yet.
+
+### Automatic desktop downloads and monitoring constraint — 2026-10-30
+
+- Main pushes now trigger the full desktop release matrix, with a per-run build
+  tag bound to the triggering commit. Publication remains gated on every build,
+  required installer assets, and checksums; the release workflow directly calls
+  the reusable Pages workflow after publication (no reliance on token-generated
+  release events to trigger another workflow).
+- Pages generates same-origin downloads.json from the authenticated release API.
+  Visitors receive direct installer buttons without browser GitHub API calls.
+  Previous published downloads remain available while new builds run.
+- Recorded the live custom domain vpspilot.skycanvasstudio.com and added the
+  user's low-overhead VPS monitoring requirement to agents/goal.md. Compact live
+  metric badges/popovers are only discussed, not implemented in this batch.

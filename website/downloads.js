@@ -21,7 +21,8 @@ function render(release) {
       if (url.origin !== "https://github.com" || !url.pathname.startsWith("/khalids01/vps-pilot/releases/download/")) continue;
       const link = document.createElement("a");
       link.href = url.href;
-      link.textContent = label + " ↓";
+      link.textContent = "Download " + label + " ↓";
+      link.className = "download-button";
       card.append(link);
       found = true;
     }
@@ -36,14 +37,14 @@ function render(release) {
 }
 async function load() {
   try {
-    const response = await fetch("https://api.github.com/repos/khalids01/vps-pilot/releases/latest", { signal: AbortSignal.timeout(10000) });
-    if (response.status === 404) {
+    const response = await fetch("downloads.json", { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error("Release lookup failed");
+    const release = await response.json();
+    if (!release) {
       status.textContent = "The first release is being prepared. Downloads will appear here after it is published.";
       render(null);
       return;
     }
-    if (!response.ok) throw new Error("Release lookup failed");
-    const release = await response.json();
     status.textContent = "Latest release: " + release.tag_name;
     render(release);
   } catch {
