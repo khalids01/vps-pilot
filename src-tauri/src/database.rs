@@ -160,7 +160,9 @@ impl LocalDatabase {
     }
 }
 fn ui_key(key: &str) -> bool {
-    (key == "vps-pilot:sample-workspace:v1" || key == "vps-pilot-updates")
+    (key == "vps-pilot:sample-workspace:v1"
+        || key == "vps-pilot-updates"
+        || key == "vps-pilot:fleet:v1")
         || key
             .strip_prefix("vps-pilot:sample-terminal:v1:")
             .is_some_and(|id| {
@@ -173,12 +175,57 @@ fn ui_key(key: &str) -> bool {
             .strip_prefix("vps-pilot:remote-terminal:v1:")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FleetDocument {
+    version: u8,
+    servers: HashMap<String, Organization>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Organization {
+    project: String,
+    tags: Vec<String>,
+    environment: String,
+    #[serde(rename = "favorite")]
+    _favorite: bool,
+    order: u32,
+}
+fn validate_fleet(value: &serde_json::Value) -> Result<(), String> {
+    let document: FleetDocument =
+        serde_json::from_value(value.clone()).map_err(|_| "Invalid server organization.")?;
+    let text = |value: &str, limit: usize| {
+        value.chars().count() <= limit && !value.chars().any(char::is_control)
+    };
+    if document.version != 1 || document.servers.len() > 100 {
+        return Err("Invalid server organization.".into());
+    }
+    for (id, metadata) in document.servers {
+        if uuid::Uuid::parse_str(&id).is_err()
+            || !text(&metadata.project, 80)
+            || metadata.tags.len() > 12
+            || metadata
+                .tags
+                .iter()
+                .any(|tag| tag.trim().is_empty() || !text(tag, 32))
+            || !["none", "production", "staging", "development"]
+                .contains(&metadata.environment.as_str())
+            || metadata.order > 1_000_000
+        {
+            return Err("Invalid server organization.".into());
+        }
+    }
+    Ok(())
+}
 fn validate_document(key: &str, value: &str) -> Result<(), String> {
     if !ui_key(key) || value.len() > 128_000 {
         return Err("Unsupported saved preference.".into());
     }
     let parsed: serde_json::Value =
         serde_json::from_str(value).map_err(|_| "Invalid saved preference.")?;
+    if key == "vps-pilot:fleet:v1" {
+        validate_fleet(&parsed)?;
+    }
     fn safe(value: &serde_json::Value, depth: usize) -> bool {
         if depth > 48 {
             return false;
@@ -323,6 +370,38 @@ mod tests {
                 .unwrap(),
             "preserved"
         );
+    }
+    #[test]
+    fn fleet_metadata_is_bounded_strict_and_persists_without_touching_profiles() {
+        let key = "vps-pilot:fleet:v1";
+        let id = "11111111-1111-4111-8111-111111111111";
+        let mut value = serde_json::json!({"version":1,"servers":{id:{"project":"Portal","tags":["api"],"environment":"production","favorite":true,"order":2}}});
+        validate_document(key, &value.to_string()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite3");
+        let db = LocalDatabase::open(&path).unwrap();
+        db.write("ssh_profiles", "preserved profile and host pin")
+            .unwrap();
+        db.write(key, &value.to_string()).unwrap();
+        drop(db);
+        let db = LocalDatabase::open(&path).unwrap();
+        assert_eq!(db.read(key).unwrap(), Some(value.to_string()));
+        assert_eq!(
+            db.read("ssh_profiles").unwrap().as_deref(),
+            Some("preserved profile and host pin")
+        );
+        value["servers"][id]["password"] = serde_json::json!("never save");
+        assert!(validate_document(key, &value.to_string()).is_err());
+        value["servers"][id]
+            .as_object_mut()
+            .unwrap()
+            .remove("password");
+        value["servers"][id]["order"] = serde_json::json!(-1);
+        assert!(validate_document(key, &value.to_string()).is_err());
+        value["servers"][id]["order"] = serde_json::json!(0);
+        value["servers"][id]["tags"] = serde_json::json!(vec!["tag"; 13]);
+        assert!(validate_document(key, &value.to_string()).is_err());
+        assert!(validate_document(key, r#"{"version":1,"servers":{"invalid-id":{"project":"","tags":[],"environment":"none","favorite":false,"order":0}}}"#).is_err());
     }
     #[test]
     fn document_scope_blocks_credentials_profiles_and_sql_injection() {

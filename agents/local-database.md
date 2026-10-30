@@ -29,3 +29,20 @@ update-version choices save immediately. The settings page reports saving/errors
 Failed profile/settings saves preserve previously committed data. If bootstrap
 fails the UI offers Retry instead of creating replacement defaults. Avoid adding
 an ORM, remote sync, metric history, or credentials without a separate request.
+
+## Fleet organization
+
+The allowlisted `vps-pilot:fleet:v1` document stores up to 100 canonical server
+IDs with project, tags, environment, favorite and order. Native deserialization
+rejects unknown fields, malformed IDs, invalid environments, oversized text,
+control characters and out-of-range ordering. This separate document never
+changes SSH profile revisions or trusted host fingerprints.
+
+The existing workspace document also remembers fleet/server navigation. Legacy
+documents without a page continue restoring the selected server. Fresh desktop
+workspaces start at fleet home without opening demonstration tabs.
+
+Fleet health is a bounded in-memory cache of the latest point per profile
+revision, filled only by existing open-workspace sampling. It is timestamped
+and never persisted to SQLite. Fleet refresh reads local profile/status state;
+it does not connect to or inspect a VPS.

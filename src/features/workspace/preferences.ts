@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import {
   readPreference,
@@ -15,6 +16,7 @@ export interface ServerPreferences {
 }
 export interface WorkspacePreferences {
   version: 1;
+  page?: "fleet" | "server";
   openServerIds: string[];
   activeServerId: string | null;
   servers: Record<string, ServerPreferences>;
@@ -34,6 +36,7 @@ export const newServerPreferences = (): ServerPreferences => ({
 export function defaultPreferences(): WorkspacePreferences {
   return {
     version: 1,
+    page: "fleet",
     openServerIds: sampleServers.map((server) => server.id),
     activeServerId: sampleServers[0].id,
     servers: Object.fromEntries(
@@ -71,6 +74,7 @@ export function sanitizePreferences(
   )
     return null;
   const result = defaultPreferences();
+  result.page = value.page === "fleet" ? "fleet" : "server";
   result.openServerIds = [
     ...new Set(
       value.openServerIds.filter(
@@ -116,24 +120,32 @@ export function sanitizePreferences(
   }
   return result;
 }
+function initialPreferences() {
+  const preferences = defaultPreferences();
+  if (isTauri()) {
+    preferences.openServerIds = [];
+    preferences.activeServerId = null;
+  }
+  return preferences;
+}
 function loadPreferences(): {
   preferences: WorkspacePreferences;
   notice: string;
 } {
   try {
     const raw = readPreference(workspacePreferenceKey);
-    if (!raw) return { preferences: defaultPreferences(), notice: "" };
+    if (!raw) return { preferences: initialPreferences(), notice: "" };
     const parsed =
       raw.length <= 64_000 ? sanitizePreferences(JSON.parse(raw)) : null;
     return {
-      preferences: parsed ?? defaultPreferences(),
+      preferences: parsed ?? initialPreferences(),
       notice: parsed
         ? ""
         : "Saved workspace preferences were invalid. The default sample workspace was restored.",
     };
   } catch {
     return {
-      preferences: defaultPreferences(),
+      preferences: initialPreferences(),
       notice:
         "Workspace preferences could not be read. Using the default sample workspace.",
     };

@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { useAppSettings } from "@/features/settings/app-settings";
+import { useFleetHealth } from "@/features/workspace/health-cache";
 import { type ServerProfile, safeError } from "./api";
 import { useCommandActivity } from "./command-activity";
 import {
@@ -37,12 +38,10 @@ export function useLiveMetrics() {
 export function LiveMetricsProvider({
   profile,
   connected,
-  active,
   children,
 }: {
   profile: ServerProfile;
   connected: boolean;
-  active: boolean;
   children: ReactNode;
 }) {
   const log = useCommandActivity();
@@ -82,12 +81,12 @@ export function LiveMetricsProvider({
   );
   useEffect(() => {
     setFresh(false);
-    if (!enabled || !connected || !active || !visible) {
+    if (!enabled || !connected || !visible) {
       setState(
         !connected
           ? "Disconnected"
           : enabled
-            ? "Paused while inactive"
+            ? "Paused while app is inactive"
             : "Paused",
       );
       return;
@@ -135,7 +134,6 @@ export function LiveMetricsProvider({
           cancel: () => toggle(false),
         });
         setRunId(entry);
-        setHistory([]);
         const result = await streamApi.monitor(
           profile.id,
           interval,
@@ -152,6 +150,11 @@ export function LiveMetricsProvider({
               if (++goodSamples >= 3) failures.current = 0;
               setSample(event.sample);
               setPoint(next);
+              useFleetHealth.getState().remember(profile.id, {
+                revision: profile.revision,
+                point: next,
+                capacityTime: next.time - event.sample.capacityAge * 1000,
+              });
               setHistory((old) => [...old, next].slice(-180));
               setFresh(true);
               setState("Live");
@@ -192,10 +195,10 @@ export function LiveMetricsProvider({
   }, [
     enabled,
     connected,
-    active,
     visible,
     interval,
     profile.id,
+    profile.revision,
     log,
     toggle,
     attempt,

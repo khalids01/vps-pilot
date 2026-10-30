@@ -16,6 +16,7 @@ import { SettingsPage } from "@/features/settings/settings-page";
 import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
+import { EnvironmentBadge, useFleet } from "@/features/workspace/fleet-store";
 import { CommandActivityProvider } from "./command-activity";
 import { LiveMetricsProvider } from "./live-metrics";
 import { LiveMetricsBar } from "./live-metrics-view";
@@ -69,7 +70,6 @@ export function RemoteWorkspace(props: RemoteWorkspaceProps) {
       <LiveMetricsProvider
         profile={props.profile}
         connected={props.status?.status === "connected"}
-        active={props.active}
       >
         <RemoteWorkspaceContent {...props} />
       </LiveMetricsProvider>
@@ -86,6 +86,7 @@ function RemoteWorkspaceContent({
   settingsOpen,
 }: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
+  const fleet = useFleet();
   const labels: Record<ToolId, string> = {
     overview: "Overview",
     terminal: "Terminal",
@@ -171,6 +172,9 @@ function RemoteWorkspaceContent({
               </span>
             </Tooltip>
           </h1>
+          <EnvironmentBadge
+            environment={fleet.metadata(profile.id).environment}
+          />
           <span className="flex items-center gap-1.5 text-[11px]">
             <span
               className={`size-1.5 rounded-full ${connected ? "bg-primary" : "bg-muted-foreground"}`}

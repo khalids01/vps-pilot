@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { fleetKey, sanitizeFleet } from "@/features/workspace/fleet-data";
 
 const cache = new Map<string, string>();
 const pending = new Map<string, string>();
@@ -51,6 +52,10 @@ export async function hydratePreferences(documents: Record<string, string>) {
   const clean = (key: string, raw: string): string | null => {
     if (raw.length > 128000) return null;
     try {
+      if (key === fleetKey) {
+        const value = sanitizeFleet(JSON.parse(raw));
+        return value ? JSON.stringify(value) : null;
+      }
       if (key === "vps-pilot-updates") {
         const value = JSON.parse(raw);
         const version = value?.state?.skippedVersion;

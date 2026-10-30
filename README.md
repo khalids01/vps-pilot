@@ -102,7 +102,7 @@ memory only and are cleared when the workspace closes or the app restarts.
 - Overview, Software, Docker, Proxy, Services, Storage, Firewall, Network and
   Processes have fixed read-only inspections. Missing tools and permission errors
   remain visible as partial results. CPU usage needs two completed samples.
-- Live monitoring starts for the active connected VPS by default, with 1-, 2-, or 5-second
+- Live monitoring starts for each open, connected VPS by default, with 1-, 2-, or 5-second
   intervals. Inventory snapshots refresh only on request. Snapshots are scoped
   to their server, timestamped, and marked stale while disconnected.
 - Reviewed reads provide numbered UFW rules, the last 200 service/container log
@@ -196,7 +196,7 @@ Installers are written beneath `src-tauri/target/release/bundle/`.
 
 ## Lightweight live metrics
 
-Connect a VPS and live metrics start automatically for its active workspace. Hover a
+Connect a VPS and live metrics start automatically for its open workspace. Hover a
 badge for its label; click CPU, RAM, storage, disk I/O, or network to open the
 floating resource panel. Overview shows the same measurements as charts.
 The Settings page offers 1s, 2s, and 5s intervals; there is no additional sampler for
@@ -216,8 +216,10 @@ default IPv4 route's interface, with a non-loopback fallback; it is not a sum of
 virtual interfaces. Disk I/O excludes partitions and stacked/virtual devices to
 reduce double counting, and is not limited to the root filesystem.
 
-Sampling pauses for hidden/inactive windows and VPS tabs, and resumes only for
-that session's selected server. It is not enabled again after restarting the app.
+Each open, connected VPS keeps its sampler and chart history while you visit
+Home, Settings, or other VPS tabs. Whole-window inactivity pauses sampling;
+returning retains chart history. The saved monitoring preference applies after
+restart, but saved servers never automatically reconnect.
 Failed streams retry with 5–60 second backoff. Slow samples reduce the refresh
 rate, requests never overlap, and desktop acknowledgements bound delivery.
 Counter history is limited to 180 samples in memory; reconnects reset rate
@@ -253,3 +255,24 @@ SQL data takes precedence afterward. Restored layouts never reconnect or replay
 commands. Passwords, private-key contents, terminal output, commands, and live
 metric samples are not saved to SQLite. Read or write errors are reported rather
 than silently resetting saved data. See [local database notes](agents/local-database.md).
+
+### Managing a fleet
+
+Use the Home button to see all saved servers grouped by project. Organize each
+server with a project, comma-separated tags, Production/Staging/Development
+environment, and favorite. Arrow buttons reorder servers within each project's
+favorite group. Search matches names, addresses, projects, tags and environments;
+the connection picker shares this organization and puts favorites first.
+Organization is stored locally without changing connection profiles or closing
+running terminals.
+
+Fleet health is explicitly cached and timestamped. It comes from monitoring in open connected
+workspaces, which continues while you browse Home; opening or refreshing fleet
+home never connects or scans additional servers. Fresh desktop installations start here, while existing workspaces keep
+their restored server selection.
+
+Press **Ctrl/Cmd + K** or the search button to open the command palette. Type a
+server, project/tag, or tool name, use arrow keys, and press Enter to navigate.
+Escape closes the palette. Choosing a server or tool does not connect it, open a
+shell, or execute an inspection. Existing terminal sessions stay mounted while
+you visit fleet home, Settings, or another server.

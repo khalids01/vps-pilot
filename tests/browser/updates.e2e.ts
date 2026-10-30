@@ -107,6 +107,7 @@ for (const mode of ["offline", "current", "bad-signature"]) {
 
 test("Settings preserves server navigation and only available updates appear in the sidebar footer", async ({ page }) => {
   await mockDesktop(page);
+  await page.addInitScript(()=>localStorage.setItem("vps-pilot:sample-workspace:v1",JSON.stringify({version:1,openServerIds:["sample-production"],activeServerId:"sample-production",servers:{}})));
   await page.goto("/");
   const sidebar = page.getByRole("navigation", { name: "Production tools", exact: true });
   await expect(sidebar.getByRole("button", { name: "Check for updates", exact: true })).toHaveCount(0);

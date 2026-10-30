@@ -598,3 +598,57 @@ context, and replacing terminal-style inspection output with application views.
   idempotency, stale writes, and preservation of the original profile file.
   Browser tests cover reload persistence, failures, updater compatibility,
   terminal preservation, fixed-width stats, and zoom shortcuts. No user VPS used.
+
+## Multi-VPS workflow increment — implementation plan, 2026-10-30
+
+1. Add bounded local organization metadata: project, tags, environment,
+   favorite and manual order, without changing authentication or SSH config.
+   Preserve/import existing local data and share metadata between fleet and picker.
+2. Add a fleet home page with project grouping, search/filtering, favorites,
+   editable organization, connection status, and timestamped in-memory health
+   cached from normal active-workspace sampling. No fleet background probes.
+3. Add a themed Ctrl/Cmd+K keyboard palette for fleet/settings, saved servers,
+   and server tools. Results identify the target, support arrows/Enter/Escape,
+   and never implicitly connect or execute commands.
+4. Preserve mounted workspace/terminal state during navigation; inactive
+   workspaces stop their lightweight sampler.
+5. Validate metadata boundaries/persistence, fleet navigation, palette keyboard
+   behavior and session preservation; run frontend check/build, relevant Rust
+   checks and browser tests. Use local fixtures only.
+
+### Completed 2026-10-31
+
+- Added fleet organization document and native validation; project/tags,
+  environment badges, favorites and order share local persistence with the
+  searchable connection picker. Organization never changes profile revisions.
+- Added Home navigation and project-grouped fleet cards, environment/favorites
+  filters, ordering controls, explicit cached-health timestamps and local-list
+  refresh. Fresh desktop sessions start with fleet home and no demo tabs.
+- Added Base UI Combobox command palette with Ctrl/Cmd+K, arrows/Enter/Escape,
+  server/tool targets and organization-aware search. Other modal dialogs retain
+  their keyboard handling. Actions navigate only.
+- Preserved mounted terminals and legacy selected-server restoration. Fixed
+  inactive workspaces mounting duplicate Settings pages.
+- Validation: check/build, 23 frontend tests, 51 Rust tests (two fixture-only
+  tests skipped), strict Clippy and all 28 browser tests passed. Browser evidence
+  includes persistence, filters/order, picker search, unopened-server palette
+  navigation, terminal preservation and zero fleet sampling. Screenshots inspected.
+  Tests used local fixtures; no production VPS was contacted.
+
+### Open-tab continuity correction — 2026-10-31
+
+The user's latest instruction supersedes the earlier inactive-workspace pause
+policy above. Every open connected VPS keeps its lightweight sampler running
+through Home, Settings, and switches to other VPS tabs. Existing SSH sessions,
+terminals, command state and chart history remain mounted. Fleet displays these
+existing streams' latest readings without opening additional saved servers.
+
+Removed view selection from sampler lifetime dependencies and stopped clearing
+chart history on sampler restart. Whole-app inactivity, disconnect/close,
+disabled metrics, backpressure and bounded history still apply.
+
+Validation: check/build, 23 frontend tests, Rust check and all 28 browser tests
+pass. Regression coverage verifies two simultaneous samplers retain their
+identities through navigation, fleet timestamps/charts continue advancing,
+terminal sessions are preserved, window pause is bounded, and closing one VPS
+does not stop another. No production VPS used.

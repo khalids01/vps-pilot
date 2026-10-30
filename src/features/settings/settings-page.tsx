@@ -62,8 +62,9 @@ export function SettingsPage() {
             Enable live stats automatically
           </label>
           <p className="text-xs text-muted-foreground">
-            Only the active, connected VPS is sampled. Sampling pauses when the
-            app is inactive. Live measurements stay in memory.
+            Every open, connected VPS keeps sampling across Home, Settings, and
+            other VPS tabs. Sampling pauses when the app is inactive. Live
+            measurements stay in memory.
           </p>
           <fieldset className="space-y-3">
             <legend className="text-sm">Refresh interval</legend>

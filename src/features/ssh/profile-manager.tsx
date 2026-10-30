@@ -6,6 +6,8 @@ import {
   FolderOpen,
   Pencil,
   RefreshCw,
+  Settings2,
+  Star,
   Trash2,
 } from "lucide-react";
 import { useState } from "react";
@@ -19,6 +21,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { matchesServer, sortFleet } from "@/features/workspace/fleet-data";
+import { EnvironmentBadge, useFleet } from "@/features/workspace/fleet-store";
 import {
   address,
   type ConfigHost,
@@ -73,6 +77,7 @@ function ConnectionPicker({
   busy,
   setBusy,
 }: Props & { busy: boolean; setBusy: (busy: boolean) => void }) {
+  const fleet = useFleet();
   const [view, setView] = useState("connections");
   const [draft, setDraft] = useState<ProfileInput>(blankProfile);
   const [search, setSearch] = useState("");
@@ -85,9 +90,9 @@ function ConnectionPicker({
   const queryClient = useQueryClient();
   const matches = (name: string, host: string) =>
     `${name} ${host}`.toLowerCase().includes(search.trim().toLowerCase());
-  const saved =
-    profiles.data?.filter((profile) => matches(profile.name, profile.host)) ??
-    [];
+  const saved = sortFleet(profiles.data ?? [], fleet.data.servers).filter(
+    (profile) => matchesServer(profile, fleet.metadata(profile.id), search),
+  );
   const configured =
     config.data?.filter((profile) => matches(profile.alias, profile.host)) ??
     [];
@@ -553,12 +558,37 @@ function ConnectionPicker({
                           >
                             <span className="min-w-0">
                               <span className="block break-words">
+                                {fleet.metadata(profile.id).favorite && (
+                                  <Star className="mr-1 inline size-3 fill-primary text-primary" />
+                                )}
                                 {profile.name}
+                                <EnvironmentBadge
+                                  environment={
+                                    fleet.metadata(profile.id).environment
+                                  }
+                                />
+                              </span>
+                              <span className="mt-1 block text-xs text-muted-foreground">
+                                {[
+                                  fleet.metadata(profile.id).project,
+                                  ...fleet.metadata(profile.id).tags,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
                               </span>
                               <span className="mt-1 block break-all font-mono text-xs font-normal text-muted-foreground">
                                 {address(profile)}
                               </span>
                             </span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Organize ${profile.name}`}
+                            disabled={busy}
+                            onClick={() => fleet.edit(profile)}
+                          >
+                            <Settings2 />
                           </Button>
                           <Button
                             variant="ghost"

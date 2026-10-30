@@ -89,8 +89,36 @@ reset corrupt or newer-version data. Do not persist passwords, private-key conte
 terminal output, commands, or per-second metrics. Store future credentials only in
 the OS credential store.
 
-Stats default on for the active connected VPS. Put monitoring preferences and
-visible-stat selection in the Settings page. Pause sampling while Settings is
-open, all stats are hidden, or the window/server workspace is inactive. Keep
+Stats default on for every open, connected VPS. Put monitoring preferences and
+visible-stat selection in the Settings page. Keep sampling across Home, Settings
+and other open VPS tabs. Pause only when the app window is inactive, stats are
+disabled/hidden, or the server disconnects; closing the tab releases its sampler. Keep
 fixed-width values, show both network directions, and retain browser-style app
 zoom and its setting.
+
+## Multi-VPS workflow increment — authorized 2026-10-30
+
+Implement these three next: server organization (project, tags, environment,
+favorite and ordering), a fleet home page, and a Ctrl/Cmd+K command palette.
+Keep organization metadata in local SQLite and preserve existing profiles and
+SSH configuration files. Fleet views must not connect, inspect, or sample every
+server automatically. Show cached health with its observation time and never
+present stale data as live. Navigation must preserve running terminal sessions
+and monitoring for every open connected workspace. Palette actions navigate only:
+opening a tool must not run a command or silently connect.
+
+SFTP/editor, tunnels/jump hosts, streaming log improvements, reusable commands,
+and additional mutating management actions remain subsequent work, outside this
+increment.
+
+
+## Open-tab lifetime — corrected by the user, 2026-10-31
+
+An open VPS/project tab owns its ongoing SSH sessions, lightweight sampler,
+charts, and workspace state regardless of which app page is visible. Visiting
+Home, Settings, or another VPS must not restart streams, clear charts, reconnect,
+or replay commands. Preserve one sampler per open connected VPS. Closing,
+disconnecting, disabling stats, and whole-window inactivity remain lifecycle
+boundaries; returning after a window pause retains bounded chart history.
+Fleet home may display updated readings from these existing samplers, but must
+never start connections or probes for unopened saved servers.

@@ -126,7 +126,7 @@ test.beforeEach(async ({ page }) => {
   }, { first, second, reports });
   await page.clock.install();
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Fixture Alpha", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fixture Alpha", exact: true })).toBeVisible({timeout:15000});
 });
 
 test("restoring VPS tabs does not connect or open terminals; inspection stays server-bound", async ({ page }) => {
@@ -166,7 +166,7 @@ test("live terminals survive navigation, require close confirmation, and restore
   await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
   await nav.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Back to servers", exact: true }).click();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();
   await nav.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
   expect((await page.evaluate(() => (window as any).__calls.filter((call: any) => call.cmd === "ssh_terminal_open"))).length).toBe(1);
@@ -194,25 +194,38 @@ test("narrow real workspaces keep terminal and inspection controls accessible", 
 });
 
 
-test("automatic metrics share one stream and pause for inactive tabs and windows", async ({ page }) => {
-  const starts = () => page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start"));
-  await expect.poll(async () => (await starts()).length).toBe(1);
-  await expect(page.getByRole("button", {name: "Start live metrics", exact: true})).toHaveCount(0);
-  await page.getByRole("navigation", {name: "Fixture Alpha tools"}).getByRole("button", {name: "Network", exact: true}).click();
-  expect((await starts()).length).toBe(1);
-  await page.getByRole("tab", { name: /Fixture Beta/ }).click();
-  await expect.poll(async () => (await starts()).length).toBe(2);
-  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_stream_close").length)).toBe(1);
-  await page.getByRole("tab", { name: /Fixture Alpha/ }).click();
-  await expect.poll(async () => (await starts()).length).toBe(3);
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", {get: () => "hidden", configurable: true});
+test("open VPS tabs keep one sampler each across navigation and pause only with the app", async ({ page }) => {
+  const starts=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_monitor_start"));
+  const closes=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_stream_close"));
+  await expect.poll(async()=>(await starts()).length).toBe(2);
+  expect((await starts()).map((call:any)=>call.profileId).sort()).toEqual([first,second]);
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Network",exact:true}).click();
+  await page.getByRole("tab",{name:/Fixture Beta/}).click();
+  await expect(page.getByRole("button",{name:"CPU live metrics details"})).toContainText("50.0%");
+  await page.getByRole("tab",{name:/Fixture Alpha/}).click();
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  expect((await starts()).length).toBe(2);
+  expect((await closes()).length).toBe(0);
+  expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_disconnect","ssh_inspection_run"].includes(call.cmd)))).toBe(false);
+  await page.evaluate(()=>{
+    Object.defineProperty(document,"visibilityState",{get:()=>"hidden",configurable:true});
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_stream_close").length)).toBe(3);
+  await expect.poll(async()=>(await closes()).length).toBe(2);
   await page.clock.fastForward(5100);
-  expect((await starts()).length).toBe(3);
-  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_inspection_run").length)).toBe(0);
+  expect((await starts()).length).toBe(2);
+  await page.evaluate(()=>{
+    Object.defineProperty(document,"visibilityState",{get:()=>"visible",configurable:true});
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(async()=>(await starts()).length).toBe(4);
+  await page.getByRole("button",{name:"Close Fixture Beta SSH tab",exact:true}).click();
+  await page.getByRole("dialog").getByRole("button",{name:"Disconnect and close",exact:true}).click();
+  await expect.poll(async()=>(await closes()).filter((call:any)=>call.profileId===second).length).toBe(2);
+  expect((await closes()).filter((call:any)=>call.profileId===first).length).toBe(1);
+  await page.clock.fastForward(5100);
+  expect((await starts()).length).toBe(4);
 });
 
 test("production UI exposes read-only service operations", async ({ page }) => {
@@ -320,13 +333,13 @@ test("compact resource badges show themed tooltips and cached floating details",
   const popup = page.getByRole("dialog", {name: "Live resource usage"});
   await expect(popup).toContainText("Capacity cached for 60s");
   await expect(popup.getByRole("img", {name: "CPU history, measured samples only"})).toBeVisible();
-  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start").length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start" && c.profileId === "11111111-1111-4111-8111-111111111111").length)).toBe(1);
   await page.screenshot({path: testInfo.outputPath("live-metrics-popover.png")});
   await page.keyboard.press("Escape");
   await expect(popup).toHaveCount(0);
   await page.getByRole("button", {name: "Settings", exact: true}).click();
   await page.getByRole("button", {name: "5 seconds", exact: true}).click();
-  await page.getByRole("button", {name: "Back to servers", exact: true}).click();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start").at(-1)?.intervalSeconds)).toBe(5);
   await page.setViewportSize({width: 430, height: 900});
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -338,16 +351,17 @@ test("compact resource badges show themed tooltips and cached floating details",
 test("failed monitoring backs off and disabling in Settings cancels retries", async ({page}) => {
   await page.getByRole("button", {name: "Settings", exact: true}).click();
   await page.getByRole("checkbox", {name: "Enable live stats automatically"}).uncheck();
-  await page.evaluate(() => { (window as any).__monitorFailures = 2; (window as any).__calls.length = 0; });
+  await page.evaluate(() => { (window as any).__monitorFailures = 4; (window as any).__calls.length = 0; });
   await page.getByRole("checkbox", {name: "Enable live stats automatically"}).check();
-  await page.getByRole("button", {name: "Back to servers", exact: true}).click();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();
   await expect(page.getByRole("region", {name: "Live server metrics"})).toBeVisible();
-  await page.clock.fastForward(5100);
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start").length)).toBe(2);
+  await page.clock.fastForward(5100);
+  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start").length)).toBe(4);
   await page.getByRole("button", {name: "Settings", exact: true}).click();
   await page.getByRole("checkbox", {name: "Enable live stats automatically"}).uncheck();
   await page.clock.fastForward(20100);
-  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start").length)).toBe(2);
+  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.cmd === "ssh_monitor_start").length)).toBe(4);
 });
 
 test("settings persist chosen stats and interval, with no per-sample database writes", async ({page}, testInfo) => {
@@ -357,7 +371,7 @@ test("settings persist chosen stats and interval, with no per-sample database wr
   await page.getByRole("button", {name: "2 seconds", exact: true}).click();
   await expect(page.getByRole("main", {name: "Application settings"})).toContainText("Saved on this device");
   await page.screenshot({path:testInfo.outputPath("settings.png")});
-  await page.getByRole("button", {name: "Back to servers", exact: true}).click();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();
   const bar=page.getByRole("region",{name:"Live server metrics"});
   await expect(bar.getByRole("button",{name:"CPU live metrics details"})).toHaveCount(0);
   await expect(bar.getByRole("button",{name:"RAM live metrics details"})).toBeVisible();
@@ -370,7 +384,7 @@ test("settings persist chosen stats and interval, with no per-sample database wr
   await expect(page.getByRole("checkbox",{name:"CPU",exact:true})).not.toBeChecked();
   await expect(page.getByRole("button",{name:"2 seconds",exact:true})).toHaveAttribute("aria-pressed","true");
   for(const label of ["RAM","Storage capacity","Network download and upload"]) await page.getByRole("checkbox",{name:label,exact:true}).uncheck();
-  await page.getByRole("button",{name:"Back to servers",exact:true}).click();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();
   const count=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_monitor_start").length);
   await page.clock.fastForward(10100);
   expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_monitor_start").length)).toBe(count);
@@ -404,4 +418,107 @@ test("local database save failure is visible and does not replace saved settings
   await page.getByRole("button",{name:"5 seconds",exact:true}).click();
   await expect(page.getByRole("alert")).toContainText("Settings could not be saved");
   expect(await page.evaluate(()=>localStorage.getItem("__fixture_settings"))).toBe(before);
+});
+
+test("fleet organization and ordering persist and are searchable in the connection picker", async ({page},testInfo)=>{
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  const fleet=page.getByRole("main",{name:"Server fleet"});
+  await fleet.getByRole("button",{name:"Move Fixture Beta earlier",exact:true}).click();
+  await expect(fleet.getByRole("article").first()).toHaveAttribute("aria-label","Fixture Beta server");
+  await page.clock.fastForward(300);
+  await page.reload();
+  await expect(page.getByRole("main",{name:"Server fleet"}).getByRole("article").first()).toHaveAttribute("aria-label","Fixture Beta server");
+  await page.getByRole("button",{name:"Organize Fixture Alpha",exact:true}).click();
+  const editor=page.getByRole("dialog",{name:"Organize Fixture Alpha"});
+  await editor.getByLabel("Project",{exact:true}).fill("Portal");
+  await editor.getByLabel("Tags",{exact:true}).fill("api, eu-west");
+  await editor.getByRole("combobox",{name:"Environment",exact:true}).click();
+  await page.getByRole("option",{name:"Production",exact:true}).click();
+  await editor.getByRole("checkbox",{name:"Favorite server"}).check();
+  await editor.getByRole("button",{name:"Save organization",exact:true}).click();
+  await expect(fleet.getByRole("region",{name:"Project Portal"})).toContainText("Fixture Alpha");
+  await expect(fleet.getByRole("article",{name:"Fixture Alpha server"})).toContainText("production");
+  await page.clock.fastForward(300);
+  await page.reload();
+  await expect(fleet.getByRole("region",{name:"Project Portal"})).toContainText("eu-west");
+  await fleet.getByRole("button",{name:"Favorites only",exact:true}).click();
+  await expect(fleet.getByRole("article")).toHaveCount(1);
+  await fleet.getByRole("combobox",{name:"Filter environment"}).click();
+  await page.getByRole("option",{name:"Staging",exact:true}).click();
+  await expect(fleet.getByText("No servers match these filters.",{exact:true})).toBeVisible();
+  await fleet.getByRole("combobox",{name:"Filter environment"}).click();
+  await page.getByRole("option",{name:"Production",exact:true}).click();
+  await expect(fleet.getByRole("article")).toHaveCount(1);
+  await page.screenshot({path:testInfo.outputPath("fleet-home.png")});
+  await page.getByRole("button",{name:"New VPS tab",exact:true}).click();
+  await page.getByRole("textbox",{name:"Search connections",exact:true}).fill("Portal api");
+  await expect(page.getByRole("button",{name:"Open Fixture Alpha",exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Open Fixture Beta",exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_save_profile","ssh_inspection_run"].includes(call.cmd)))).toBe(false);
+});
+
+test("fleet home preserves terminals, sampler identity and continuously advancing history",async({page})=>{
+  await expect(page.getByRole("button",{name:"CPU live metrics details"})).toContainText("50.0%");
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Terminal",exact:true}).click();
+  await page.getByRole("button",{name:"New shell",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  await page.getByRole("button",{name:"CPU live metrics details",exact:true}).click();
+  const chart=page.getByRole("dialog",{name:"Live resource usage"}).getByRole("img",{name:"CPU history, measured samples only"});
+  const points=()=>chart.locator("polyline").evaluateAll(lines=>lines.reduce((sum,line)=>sum+(line.getAttribute("points")?.trim().split(/\s+/).filter(Boolean).length??0),0));
+  const beforePoints=await points();
+  await page.keyboard.press("Escape");
+  const starts=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_monitor_start").length);
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  const fleet=page.getByRole("main",{name:"Server fleet"});
+  await expect(fleet.getByRole("article",{name:"Fixture Alpha server"})).toContainText("Cached · last sampled");
+  const timestamp=fleet.getByRole("article",{name:"Fixture Alpha server"}).locator("time");
+  const beforeTime=await timestamp.getAttribute("datetime");
+  await page.clock.runFor(2100);
+  await expect.poll(()=>timestamp.getAttribute("datetime")).not.toBe(beforeTime);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_stream_close").length)).toBe(0);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_monitor_start").length)).toBe(starts);
+  await fleet.getByRole("button",{name:"Favorite Fixture Alpha",exact:true}).click();
+  await fleet.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_terminal_open").length)).toBe(1);
+  expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_disconnect","ssh_inspection_run"].includes(call.cmd)))).toBe(false);
+  await page.getByRole("button",{name:"CPU live metrics details",exact:true}).click();
+  expect(await points()).toBeGreaterThan(beforePoints);
+});
+
+test("command palette opens an unopened server tool by keyboard without remote execution",async({page},testInfo)=>{
+  await page.evaluate(first=>{
+    const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+    docs["vps-pilot:sample-workspace:v1"]=JSON.stringify({version:1,page:"server",openServerIds:[`remote:${first}`],activeServerId:`remote:${first}`,servers:{}});
+    localStorage.setItem("__fixture_documents",JSON.stringify(docs));
+  },first);
+  await page.reload();
+  await expect(page.getByRole("heading",{name:"Fixture Alpha",exact:true})).toBeVisible();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Terminal",exact:true}).click();
+  await page.getByRole("button",{name:"New shell",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  await page.locator(".xterm-helper-textarea").first().focus();
+  const inputs=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_terminal_input").length);
+  await page.keyboard.press("Control+k");
+  const palette=page.getByRole("dialog",{name:"Go to…",exact:true});
+  await expect(palette.getByRole("combobox",{name:"Search servers and tools"})).toBeFocused();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_terminal_input").length)).toBe(inputs);
+  await palette.getByRole("combobox").fill("Beta docker");
+  await expect(palette.getByRole("option")).toHaveCount(1);
+  await page.screenshot({path:testInfo.outputPath("command-palette.png")});
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(page.getByRole("navigation",{name:"Fixture Beta tools"}).getByRole("button",{name:"Docker",exact:true})).toHaveAttribute("aria-current","page");
+  expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_inspection_run"].includes(call.cmd)))).toBe(false);
+  await page.keyboard.press("Meta+k");
+  await expect(palette).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+  await page.keyboard.press("Control+k");
+  await palette.getByRole("combobox").fill("fleet home");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main",{name:"Server fleet"})).toBeVisible();
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });

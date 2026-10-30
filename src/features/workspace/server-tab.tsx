@@ -4,10 +4,13 @@ import { Button } from "@/components/ui/button";
 import { TabsTrigger } from "@/components/ui/tabs";
 import type { ConnectionStatus } from "@/features/ssh/api";
 import type { SampleServer } from "./fixtures";
+import type { Environment } from "./fleet-data";
+import { EnvironmentBadge } from "./fleet-store";
 
 export function ServerTab({
   server,
   index,
+  environment,
   onClose,
 }: {
   server: Pick<SampleServer, "id" | "name"> & {
@@ -15,6 +18,7 @@ export function ServerTab({
     connectionStatus?: ConnectionStatus["status"];
   };
   index: number;
+  environment: Environment;
   onClose: () => void;
 }) {
   const { ref, handleRef, isDragging } = useSortable({
@@ -39,6 +43,7 @@ export function ServerTab({
       >
         <Server className="size-3.5" aria-hidden="true" />
         {server.name}
+        <EnvironmentBadge environment={environment} />
         {server.detail && (
           <span
             aria-hidden="true"

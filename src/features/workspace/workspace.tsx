@@ -6,18 +6,19 @@ import {
   ChevronUp,
   Container,
   HardDrive,
+  House,
   LayoutDashboard,
   Network,
   Package,
   Plug,
   Plus,
-  Server,
+  Search,
   Shield,
   SquareTerminal,
   Terminal,
   Workflow,
 } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,7 +49,10 @@ import {
   UpdateManager,
   UpdateSidebarNotice,
 } from "@/features/updates/update-control";
+import { CommandPalette } from "./command-palette";
 import { type SampleServer, sampleServers, type ToolId } from "./fixtures";
+import { FleetHome } from "./fleet-home";
+import { FleetProvider, useFleet } from "./fleet-store";
 import { Overview } from "./overview";
 import {
   newServerPreferences,
@@ -387,8 +391,18 @@ function ServerWorkspace({
 }
 
 export function Workspace() {
+  return (
+    <FleetProvider>
+      <WorkspaceContent />
+    </FleetProvider>
+  );
+}
+function WorkspaceContent() {
+  const fleet = useFleet();
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const { preferences, setPreferences, notice } = useWorkspacePreferences();
   const { openServerIds, activeServerId } = preferences;
+  const fleetOpen = preferences.page === "fleet" || !openServerIds.length;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const [closingId, setClosingId] = useState<string | null>(null);
@@ -397,6 +411,26 @@ export function Workspace() {
   const profiles = useServerProfiles();
   const statuses = useConnectionStatuses(Boolean(profiles.data?.length));
   const queryClient = useQueryClient();
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "k"
+      ) {
+        if (document.querySelector('[role="dialog"]') && !paletteOpen) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [paletteOpen]);
+  const showFleet = () => {
+    setSettingsOpen(false);
+    setPreferences((current) => ({ ...current, page: "fleet" }));
+  };
   const tabInfo = (id: string) => {
     const sample = sampleServers.find((server) => server.id === id);
     if (sample) return sample;
@@ -414,7 +448,8 @@ export function Workspace() {
         }
       : { id, name: "Saved server" };
   };
-  function openRemote(profile: ServerProfile) {
+  function openRemote(profile: ServerProfile, tool?: ToolId) {
+    setSettingsOpen(false);
     const id = remoteTabId(profile.id);
     setPreferences((current) => ({
       ...current,
@@ -422,9 +457,13 @@ export function Workspace() {
         ? current.openServerIds
         : [...current.openServerIds, id],
       activeServerId: id,
+      page: "server",
       servers: {
         ...current.servers,
-        [id]: current.servers[id] ?? newServerPreferences(),
+        [id]: {
+          ...(current.servers[id] ?? newServerPreferences()),
+          ...(tool ? { tool } : {}),
+        },
       },
     }));
   }
@@ -469,6 +508,7 @@ export function Workspace() {
         ? current.openServerIds
         : [...current.openServerIds, serverId],
       activeServerId: serverId,
+      page: "server",
     }));
     setManagerOpen(false);
     requestAnimationFrame(() =>
@@ -488,13 +528,14 @@ export function Workspace() {
         </p>
       )}
       <Tabs
-        value={activeServerId}
+        value={fleetOpen ? null : activeServerId}
         onValueChange={(value) => {
           if (typeof value === "string" && openServerIds.includes(value)) {
             setSettingsOpen(false);
             setPreferences((current) => ({
               ...current,
               activeServerId: value,
+              page: "server",
             }));
           }
         }}
@@ -513,6 +554,16 @@ export function Workspace() {
               VPS PILOT
             </span>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mb-1 shrink-0"
+            aria-label="Fleet home"
+            aria-pressed={fleetOpen && !settingsOpen}
+            onClick={showFleet}
+          >
+            <House />
+          </Button>
           <div className="min-w-0 flex-1 overflow-x-auto">
             <DragDropProvider
               onDragEnd={(event) => {
@@ -552,6 +603,11 @@ export function Workspace() {
                     <ServerTab
                       key={id}
                       server={server}
+                      environment={
+                        id.startsWith("remote:")
+                          ? fleet.metadata(id.slice(7)).environment
+                          : "none"
+                      }
                       index={index}
                       onClose={() => requestClose(id)}
                     />
@@ -565,6 +621,16 @@ export function Workspace() {
               cancel.
             </p>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mb-1 shrink-0"
+            aria-label="Open command palette"
+            title="Search servers and tools (Ctrl/Cmd+K)"
+            onClick={() => setPaletteOpen(true)}
+          >
+            <Search />
+          </Button>
           <Button
             id="new-vps-tab"
             variant="ghost"
@@ -594,8 +660,12 @@ export function Workspace() {
                     key={profile.revision}
                     profile={profile}
                     onSettings={() => setSettingsOpen(true)}
-                    settingsOpen={settingsOpen}
-                    active={!settingsOpen && activeServerId === id}
+                    settingsOpen={
+                      settingsOpen && !fleetOpen && activeServerId === id
+                    }
+                    active={
+                      !fleetOpen && !settingsOpen && activeServerId === id
+                    }
                     selectedTool={preferences.servers[id]?.tool ?? "overview"}
                     onSelectTool={(tool) => {
                       setSettingsOpen(false);
@@ -644,7 +714,9 @@ export function Workspace() {
               <ServerWorkspace
                 server={server}
                 onSettings={() => setSettingsOpen(true)}
-                settingsOpen={settingsOpen}
+                settingsOpen={
+                  settingsOpen && !fleetOpen && activeServerId === id
+                }
                 preferences={preferences.servers[server.id]}
                 onPreferencesChange={(patch) => {
                   if (patch.tool) setSettingsOpen(false);
@@ -660,7 +732,7 @@ export function Workspace() {
             </TabsContent>
           ) : null;
         })}
-        {!openServerIds.length && (
+        {fleetOpen && (
           <div className="flex min-h-0 flex-1">
             <nav
               aria-label="Application navigation"
@@ -677,24 +749,42 @@ export function Workspace() {
             {settingsOpen ? (
               <SettingsPage />
             ) : (
-              <main className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-                <Server className="size-8 text-primary" aria-hidden="true" />
-                <h1 className="text-2xl font-medium">
-                  Your workspace starts here
-                </h1>
-                <p className="max-w-sm text-sm text-muted-foreground">
-                  Choose a saved connection or add a new server to open a VPS
-                  workspace.
-                </p>
-                <Button onClick={() => setManagerOpen(true)}>
-                  <Plus aria-hidden="true" />
-                  Choose a connection
-                </Button>
-              </main>
+              <FleetHome
+                profiles={profiles.data ?? []}
+                statuses={statuses.data ?? []}
+                onOpen={openRemote}
+                onAdd={() => setManagerOpen(true)}
+                onRefresh={() => {
+                  void profiles.refetch();
+                  void statuses.refetch();
+                }}
+                loading={profiles.isFetching}
+                error={
+                  profiles.error
+                    ? safeError(profiles.error)
+                    : statuses.error
+                      ? safeError(statuses.error)
+                      : ""
+                }
+              />
             )}
           </div>
         )}
       </Tabs>
+      {paletteOpen && (
+        <CommandPalette
+          profiles={profiles.data ?? []}
+          activeId={activeServerId}
+          onOpen={openRemote}
+          onHome={showFleet}
+          onSettings={() => {
+            setPreferences((current) => ({ ...current, page: "fleet" }));
+            setSettingsOpen(true);
+          }}
+          onAdd={() => setManagerOpen(true)}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
       <ProfileManager
         samples={closedServers}
         onOpenSample={openSample}
@@ -702,6 +792,7 @@ export function Workspace() {
         onOpenChange={setManagerOpen}
         onOpenServer={openRemote}
         onDeleteServer={(profile) => {
+          fleet.remove(profile.id);
           const id = remoteTabId(profile.id);
           closeServer(id);
           setPreferences((current) => {

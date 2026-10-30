@@ -37,12 +37,12 @@ There is no zero-overhead claim and no production VPS was used.
 
 ## Runtime safeguards
 
-- One Python process per active monitored VPS, with the SSH user’s existing
+- One Python process per open connected monitored VPS, with the SSH user’s existing
   permissions and no privilege elevation, using its existing
   authenticated SSH connection. No upload, installation, daemon, public listener,
   Docker socket access, or sudo. Linux /proc and Python 3 are prerequisites.
-- Enabled by default for the active connected VPS; users can disable it in Settings.
-  Sampler pauses for inactive VPS tabs,
+- Enabled by default for each open connected VPS; users can disable it in Settings.
+  Samplers continue across VPS tabs, Home and Settings; they pause for
   hidden documents, and unfocused windows. Badges, popovers and Overview charts
   share the same samples; tooltips never request additional data.
 - The Rust side owns the fixed command and allowlists 1s, 2s and 5s. No generic
@@ -74,9 +74,9 @@ and disconnect. The disposable OpenSSH fixture checks actual samples over a
 stream longer than 60 seconds and verifies that no sampler process remains
 after closing SSH input.
 
-Browser tests verify shared streams across tools, inactive tab/window pause,
+Browser tests verify shared streams across tools, open-tab stream continuity and whole-window pause,
 retry backoff and cancellation, interval changes, hover labels, floating details,
 command console integration, and narrow layouts. These mocks do not establish
 native Tauri/WebKit focus/minimize behavior; that still needs desktop testing.
 
-Settings (enabled state, interval, visible stats, zoom) persist in the desktop SQLite database. Samples and chart history remain in memory; the sampler performs no database writes. Hiding every stat or opening Settings stops sampling.
+Settings (enabled state, interval, visible stats, zoom) persist in the desktop SQLite database. Samples and chart history remain in memory; the sampler performs no database writes. Hiding every stat stops sampling; opening Settings preserves existing streams.
