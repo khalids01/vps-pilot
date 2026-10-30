@@ -1,0 +1,2 @@
+# Keep formatter and Rust checks consistent on Linux, macOS, and Windows.
+* text=auto eol=lf
