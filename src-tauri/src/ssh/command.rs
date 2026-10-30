@@ -140,8 +140,10 @@ mod tests {
     #[test]
     fn imports_connection_arguments_and_quoted_identity_paths() {
         let home = tempfile::tempdir().unwrap();
+        let key_path = home.path().join("keys/my key");
+        let key_path = key_path.to_string_lossy().replace('\\', "/");
         let result = parse(
-            "ssh -i '/home/test/keys/my key' deploy@example.com -p2222",
+            &format!("ssh -i '{key_path}' deploy@example.com -p2222"),
             home.path(),
             "local",
         )
@@ -149,10 +151,7 @@ mod tests {
         assert_eq!(result.host, "example.com");
         assert_eq!(result.username, "deploy");
         assert_eq!(result.port, 2222);
-        assert_eq!(
-            result.identity_file.as_deref(),
-            Some("/home/test/keys/my key")
-        );
+        assert_eq!(result.identity_file.as_deref(), Some(key_path.as_str()));
         let ipv6 = parse("ssh ssh://root@[::1]:2200", home.path(), "local").unwrap();
         assert_eq!(ipv6.host, "::1");
         assert_eq!(ipv6.port, 2200);

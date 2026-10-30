@@ -166,7 +166,7 @@ mod tests {
     }
     #[test]
     fn named_aliases_inherit_defaults_and_never_read_identity_files() {
-        let home = fixture("Host prod duplicate\n HostName example.com\n User deploy\n Port 2222\n IdentityFile /does/not/exist\nHost prod\n User ignored\nHost * !excluded\n User fallback\nHost dev\n HostName dev.example.com\n");
+        let home = fixture("Host prod duplicate\n HostName example.com\n User deploy\n Port 2222\n IdentityFile ~/.ssh/nonexistent-identity\nHost prod\n User ignored\nHost * !excluded\n User fallback\nHost dev\n HostName dev.example.com\n");
         let entries = read_hosts(home.path(), "local-user").unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].alias, "prod");
@@ -174,6 +174,11 @@ mod tests {
         assert_eq!(entries[0].port, 2222);
         assert_eq!(entries[0].username, "deploy");
         assert!(entries[0].blocked_reason.is_none());
+        assert!(!home.path().join(".ssh/nonexistent-identity").exists());
+        assert!(entries[0]
+            .identity_file
+            .as_deref()
+            .is_some_and(|path| path.ends_with("nonexistent-identity")));
         assert_eq!(entries[2].username, "fallback");
     }
     #[test]
