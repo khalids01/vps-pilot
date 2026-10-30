@@ -6,7 +6,7 @@ import {
   type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from "dockview-react";
-import { Columns2, Maximize2, Pencil, Plus, Rows2, X } from "lucide-react";
+import { Columns2, Pencil, Plus, Rows2, X } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,7 @@ import {
   sanitizeLayout,
 } from "@/features/terminal/layout";
 import { terminalColors } from "@/features/terminal/sample-panel";
+import { TerminalView } from "@/features/terminal/terminal-view";
 import { type ServerProfile, safeError } from "./api";
 import { streamApi } from "./streams";
 import "dockview-react/dist/styles/dockview.css";
@@ -290,11 +291,8 @@ export function RemoteTerminal({
     setCount(api.panels.length);
   }
   return (
-    <section
-      className="flex min-h-[32rem] flex-1 flex-col gap-3"
-      aria-label={`${profile.name} live terminals`}
-    >
-      <div className="flex flex-wrap gap-2">
+    <TerminalView label={`${profile.name} live terminals`}>
+      <div data-terminal-options className="flex shrink-0 flex-wrap gap-2">
         <Button
           size="sm"
           disabled={!connected || count >= 12}
@@ -356,29 +354,20 @@ export function RemoteTerminal({
           size="sm"
           variant="ghost"
           disabled={!count}
-          onClick={() => {
-            if (api?.hasMaximizedGroup()) api.exitMaximizedGroup();
-            else api?.activePanel?.api.maximize();
-          }}
-        >
-          <Maximize2 />
-          Maximize / restore
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!count}
           onClick={() => setClosing(api?.activePanel?.id ?? null)}
         >
           <X />
           Close active session
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p data-terminal-options className="text-xs text-muted-foreground">
         {count}/12 sessions · Drag tabs to group or split. Sessions stay open
         across navigation. Reconnecting requires new sessions.
       </p>
-      <div className="relative min-h-[28rem] flex-1 overflow-hidden rounded-lg border">
+      <div
+        data-terminal-viewport
+        className="relative min-h-[28rem] flex-1 overflow-hidden rounded-lg border"
+      >
         <div className="absolute inset-0">
           <ServerContext.Provider value={{ profile, connected }}>
             <DockviewReact
@@ -496,6 +485,6 @@ export function RemoteTerminal({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </TerminalView>
   );
 }

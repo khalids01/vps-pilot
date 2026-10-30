@@ -52,3 +52,16 @@
 .pilot-terminal-theme .xterm-viewport {
   scrollbar-color: var(--muted) var(--background);
 }
+
+.terminal-options-hidden > [data-terminal-options] {
+  display: none;
+}
+
+.terminal-view-full {
+  min-height: 0;
+}
+
+.terminal-view-full [data-terminal-viewport],
+.terminal-view-full .dv-dockview {
+  min-height: 0;
+}

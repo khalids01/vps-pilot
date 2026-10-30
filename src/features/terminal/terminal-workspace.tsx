@@ -6,8 +6,6 @@ import {
 } from "dockview-react";
 import {
   Columns2,
-  Maximize2,
-  Minimize2,
   Pencil,
   Plus,
   RotateCcw,
@@ -38,6 +36,7 @@ import {
   sanitizeLayout,
 } from "./layout";
 import { SampleTerminalPanel } from "./sample-panel";
+import { TerminalView } from "./terminal-view";
 import "dockview-react/dist/styles/dockview.css";
 import "@xterm/xterm/css/xterm.css";
 import "./terminal.css";
@@ -72,7 +71,6 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
   );
   const [sessionCount, setSessionCount] = useState(0);
   const [activeTitle, setActiveTitle] = useState("");
-  const [maximized, setMaximized] = useState(false);
   const [notice, setNotice] = useState("");
   const [renameOpen, setRenameOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -156,7 +154,6 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
     const update = () => {
       setSessionCount(api.panels.length);
       setActiveTitle(api.activePanel?.title ?? "");
-      setMaximized(api.hasMaximizedGroup());
     };
     const scheduleSave = () => {
       update();
@@ -171,7 +168,6 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
     const subscriptions = [
       api.onDidLayoutChange(scheduleSave),
       api.onDidActivePanelChange(scheduleSave),
-      api.onDidMaximizedGroupChange(update),
     ];
     const flush = () => {
       if (pendingLayout.current) {
@@ -217,11 +213,11 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
     );
 
   return (
-    <section
-      aria-label={`${server.name} terminal workspace`}
-      className="flex min-h-96 flex-1 flex-col gap-3"
-    >
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+    <TerminalView label={`${server.name} terminal workspace`}>
+      <div
+        data-terminal-options
+        className="flex shrink-0 flex-wrap items-center justify-between gap-3"
+      >
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
@@ -265,7 +261,10 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
           Reset layout
         </Button>
       </div>
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b pb-3">
+      <div
+        data-terminal-options
+        className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b pb-3"
+      >
         <p className="text-xs text-muted-foreground">
           <span aria-live="polite">
             {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
@@ -304,26 +303,6 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
             size="icon-xs"
             variant="ghost"
             disabled={!sessionCount}
-            aria-label={
-              maximized ? "Restore terminal panes" : "Maximize active group"
-            }
-            onClick={() => {
-              const api = apiRef.current;
-              if (!api) return;
-              if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
-              else api.activePanel?.api.maximize();
-            }}
-          >
-            {maximized ? (
-              <Minimize2 aria-hidden="true" />
-            ) : (
-              <Maximize2 aria-hidden="true" />
-            )}
-          </Button>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            disabled={!sessionCount}
             aria-label="Close active sample session"
             onClick={() => apiRef.current?.activePanel?.api.close()}
           >
@@ -339,7 +318,10 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
           {notice}
         </p>
       )}
-      <div className="relative min-h-64 flex-1 overflow-hidden rounded-lg border bg-background">
+      <div
+        data-terminal-viewport
+        className="relative min-h-64 flex-1 overflow-hidden rounded-lg border bg-background"
+      >
         <div className="absolute inset-0">
           <DockviewReact
             className="h-full min-h-64"
@@ -363,7 +345,10 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
           />
         </div>
       </div>
-      <p className="shrink-0 text-[11px] leading-relaxed text-muted-foreground">
+      <p
+        data-terminal-options
+        className="shrink-0 text-[11px] leading-relaxed text-muted-foreground"
+      >
         {activeTitle ? `Active: ${activeTitle}. ` : ""}Drag tabs to group or
         split. Layouts save on this device; terminal output is never saved. Up
         to {MAX_SAMPLE_SESSIONS} sample sessions per VPS.
@@ -440,6 +425,6 @@ export function TerminalWorkspace({ server }: { server: SampleServer }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </TerminalView>
   );
 }
