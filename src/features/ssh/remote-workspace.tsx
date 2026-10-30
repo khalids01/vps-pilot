@@ -97,6 +97,9 @@ function RemoteWorkspaceContent({
   const [challengeConsumed, setChallengeConsumed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState("");
   const request = useRef(0);
   const connected = status?.status === "connected";
   const refresh = () =>
@@ -190,14 +193,9 @@ function RemoteWorkspaceContent({
             <Button
               size="sm"
               variant="outline"
-              onClick={async () => {
-                setError("");
-                try {
-                  await sshApi.disconnect(profile.id);
-                  await refresh();
-                } catch (error) {
-                  setError(safeError(error));
-                }
+              onClick={() => {
+                setDisconnectError("");
+                setDisconnectOpen(true);
               }}
             >
               <Unplug />
@@ -308,6 +306,56 @@ function RemoteWorkspaceContent({
           </div>
         </main>
       </div>
+      <Dialog
+        open={disconnectOpen}
+        onOpenChange={(open) => {
+          if (!disconnecting) setDisconnectOpen(open);
+        }}
+      >
+        <DialogContent showCloseButton={!disconnecting}>
+          <DialogHeader>
+            <DialogTitle>Disconnect from {profile.name}?</DialogTitle>
+            <DialogDescription>
+              {address(profile)} · This closes the SSH connection and all its
+              terminal sessions, and interrupts app actions in progress. Remote
+              processes may continue running. Reconnecting requires new terminal
+              sessions.
+            </DialogDescription>
+          </DialogHeader>
+          {disconnectError && (
+            <p role="alert" className="text-sm text-destructive">
+              {disconnectError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={disconnecting}
+              onClick={() => setDisconnectOpen(false)}
+            >
+              Stay connected
+            </Button>
+            <Button
+              disabled={disconnecting}
+              onClick={async () => {
+                setDisconnecting(true);
+                setDisconnectError("");
+                try {
+                  await sshApi.disconnect(profile.id);
+                  setDisconnectOpen(false);
+                  await refresh();
+                } catch (error) {
+                  setDisconnectError(safeError(error));
+                } finally {
+                  setDisconnecting(false);
+                }
+              }}
+            >
+              {disconnecting ? "Disconnecting…" : "Disconnect"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={phase !== null}
         onOpenChange={(open) => {
