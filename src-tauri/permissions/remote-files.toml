@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "remote-files"
+description = "Explicit bounded SFTP over authenticated connections; reviewed protected-path copy/move/trash/restore, backed-up replacement, and native-dialog transfers. No shell, sudo, arbitrary local paths, or service reload."
+commands.allow = ["ssh_files_review_operation", "ssh_files_execute_operation", "ssh_files_reject_operation", "ssh_files_cancel", "ssh_files_size", "ssh_files_list", "ssh_file_read", "ssh_file_review", "ssh_file_commit", "ssh_file_reject", "ssh_file_upload", "ssh_file_download"]

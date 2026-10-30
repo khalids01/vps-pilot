@@ -16,6 +16,7 @@ import { useFleet } from "./fleet-store";
 const tools: Record<ToolId, string> = {
   overview: "Overview",
   terminal: "Terminal",
+  files: "Files",
   software: "Software",
   docker: "Docker",
   proxy: "Proxy",

@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   Container,
+  Folder,
   HardDrive,
   House,
   LayoutDashboard,
@@ -69,6 +70,13 @@ const TerminalWorkspace = lazy(() =>
 );
 
 const tools = [
+  {
+    id: "files",
+    label: "Files",
+    icon: Folder,
+    description:
+      "Remote file browsing, transfers, and reviewed text edits over SFTP.",
+  },
   {
     id: "overview",
     label: "Overview",
@@ -816,8 +824,8 @@ function WorkspaceContent() {
             </DialogTitle>
             <DialogDescription>
               This ends any active SSH connection or pending attempt for this
-              VPS. Its saved profile is kept. Other server connections are
-              preserved.
+              VPS and discards its unsaved file edits. Its saved profile is
+              kept. Other server connections are preserved.
             </DialogDescription>
           </DialogHeader>
           {closeError && (

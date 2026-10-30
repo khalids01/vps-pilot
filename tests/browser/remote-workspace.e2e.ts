@@ -25,10 +25,20 @@ test.beforeEach(async ({ page }) => {
     if (!localStorage.getItem("vps-pilot:sample-workspace:v1")) localStorage.setItem("vps-pilot:sample-workspace:v1", JSON.stringify({ version: 1, openServerIds: [`remote:${first}`, `remote:${second}`], activeServerId: `remote:${first}`, servers: {} }));
     const calls: { cmd: string; profileId?: string; intervalSeconds?: number }[] = [];
     const streams = new Map<string, { output: { onmessage: (value: unknown) => void }; sequence: number; timer?: ReturnType<typeof setInterval>; pending?: boolean }>();
+    const remoteFiles=new Map(profiles.flatMap(profile=>[
+      [`${profile.id}:/home/tester/app.yaml`,{content:"port: 3000\r\n",revision:"1"}],
+      [`${profile.id}:/home/tester/notes.txt`,{content:"fixture notes\n",revision:"1"}],
+    ]));
+    const fileReviews=new Map<string,any>();
+    const directories=new Set(profiles.flatMap(p=>["/home/tester/assets","/home/tester/.config"].map(path=>p.id+":"+path)));
+    for(const p of profiles)remoteFiles.set(p.id+":/home/tester/.env",{content:"fixture-only",revision:"1"});
+    const operationReviews=new Map<string,any>();
+    let pendingOperation:((value:any)=>void)|null=null;
     let next = 0;
     Object.assign(window, {
       isTauri: true,
       __calls: calls,
+      __fixtureRemoteFiles:remoteFiles,
       __TAURI_INTERNALS__: {
         transformCallback: () => ++next,
         unregisterCallback: () => {},
@@ -57,6 +67,68 @@ test.beforeEach(async ({ page }) => {
             (window as any).__appliedZoom = args.zoomPercent;
             return;
           }
+          if(cmd==="ssh_files_list"){
+            const path=args.path;
+            const meta=(path:string,kind:string,size=14)=>({name:path.split("/").pop(),path,kind,size,permissions:kind==="directory"?16877:33184,modified:1700000000,uid:1000,gid:1000});
+            const children=(key:string)=>key.startsWith(args.profileId+":"+path+(path==="/"?"":"/"))&&key.slice(args.profileId.length+1).split("/").slice(0,-1).join("/")===path;
+            const entries=path==="/"?[meta("/home","directory"),meta("/etc","directory")]:path==="/home"?[meta("/home/tester","directory")]:[
+              ...[...directories].filter(children).map(key=>meta(key.slice(args.profileId.length+1),"directory")),
+              ...[...remoteFiles.keys()].filter(children).map(key=>meta(key.slice(args.profileId.length+1),"file")),
+              ...(path==="/home/tester"?[meta("/home/tester/link.yaml","symlink")]:[])
+            ];
+            return {path,parent:path==="/"?null:path.split("/").slice(0,-1).join("/")||"/",truncated:false,entries};
+          }
+          if(cmd==="ssh_files_size")return {path:args.path,bytes:1024,entries:3,complete:true,observedAt:1700000000};
+          if(cmd==="ssh_files_review_operation"){
+            const input=args.input,token=crypto.randomUUID();
+            const items=input.kind==="mkdir"?[{source:"",destination:input.destination+"/"+input.name,kind:"directory"}]:input.paths.map((path:string)=>({source:path,destination:["copy","move"].includes(input.kind)?input.destination+"/"+(input.name??path.split("/").pop())+(input.kind==="copy"?" copy":""):input.kind==="trash"?"/home/tester/.vps-pilot-trash-fixture/original":null,kind:"file"}));
+            const review={token,profileId:args.profileId,serverName:"Fixture Alpha",operation:input.kind,items,entries:items.length,bytes:14,expiresInSeconds:120,excludedEntries:0,localDestination:input.kind==="download"?"/fixture/download.zip":null};
+            operationReviews.set(token,review);return review;
+          }
+          if(cmd==="ssh_files_reject_operation"){operationReviews.delete(args.token);return;}
+          if(cmd==="ssh_files_execute_operation"){
+            const plan=operationReviews.get(args.token);operationReviews.delete(args.token);
+            if(!plan)throw "Review expired.";
+            if((window as any).__holdFileOperation){
+              args.output.onmessage({completed:0,total:plan.items.length,bytes:0,current:plan.items[0].source});
+              return new Promise(resolve=>{pendingOperation=resolve;});
+            }
+            const completed=plan.items.map((item:any)=>{
+              const key=args.profileId+":"+item.source,data=remoteFiles.get(key);
+              if(plan.operation==="copy"&&data)remoteFiles.set(args.profileId+":"+item.destination,{...data});
+              if(plan.operation==="move"&&data){remoteFiles.delete(key);remoteFiles.set(args.profileId+":"+item.destination,{...data});}
+              if(plan.operation==="mkdir")directories.add(args.profileId+":"+item.destination);
+              if(plan.operation==="trash")remoteFiles.delete(key);
+              return {...item,restoreId:plan.operation==="trash"?crypto.randomUUID():null};
+            });return {status:"completed",completed,retained:[],error:null};
+          }
+          if(cmd==="ssh_files_cancel"){if(pendingOperation){pendingOperation({status:"cancelled",completed:[],retained:[],error:"File operation cancelled."});pendingOperation=null;return true;}return false;}
+          if(cmd==="ssh_file_read") {
+            const file=remoteFiles.get(`${args.profileId}:${args.path}`);
+            if(!file)throw "Remote file does not exist.";
+            return {path:args.path,...file,size:file.content.length,permissions:33184};
+          }
+          if(cmd==="ssh_file_review" || cmd==="ssh_file_upload") {
+            if((window as any).__remoteFileChanged)throw "The file changed since it was opened. Reload it and review your changes again.";
+            if(cmd==="ssh_file_upload" && (window as any).__uploadCancelled)return null;
+            const path=cmd==="ssh_file_upload"?"/home/tester/upload.txt":args.path;
+            const current=remoteFiles.get(`${args.profileId}:${path}`);
+            const token=crypto.randomUUID();
+            const result={token,profileId:args.profileId,serverName:profiles.find(profile=>profile.id===args.profileId)?.name,path,backupPath:current?"/home/tester/.vps-pilot-backup-fixture":null,operation:cmd==="ssh_file_upload"?"upload":"edit",bytes:cmd==="ssh_file_upload"?15:new TextEncoder().encode(args.content).length,expiresInSeconds:120};
+            fileReviews.set(token,{...result,content:cmd==="ssh_file_upload"?"uploaded fixture":args.content,revision:current?.revision});
+            return result;
+          }
+          if(cmd==="ssh_file_commit") {
+            const review=fileReviews.get(args.token);
+            fileReviews.delete(args.token);
+            if(!review || review.profileId!==args.profileId)throw "File review unavailable.";
+            if((window as any).__fileSaveFailure)throw "The destination changed after review. No replacement was made.";
+            const revision=String(Number(review.revision??"0")+1);
+            remoteFiles.set(`${args.profileId}:${review.path}`,{content:review.content,revision});
+            return {path:review.path,backupPath:review.backupPath,revision};
+          }
+          if(cmd==="ssh_file_reject"){fileReviews.delete(args.token);return;}
+          if(cmd==="ssh_file_download")return true;
           if (cmd === "ssh_profiles") return profiles;
           if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, status: "connected", error: null }));
           if (cmd === "ssh_config_hosts") return [];
@@ -521,4 +593,239 @@ test("command palette opens an unopened server tool by keyboard without remote e
   await expect(page.getByRole("main",{name:"Server fleet"})).toBeVisible();
   await page.setViewportSize({width:430,height:900});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test("Files loads root automatically and preserves a reviewed CRLF draft through navigation without storing contents",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Files",exact:true}).click();
+  const files=page.getByRole("region",{name:"Fixture Alpha files"});
+  await expect(files.getByRole("heading",{name:"Files",exact:true})).toBeVisible();
+  await expect(files.getByRole("button",{name:"home",exact:true})).toBeVisible();
+  await files.getByRole("button",{name:"Edit folder path"}).click();
+  await files.getByRole("textbox",{name:"Remote folder path"}).fill("/home/tester");
+  await files.getByRole("button",{name:"Go",exact:true}).click();
+  await files.getByRole("button",{name:"app.yaml",exact:true}).click();
+  const editor=files.getByRole("textbox",{name:"Remote file editor",exact:true});
+  await expect(editor).toContainText("port: 3000");
+  await expect(files).toContainText("Matches last opened/saved version");
+  await editor.fill("port: 4000");
+  await expect(files).toContainText("Unsaved changes");
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
+  await expect(editor).toContainText("port: 4000");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_file_read").length)).toBe(1);
+  await files.getByRole("button",{name:"notes.txt",exact:true}).click();
+  await page.getByRole("dialog",{name:"Discard unsaved changes?",exact:true}).getByRole("button",{name:"Keep editing",exact:true}).click();
+  await expect(editor).toContainText("port: 4000");
+  await editor.focus();
+  await page.keyboard.press("Control+s");
+  const review=page.getByRole("dialog",{name:"Review file changes",exact:true});
+  await expect(review).toContainText("Fixture Alpha");
+  await expect(review).toContainText("/home/tester/.vps-pilot-backup-fixture");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_file_commit").length)).toBe(0);
+  await page.screenshot({path:testInfo.outputPath("file-change-preview.png")});
+  await review.getByRole("button",{name:"Cancel",exact:true}).click();
+  await files.getByRole("button",{name:"Review changes",exact:true}).click();
+  await review.getByRole("button",{name:"Back up and save",exact:true}).click();
+  await expect(files).toContainText("Matches last opened/saved version");
+  await expect(files).toContainText("Saved. Backup:");
+  expect(await page.evaluate(first=>(window as any).__fixtureRemoteFiles.get(`${first}:/home/tester/app.yaml`).content,first)).toBe("port: 4000");
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("port: 4000");
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  await expect(page.getByRole("region",{name:"Fixture Alpha command console"})).not.toContainText("port: 4000");
+});
+
+test("Files reports stale/save failures, retains drafts and never automatically retries a write",async({page})=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Files",exact:true}).click();
+  const files=page.getByRole("region",{name:"Fixture Alpha files"});
+  await files.getByRole("button",{name:"Edit folder path"}).click();
+  await files.getByRole("textbox",{name:"Remote folder path"}).fill("/home/tester");
+  await files.getByRole("button",{name:"Go",exact:true}).click();
+  await files.getByRole("button",{name:"app.yaml",exact:true}).click();
+  const editor=files.getByRole("textbox",{name:"Remote file editor"});
+  await editor.fill("keep this unsaved draft");
+  await page.evaluate(()=>{(window as any).__remoteFileChanged=true;});
+  await files.getByRole("button",{name:"Review changes",exact:true}).click();
+  await expect(files.getByRole("alert")).toContainText("changed since it was opened");
+  await expect(editor).toContainText("keep this unsaved draft");
+  await page.evaluate(()=>{(window as any).__remoteFileChanged=false;(window as any).__fileSaveFailure=true;});
+  await files.getByRole("button",{name:"Review changes",exact:true}).click();
+  await page.getByRole("dialog",{name:"Review file changes"}).getByRole("button",{name:"Back up and save",exact:true}).click();
+  await expect(files.getByRole("alert")).toContainText("destination changed after review");
+  await expect(editor).toContainText("keep this unsaved draft");
+  await page.clock.fastForward(5100);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_file_commit").length)).toBe(1);
+  expect(await page.evaluate(first=>(window as any).__fixtureRemoteFiles.get(`${first}:/home/tester/app.yaml`).content,first)).toBe("port: 3000\r\n");
+});
+
+test("Files transfers require upload review and buffers stay isolated between open VPS tabs",async({page},testInfo)=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Files",exact:true}).click();
+  const alpha=page.getByRole("region",{name:"Fixture Alpha files"});
+  await alpha.getByRole("button",{name:"Edit folder path"}).click();
+  await alpha.getByRole("textbox",{name:"Remote folder path"}).fill("/home/tester");
+  await alpha.getByRole("button",{name:"Go",exact:true}).click();
+  await alpha.getByRole("button",{name:"Upload",exact:true}).click();
+  const upload=page.getByRole("dialog",{name:"Review file upload",exact:true});
+  await expect(upload).toContainText("/home/tester/upload.txt");
+  await upload.getByRole("button",{name:"Cancel",exact:true}).click();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_file_commit").length)).toBe(0);
+  await alpha.getByRole("button",{name:"Upload",exact:true}).click();
+  await upload.getByRole("button",{name:"Confirm upload",exact:true}).click();
+  await expect(alpha).toContainText("Uploaded new file.");
+  await alpha.getByRole("button",{name:"app.yaml",exact:true}).click({button:"right"});
+  await page.getByRole("menuitem",{name:"Download",exact:true}).click();
+  await expect(alpha).toContainText("Downloaded to your chosen location.");
+  await alpha.getByRole("button",{name:"app.yaml",exact:true}).click();
+  await alpha.getByRole("textbox",{name:"Remote file editor"}).fill("alpha-only draft");
+  await page.keyboard.press("Control+k");
+  await page.getByRole("combobox",{name:"Search servers and tools"}).fill("Beta files");
+  await page.keyboard.press("Enter");
+  const beta=page.getByRole("region",{name:"Fixture Beta files"});
+  await beta.getByRole("button",{name:"Edit folder path"}).click();
+  await beta.getByRole("textbox",{name:"Remote folder path"}).fill("/home/tester");
+  await beta.getByRole("button",{name:"Go",exact:true}).click();
+  await beta.getByRole("button",{name:"app.yaml",exact:true}).click();
+  await expect(beta.getByRole("textbox",{name:"Remote file editor"})).toContainText("port: 3000");
+  await page.getByRole("tab",{name:/Fixture Alpha/}).click();
+  await expect(alpha.getByRole("textbox",{name:"Remote file editor"})).toContainText("alpha-only draft");
+  await page.screenshot({path:testInfo.outputPath("remote-files.png")});
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("alpha-only draft");
+});
+
+async function openFileManager(page:import("@playwright/test").Page){
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Files",exact:true}).click();
+  const files=page.getByRole("region",{name:"Fixture Alpha files"});
+  await expect(files.getByRole("button",{name:"home",exact:true})).toBeVisible();
+  await files.getByRole("button",{name:"Edit folder path"}).click();
+  await files.getByRole("textbox",{name:"Remote folder path"}).fill("/home/tester");
+  await files.getByRole("button",{name:"Go",exact:true}).click();
+  await expect(files.getByRole("button",{name:"app.yaml",exact:true})).toBeVisible();
+  return files;
+}
+test("File manager loads hidden items, preserves listings and requests folder sizes only explicitly",async({page})=>{
+  const files=await openFileManager(page);
+  await expect(files.getByRole("button",{name:".env",exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_files_size").length)).toBe(0);
+  await expect(files.getByRole("button",{name:"Calculate",exact:true})).toHaveCount(0);
+  await files.getByRole("button",{name:"assets",exact:true}).click({button:"right"});
+  await page.getByRole("menuitem",{name:"View details",exact:true}).click();
+  await files.getByRole("complementary",{name:"File details"}).getByRole("button",{name:"Calculate size",exact:true}).click();
+  await expect(files).toContainText("1 KiB");
+  const count=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_files_list").length);
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
+  await expect(files.getByRole("button",{name:".env",exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_files_list").length)).toBe(count);
+  await files.getByRole("button",{name:"View options",exact:true}).click();
+  await page.getByRole("menuitem",{name:"Hide hidden files",exact:true}).click();
+  await expect(files.getByRole("button",{name:".env",exact:true})).toHaveCount(0);
+});
+test("File manager clipboard and folder creation require review, and delete offers restore",async({page})=>{
+  const files=await openFileManager(page);
+  await files.getByRole("checkbox",{name:"Select app.yaml",exact:true}).check();
+  await files.getByRole("button",{name:"notes.txt",exact:true}).click({modifiers:["Control"]});
+  await expect(files).toContainText("2 selected");
+  await files.getByRole("button",{name:"Copy",exact:true}).click();
+  await files.getByRole("button",{name:"File actions",exact:true}).click();
+  await page.getByRole("menuitem",{name:"Paste",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Confirm copy",exact:true});
+  await expect(review).toContainText("app.yaml");
+  await review.getByRole("button",{name:"Cancel",exact:true}).click();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_files_execute_operation").length)).toBe(0);
+  await files.getByRole("button",{name:"File actions",exact:true}).click();
+  await page.getByRole("menuitem",{name:"Paste",exact:true}).click();
+  await review.getByRole("button",{name:"Confirm copy",exact:true}).click();
+  await expect(files.getByRole("button",{name:"app.yaml copy",exact:true})).toBeVisible();
+  await files.getByRole("button",{name:"New folder",exact:true}).click();
+  await page.getByRole("dialog",{name:"New folder",exact:true}).getByRole("textbox",{name:"Item name"}).fill("release-files");
+  await page.getByRole("button",{name:"Review operation",exact:true}).click();
+  await page.getByRole("dialog",{name:"Confirm create folder",exact:true}).getByRole("button",{name:"Confirm create folder",exact:true}).click();
+  await expect(files.getByRole("button",{name:"release-files",exact:true})).toBeVisible();
+  await files.getByRole("checkbox",{name:"Select notes.txt",exact:true}).check();
+  await files.getByRole("button",{name:"Move to trash",exact:true}).click();
+  const trash=page.getByRole("dialog",{name:"Confirm delete to trash",exact:true});
+  await expect(trash).toContainText("private server trash");
+  await trash.getByRole("button",{name:"Confirm delete to trash",exact:true}).click();
+  await expect(files.getByRole("button",{name:"notes.txt",exact:true})).toHaveCount(0);
+  await expect(files.getByRole("button",{name:"Restore deleted items",exact:true})).toBeEnabled();
+});
+test("File manager rectangle and range selection work and protected roots cannot be deleted",async({page},testInfo)=>{
+  const files=await openFileManager(page);
+  await files.getByRole("button",{name:"Grid view",exact:true}).click();
+  const grid=files.getByRole("grid",{name:"Remote files"});
+  await grid.scrollIntoViewIfNeeded();
+  const bounds=(await grid.boundingBox())!;
+  const rows=grid.locator("[data-file-path]");
+  const firstBox=(await rows.nth(0).boundingBox())!;
+  const secondBox=(await rows.nth(1).boundingBox())!;
+  await page.mouse.move(bounds.x+3,bounds.y+bounds.height-8);
+  await page.mouse.down();
+  await page.mouse.move(secondBox.x+secondBox.width-3,firstBox.y+3,{steps:10});
+  await expect(files.getByTestId("file-selection-rectangle")).toBeVisible();
+  await page.mouse.up();
+  await expect(grid.locator('[aria-selected="true"]')).toHaveCount(2);
+  await rows.nth(0).click({modifiers:["Control"]});
+  await rows.nth(2).click({modifiers:["Shift"]});
+  await expect(grid.locator('[aria-selected="true"]')).toHaveCount(3);
+  await page.screenshot({path:testInfo.outputPath("file-manager-grid.png")});
+  await files.getByRole("button",{name:"Root /",exact:true}).click();
+  await files.getByRole("button",{name:"etc",exact:true}).click({button:"right"});
+  await expect(page.getByRole("menuitem",{name:"Move to trash",exact:true})).toBeDisabled();
+  await expect(page.getByRole("menuitem",{name:"Cut",exact:true})).toBeDisabled();
+});
+test("File manager cancellation stops a running batch without disconnecting a VPS",async({page})=>{
+  const files=await openFileManager(page);
+  await files.getByRole("checkbox",{name:"Select app.yaml",exact:true}).check();
+  await files.getByRole("checkbox",{name:"Select notes.txt",exact:true}).check();
+  await files.getByRole("button",{name:"File actions",exact:true}).click();
+  await page.getByRole("menuitem",{name:"Download ZIP",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Confirm download zip",exact:true});
+  await expect(review).toContainText("/fixture/download.zip");
+  await page.evaluate(()=>{(window as any).__holdFileOperation=true;});
+  await review.getByRole("button",{name:"Confirm download zip",exact:true}).click();
+  await files.getByRole("button",{name:"Cancel operation",exact:true}).click();
+  await expect(files).toContainText("Operation cancelled");
+  await expect(files.getByRole("button",{name:"app.yaml",exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_disconnect").length)).toBe(0);
+});
+
+test("File manager context menus preserve selected items and distinguish background actions",async({page},testInfo)=>{
+  const files=await openFileManager(page);
+  await files.getByRole("checkbox",{name:"Select app.yaml",exact:true}).check();
+  await files.getByRole("checkbox",{name:"Select notes.txt",exact:true}).check();
+  await files.getByRole("button",{name:"notes.txt",exact:true}).click({button:"right"});
+  await expect(page.getByRole("menuitem",{name:"Download ZIP",exact:true})).toBeVisible();
+  await expect(page.getByRole("menuitem",{name:"View details",exact:true})).toBeDisabled();
+  await expect(page.locator('[aria-label="Remote files"] [aria-selected="true"]')).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await files.getByRole("button",{name:".env",exact:true}).click({button:"right"});
+  await expect(page.locator('[aria-label="Remote files"] [aria-selected="true"]')).toHaveCount(1);
+  await page.getByRole("menuitem",{name:"View details",exact:true}).click();
+  await expect(files.getByRole("complementary",{name:"File details"})).toContainText("/home/tester/.env");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_file_read").length)).toBe(0);
+  await files.getByRole("grid").click({button:"right",position:{x:5,y:5}});
+  await expect(page.getByRole("menuitem",{name:"New folder",exact:true})).toBeVisible();
+  await expect(page.getByRole("menuitem",{name:"View details",exact:true})).toHaveCount(0);
+  await expect(page.locator('[aria-label="Remote files"] [aria-selected="true"]')).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath("file-manager-context.png")});
+});
+test("File manager single-click opening and overflow details preserve drafts on narrow screens",async({page},testInfo)=>{
+  const files=await openFileManager(page);
+  await files.getByRole("button",{name:"app.yaml",exact:true}).click();
+  const editor=files.getByRole("textbox",{name:"Remote file editor",exact:true});
+  await editor.fill("preserve this draft");
+  await files.getByRole("checkbox",{name:"Select notes.txt",exact:true}).check();
+  await files.getByRole("button",{name:"File actions",exact:true}).click();
+  await page.getByRole("menuitem",{name:"View details",exact:true}).click();
+  await expect(editor).not.toBeVisible();
+  await expect(files.getByRole("complementary",{name:"File details"})).toContainText("/home/tester/notes.txt");
+  await page.setViewportSize({width:720,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("file-manager-details.png")});
+  await files.getByRole("button",{name:"Close file details",exact:true}).click();
+  await expect(editor).toContainText("preserve this draft");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_file_read").length)).toBe(1);
+  await files.getByRole("button",{name:"assets",exact:true}).click();
+  await expect(files.getByRole("grid")).toContainText("This folder is empty");
+  await expect(editor).toContainText("preserve this draft");
 });

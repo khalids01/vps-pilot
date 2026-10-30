@@ -20,4 +20,4 @@ podman run --detach --name "$fixture_name" --label org.vps-pilot.fixture=true --
 podman cp "$fixture_dir/id_ed25519.pub" "$fixture_name:/root/.ssh/authorized_keys" >/dev/null
 podman exec "$fixture_name" chmod 600 /root/.ssh/authorized_keys
 fixture_fingerprint=$(podman exec "$fixture_name" ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256 | awk '{print $2}')
-VPS_PILOT_OPENSSH_FIXTURE_PORT="$fixture_port" VPS_PILOT_OPENSSH_FIXTURE_IDENTITY="$fixture_dir/id_ed25519" VPS_PILOT_OPENSSH_FIXTURE_FINGERPRINT="$fixture_fingerprint" cargo test --manifest-path src-tauri/Cargo.toml --lib --locked disposable_openssh -- --ignored
+VPS_PILOT_OPENSSH_FIXTURE_PORT="$fixture_port" VPS_PILOT_OPENSSH_FIXTURE_IDENTITY="$fixture_dir/id_ed25519" VPS_PILOT_OPENSSH_FIXTURE_FINGERPRINT="$fixture_fingerprint" cargo test --manifest-path src-tauri/Cargo.toml --lib --locked "${1:-disposable_openssh}" -- --ignored

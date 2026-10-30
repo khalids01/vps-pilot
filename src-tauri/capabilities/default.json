@@ -10,6 +10,7 @@
     "dialog:allow-open",
     "ssh-connection",
     "local-data",
+    "remote-files",
     "updater:default",
     "process:allow-restart"
   ],

@@ -652,3 +652,95 @@ pass. Regression coverage verifies two simultaneous samplers retain their
 identities through navigation, fleet timestamps/charts continue advancing,
 terminal sessions are preserved, window pause is bounded, and closing one VPS
 does not stop another. No production VPS used.
+
+## Files increment — 2026-10-31
+
+1. Add maintained SFTP support on existing authenticated channels, bounded
+   directory/text reads and metadata, no shell interpolation or recursive scans.
+2. Add a Files workspace with explicit folder loading/navigation, filtering,
+   file metadata and downloads/uploads through native file dialogs.
+3. Add a themed text editor and readable change preview. Keep buffers in memory
+   across Home/tool/VPS navigation. Guard unsaved-file replacement.
+4. Bind save reviews to server connection/path/original revision and content.
+   Validate stale data, preserve permissions, keep backups, use atomic rename,
+   reject unsupported or unsafe replacement paths, and report failure honestly.
+5. Test actual listing/transfer/edit/backup/stale-change behavior against an
+   explicitly created disposable SFTP fixture, plus UI regression and existing
+   checks. Production server management mutation gates remain unchanged.
+
+### Completed Files increment — 2026-10-31
+
+- Added a lazy Files workspace and separate native remote-files capability.
+  Existing verified SSH handles carry bounded SFTP operations; browsing is
+  explicit, with no helper, sudo or service reload.
+- Added folder navigation/filtering/metadata, native-dialog uploads/downloads,
+  and CodeMirror text editing with JSON/YAML, search, undo and Ctrl/Cmd+S review.
+  Drafts persist in mounted workspace memory across Home/tools/VPS tabs.
+- Added server/path-bound single-use reviews, unified change previews,
+  fingerprint checks before replacement, owner/mode preservation and atomic
+  existing-file rename. System/SSH/internal paths and special files are protected.
+- Backups and staging use unique mode-700 Git-ignored directories; backup files
+  are mode 600. No contents enter SQLite or activity output. Uncertain saves
+  retain drafts/backup location and never automatically retry.
+- Fixed tool navigation to derive the visible remote tool from persisted state,
+  including palette navigation to tools on already-open VPS tabs.
+- Validation: check/build, 23 frontend tests, strict Clippy and 52 native tests
+  passed (three explicitly gated fixture tests skipped in the default run).
+  Actual disposable OpenSSH tests passed for SFTP and the existing PTY/monitor;
+  the final SFTP test was rerun after private staging/backup changes. All 31
+  browser tests pass. Desktop screenshots were inspected.
+- Limits: UTF-8 text <=1 MiB, transfers <=32 MiB, listing <=1,000 entries.
+  Existing-file replacement requires the OpenSSH atomic-rename extension.
+  ACLs/xattrs/SELinux labels are not copied; special mode bits reject replacement.
+  Native OS picker interaction and alternate SFTP servers still need desktop
+  smoke testing. See files.md. No user VPS was contacted.
+
+## Desktop file manager implementation — 2026-10-31
+
+- Native: shared cancellation for SFTP; bounded tree inspection, folder-size
+  results and connection-bound operation reviews; copy/move/rename/new folder,
+  recoverable trash/restore and batch ZIP downloads with progress.
+- Safety: canonical parent paths; protected system roots/ancestors and credential/
+  data namespaces; no overwrites or symlink recursion; private staging/trash,
+  stale-plan checks, one operation per server, no automatic write retry.
+- UI: root-once loading and breadcrumbs/history, sorting/list/grid/hidden toggle,
+  row and checkbox/range selection, drag rectangle, clipboard/context actions,
+  operation preview, progress/Cancel and session undo for trash.
+- Preserve editor drafts and open sessions; do not persist contents or clipboard.
+  Folder-size totals are explicit bounded scans, not periodic background work.
+- Verify native policy/operation/cancel tests in disposable SFTP fixtures and
+  selection/confirmation/persistence/browser regression; run check/build/Rust.
+
+
+### File manager validation — 2026-10-31
+
+Implemented the native operations and desktop selection/clipboard/review UI above.
+Folder totals remain explicit and bounded; listings and drafts survive navigation.
+Delete uses private retained trash. Rust guards protect system paths, ancestors,
+credentials/data namespaces and mounted storage; Linux mount verification fails
+closed. No shell command, sudo, helper or production VPS test was introduced.
+
+Validation: Biome, production build/TypeScript, 23 frontend unit tests, 54 native
+unit tests (three fixture tests ignored by default), strict all-target Clippy,
+and the rootless OpenSSH SFTP fixture. All 35 browser tests passed, including
+seven Files/file-manager flows plus existing fleet, monitoring, terminal,
+release and updater regressions. Native OS picker interaction and alternate SFTP servers remain
+desktop smoke-test coverage, not claims made by the browser mocks.
+
+
+## Simplified Files UI — 2026-10-31
+
+Implement the authorized compact Serve-style layout, single-click opening,
+selection-only checkboxes/modifiers/rectangle, item/selection/background context
+menus and overflow equivalents, and a metadata/details panel. Keep folder-size
+requests explicit within details. Remove repeated item actions, permission
+columns, the permanent path field and long instruction text. Keep a stable
+selection strip to avoid moving the file surface during rectangle selection.
+Preserve native reviews, protection, cancellations and editor drafts.
+
+Simplified Files validation: Biome and production build/TypeScript passed,
+23 frontend unit tests passed, Rust cargo check passed, and all nine Files
+browser flows passed. Browser checks include selected/background context menus,
+overflow equivalence, single-click opening, details/draft preservation, narrow
+layout, pointer selection, native-review flows and cancellation. Native file
+operation policy and confirmations were retained.

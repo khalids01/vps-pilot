@@ -1,7 +1,7 @@
 # VPS Pilot
 
 A Tauri 2 desktop app using React and TypeScript for verified SSH connections,
-interactive terminal tabs/splits, and read-only Linux inspection. It supports
+interactive terminal tabs/splits, SFTP files and reviewed text editing, and read-only Linux inspection. It supports
 passwords, private keys, encrypted keys, Unix agents, and SSH config discovery.
 Real server workspaces remain separate from clearly labeled sample workspaces.
 
@@ -82,7 +82,7 @@ No saved profile reconnects automatically after an application restart.
 
 ## Real terminals and inspections
 
-The compact server header keeps connection state and read-only mode visible;
+The compact server header keeps connection state and the current action policy visible;
 **Connection details** reveals host, user, port and key metadata. Inspection results
 use resource cards, usage bars, and searchable/sortable tables with pagination.
 Permission failures and incomplete results are shown beside the affected section.
@@ -155,7 +155,7 @@ affects only the selected VPS. Development shows the disconnected state.
 
 TanStack Query and file-based TanStack Router are wired into the app. Zustand is available for future client state. Tailwind 4, shadcn/Base UI, Lucide, and Biome match Disk Vacuum's stack. Global styles copy its exact dark green theme. Shared Button, Input, Select, and Dialog components are ready to use.
 
-See [agents/goal.md](agents/goal.md) for product scope and safeguards. Signing keys, release endpoints and mutating server-management integrations are not configured. The initial generated icon is a placeholder.
+See [agents/goal.md](agents/goal.md) for product scope and safeguards. Release/updater setup is documented above; mutating server-management integrations remain gated. The app uses the user-selected VPS Pilot icon.
 
 ## Landing page and downloads
 
@@ -276,3 +276,70 @@ server, project/tag, or tool name, use arrow keys, and press Enter to navigate.
 Escape closes the palette. Choosing a server or tool does not connect it, open a
 shell, or execute an inspection. Existing terminal sessions stay mounted while
 you visit fleet home, Settings, or another server.
+
+
+### Remote Files
+
+Open **Files** in a connected VPS workspace. It loads root once, including hidden
+files. Use breadcrumbs, back/forward/up, or enter an absolute path and select
+**Go**. Listings stay open across Home/tools/VPS tabs and are capped at 1,000
+entries. Choose list/grid view, filter, or sort by name, size or modified time.
+Folder totals are calculated only when requested; cached totals show their
+observation time and whether the scan was incomplete.
+
+Click to open; checkboxes and Ctrl/Cmd-click select, Shift selects a range, and dragging empty
+space draws a selection rectangle. Copy/Cut/Paste also support Ctrl/Cmd+C/X/V.
+Move, rename, folder creation, paste and Delete require a server/path review.
+Existing destinations are never overwritten by these operations. **Delete moves
+to private server trash**, with a restore action for the latest result during
+the same SSH session. Trash retains disk space and is never automatically purged;
+copies remain at the reported paths after disconnecting.
+
+**Cancel operation** stops remaining work after the current bounded SFTP request;
+completed changes remain. Failed copies may retain a private stage, reported in
+the result. There is no automatic retry. System directories and their ancestors,
+login/credential paths, known database/container storage, and internal backup/
+staging/trash paths are protected by Rust. Moving/deleting mounted storage or a
+folder containing a mount point is blocked, using read-only Linux mount data.
+
+Single-click or press Enter to open a regular UTF-8 text file (up to 1 MiB) in the themed CodeMirror editor.
+JSON/YAML highlighting, line numbers, search and undo are available. Drafts stay
+in memory across tools, Home and VPS tabs. Changing/closing a dirty file asks
+before discarding. Save before closing the app; drafts are never stored in SQLite
+or command history.
+
+**Review changes** (or Ctrl/Cmd+S in the editor) shows the exact target and a diff before **Back up and save**.
+Native reviews expire after two minutes and are bound to the server connection,
+file revision and proposed bytes. Files are checked again before replacement.
+Existing owner/mode are preserved; ACLs, extended attributes and special mode bits
+are not supported for replacement. Editing does not validate app configuration or
+reload a service. System directories, SSH credentials and internal backups are
+protected from app writes.
+
+Backups are named in the review and success message, in a private adjacent
+`.vps-pilot-backup-<name>-<id>/original` file. The folder is mode 700 and
+Git-ignored; its original copy is mode 600. Staging also uses private Git-ignored
+folders. Failed/interrupted operations can retain a backup or staging folder;
+verify the destination before retrying. No backup is silently pruned.
+
+**Upload** selects a local file through the native file picker and requires a
+destination review; existing files get the same backup/stale checks. **Download**
+uses a native save dialog. **Download ZIP** supports selected files/folders, up
+to 100 roots, 10,000 entries and 256 MiB per batch; individual files are limited
+to 32 MiB. ZIP archives skip symlinks and reject special devices. Recursive copy
+preserves symlinks without following them, ordinary permission bits, and excludes
+private backup/staging/trash subtrees. Copies use the SSH user's ownership and
+do not preserve ACLs/xattrs. Folder scans have a 20-second budget. Directory paths
+are canonicalized. Existing-file replacement requires OpenSSH's atomic rename
+extension. SFTP runs as your authenticated SSH user without sudo or a helper.
+See [Files implementation notes](agents/files.md).
+
+
+Files uses compact breadcrumbs (Edit folder path reveals the address input),
+search and list/grid controls. Right-click an item for Open, Download, Copy,
+Cut, Rename, Move, View details or Move to trash; right-click empty space for
+folder actions. The overflow menu provides the same actions without right-click.
+Right-clicking a selected item preserves the whole selection. View details
+shows metadata in a side panel; folder sizes are calculated there on request.
+Per-item download/calculation controls and permission columns are hidden.
+Terminal/editor context behavior remains unchanged.

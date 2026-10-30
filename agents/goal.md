@@ -12,7 +12,8 @@ Herdr. See `agents/plan.md` for implemented and outstanding work.
 The user authorized the remaining scope on 2026-10-29 without intermediate
 approval pauses. Their available VPS is important and is **not disposable**.
 Do not use it for installation, firewall, proxy rollback, cleanup, or destructive
-integration tests. Production builds enforce read-only app actions in Rust;
+integration tests. Production builds enforce read-only server-management actions in Rust; reviewed
+SFTP application-file operations use the separate Files policy below;
 interactive terminal commands retain normal user-entered shell behavior.
 Mutating integrations require a separate disposable VM/VPS and their safety gates
 before they can be enabled. Keep real workspaces separate from sample fixtures.
@@ -122,3 +123,47 @@ disconnecting, disabling stats, and whole-window inactivity remain lifecycle
 boundaries; returning after a window pause retains bounded chart history.
 Fleet home may display updated readings from these existing samplers, but must
 never start connections or probes for unopened saved servers.
+
+## Files increment — authorized by “commit and next”, 2026-10-31
+
+Next implement the agreed SFTP file browser and remote text editor. Reuse the
+existing authenticated SSH connection and the server's SFTP subsystem; never
+install helpers, elevate privileges, or open public listeners. Load root once when Files is first opened, as authorized by the subsequent
+file-manager increment; bound directory and file sizes, and retain drafts in memory
+across navigation without saving file contents to SQLite or command history.
+
+File writes/transfers are the user-authorized exception to the production
+read-only inspection milestone: enable them only after real disposable SFTP
+fixture validation. Keep service/firewall/proxy mutation gates unchanged. Require
+an exact server/path change preview, detect stale files, create a protected
+backup before replacing an existing file, and use atomic replacement where the
+server supports it. No destructive filesystem tests on the important user VPS.
+
+## Desktop file manager — authorized 2026-10-31
+
+Upgrade Files with root loading once on first connected opening, visible hidden
+files, list/grid layouts, mouse/keyboard multi-selection and rectangle selection,
+clipboard copy/cut/paste, move/rename, new folders, batch downloads, reviewed
+Delete and cancelable progress. No scans or reconnects on subsequent navigation.
+
+The latest user instruction explicitly forbids writes/deletes that would break
+the system. Native policy must protect system/virtual directories, their
+ancestors, home roots, SSH credentials, database/container storage and internal
+backup/staging/trash namespaces. Resolve parents before policy checks, never
+follow symlinks recursively, and reject dangerous selections before any write.
+Delete should move into private server trash, with session restore, rather than
+permanently unlink user data. Confirmation lists targets and destinations.
+Cancellation stops future work; completed changes remain. Keep operations
+bounded and folder totals on demand with timestamps/partial indicators. No
+production VPS tests.
+
+
+## Simpler Files UX — authorized 2026-10-31
+
+Follow Serve's compact storage-browser pattern: single-click opens, modifiers/
+checkboxes/rectangle select. Consolidate navigation and controls; hide per-item
+download/calculate/mode controls. Add scoped item/selection/background context
+menus and a matching overflow menu. View details opens a side panel, with cached
+metadata and explicit folder-size calculation. Preserve reviews, cancellation,
+native path protections, drafts and open SSH sessions. Do not replace terminal
+or editor context behavior with a global menu.

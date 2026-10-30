@@ -4,6 +4,7 @@ mod catalog;
 mod command;
 mod config;
 pub mod discovery;
+pub mod files;
 pub mod monitor;
 mod services;
 mod store;
@@ -77,8 +78,9 @@ struct Runtime {
     unresolved_changes: HashMap<String, String>,
 }
 pub struct SshService {
-    // Production builds remain read-only until destructive integration gates pass.
+    // Service mutations stay gated; reviewed SFTP application-file writes have a separate policy.
     changes_enabled: bool,
+    files: files::State,
     store: Mutex<Store>,
     runtime: AsyncMutex<Runtime>,
 }
@@ -102,6 +104,7 @@ impl SshService {
     pub fn new(path: PathBuf) -> Self {
         Self {
             changes_enabled: false,
+            files: files::State::default(),
             store: Mutex::new(Store::open(path)),
             runtime: AsyncMutex::new(Runtime {
                 jobs: HashMap::new(),
@@ -462,6 +465,7 @@ impl SshService {
         }
     }
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
+        self.files.invalidate(id);
         let handle = {
             let mut runtime = self.runtime.lock().await;
             runtime.jobs.remove(id);

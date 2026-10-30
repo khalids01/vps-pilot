@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Container,
+  Folder,
   HardDrive,
   LayoutDashboard,
   Network,
@@ -11,7 +12,7 @@ import {
   Unplug,
   Workflow,
 } from "lucide-react";
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { SettingsPage } from "@/features/settings/settings-page";
 import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
@@ -22,6 +23,10 @@ import { LiveMetricsProvider } from "./live-metrics";
 import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
+
+const RemoteFiles = lazy(() =>
+  import("./remote-files").then((module) => ({ default: module.RemoteFiles })),
+);
 
 const RemoteTerminal = lazy(() =>
   import("./remote-terminal").then((module) => ({
@@ -90,6 +95,7 @@ function RemoteWorkspaceContent({
   const labels: Record<ToolId, string> = {
     overview: "Overview",
     terminal: "Terminal",
+    files: "Files",
     software: "Software",
     docker: "Docker",
     proxy: "Proxy",
@@ -100,10 +106,15 @@ function RemoteWorkspaceContent({
     network: "Network",
     processes: "Processes",
   };
-  const [tool, setTool] = useState(labels[selectedTool]);
+  const tool = labels[selectedTool];
+  const [filesOpened, setFilesOpened] = useState(selectedTool === "files");
   const [terminalOpened, setTerminalOpened] = useState(
     selectedTool === "terminal",
   );
+  useEffect(() => {
+    if (selectedTool === "terminal") setTerminalOpened(true);
+    if (selectedTool === "files") setFilesOpened(true);
+  }, [selectedTool]);
   const [phase, setPhase] = useState<
     "inspect" | "identity" | "password" | null
   >(null);
@@ -188,7 +199,7 @@ function RemoteWorkspaceContent({
                   : "Checking…"}
           </span>
           <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
-            Read-only actions
+            {tool === "Files" ? "Reviewed file writes" : "Read-only actions"}
           </span>
         </div>
         <LiveMetricsBar />
@@ -249,6 +260,7 @@ function RemoteWorkspaceContent({
             {[
               { label: "Overview", icon: LayoutDashboard },
               { label: "Terminal", icon: Terminal },
+              { label: "Files", icon: Folder },
               { label: "Software", icon: Package },
               { label: "Docker", icon: Container },
               { label: "Proxy", icon: Network },
@@ -263,7 +275,6 @@ function RemoteWorkspaceContent({
                 key={label}
                 variant="ghost"
                 onClick={() => {
-                  setTool(label);
                   const id = (Object.keys(labels) as ToolId[]).find(
                     (key) => labels[key] === label,
                   );
@@ -302,9 +313,18 @@ function RemoteWorkspaceContent({
                   </Suspense>
                 </div>
               )}
+              {filesOpened && (
+                <div className={tool === "Files" ? "block" : "hidden"}>
+                  <Suspense fallback={<p>Loading files workspace…</p>}>
+                    <RemoteFiles profile={profile} connected={connected} />
+                  </Suspense>
+                </div>
+              )}
               <div
                 className={
-                  tool === "Terminal" || tool === "Server helper"
+                  tool === "Terminal" ||
+                  tool === "Files" ||
+                  tool === "Server helper"
                     ? "hidden"
                     : "block"
                 }

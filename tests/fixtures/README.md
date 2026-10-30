@@ -71,3 +71,19 @@ It measures only the sampler, excluding SSH transport and desktop rendering.
 The OpenSSH test separately verifies real typed samples and remote process exit
 after closing the stream. Browser tests cover sharing, pause, backoff,
 interval changes, tooltips, popover details, and narrow layouts.
+
+### SFTP Files fixture
+
+Run `bash tests/fixtures/run-ssh.sh disposable_openssh_sftp` for just the
+file-operation integration test. It creates a unique folder under the disposable
+container's root home, exercises listing/edit/upload/stale checks and private
+Git-ignored backups, and removes only its own test files. The wrapper destroys
+the labeled container afterward. No production VPS is used.
+
+
+The SFTP fixture also exercises the file-manager operation engine: bounded
+recursive copies, mode/symlink preservation, ZIP downloads with link exclusions,
+single-use/no-overwrite review, cancellation leaving only private partial data,
+trash/restore and rename. Cleanup touches only the test's unique fixture path.
+Linux mount-boundary parsing and protected system/data paths have native unit
+tests. None of these checks may run against an important or production VPS.

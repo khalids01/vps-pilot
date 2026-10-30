@@ -2,6 +2,7 @@
 export const toolIds = [
   "overview",
   "terminal",
+  "files",
   "software",
   "docker",
   "proxy",
