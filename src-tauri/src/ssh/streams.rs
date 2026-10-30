@@ -20,6 +20,10 @@ pub(super) enum Control {
 #[derive(Clone, Serialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StreamEvent {
+    Inspection {
+        id: String,
+        report: structured::Report,
+    },
     Data {
         id: String,
         sequence: u64,

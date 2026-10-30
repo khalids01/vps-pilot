@@ -46,6 +46,7 @@ pub(super) struct PendingApproval {
     plan: ActionPlan,
     pub(super) issued: Instant,
     pub(super) precondition: Option<(String, String)>,
+    output_format: Option<structured::Format>,
 }
 fn unit(value: &str) -> Result<&str, String> {
     if value.len() > 200
@@ -182,6 +183,14 @@ impl SshService {
                 revision: profile.revision,
                 plan: plan.clone(),
                 precondition,
+                output_format: match action {
+                    AppAction::UfwStatus {} => Some(structured::Format::Firewall),
+                    AppAction::DiskScan { .. } => Some(structured::Format::Directory),
+                    AppAction::ServiceLogs { .. } | AppAction::DockerLogs { .. } => {
+                        Some(structured::Format::Logs)
+                    }
+                    _ => None,
+                },
                 issued: Instant::now(),
             },
         );
@@ -232,6 +241,11 @@ impl SshService {
                 return Err("Server state changed since review. Nothing was changed; inspect and review a fresh plan.".into());
             }
         }
+        let sink = if let Some(format) = pending.output_format {
+            structured::wrap(sink, format)
+        } else {
+            sink
+        };
         let id = self
             .start_stream_locked(
                 &mut runtime,

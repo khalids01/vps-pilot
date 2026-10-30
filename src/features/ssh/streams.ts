@@ -1,6 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { InspectionReport } from "./report-types";
 
 export type StreamEvent =
+  | { type: "inspection"; id: string; report: InspectionReport }
   | { type: "data"; id: string; sequence: number; data: number[] }
   | { type: "closed"; id: string; code: number | null; message: string };
 export type InspectionKind =
@@ -14,6 +16,8 @@ export type InspectionKind =
   | "network"
   | "processes";
 export const streamApi = {
+  describe: (kind: InspectionKind) =>
+    invoke<string>("ssh_inspection_describe", { kind }),
   terminal: (
     profileId: string,
     cols: number,

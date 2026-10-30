@@ -7,6 +7,7 @@ pub mod discovery;
 mod services;
 mod store;
 pub mod streams;
+pub mod structured;
 #[cfg(test)]
 mod tests;
 

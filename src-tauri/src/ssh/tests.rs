@@ -743,11 +743,17 @@ fn stream_sink() -> (
 async fn event(
     receiver: &mut tokio::sync::mpsc::UnboundedReceiver<streams::StreamEvent>,
 ) -> streams::StreamEvent {
-    timeout(Duration::from_secs(3), receiver.recv())
-        .await
-        .unwrap()
-        .unwrap()
+    loop {
+        let event = timeout(Duration::from_secs(3), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if !matches!(event, streams::StreamEvent::Inspection { .. }) {
+            return event;
+        }
+    }
 }
+
 #[tokio::test]
 async fn real_pty_channels_resize_isolate_and_close_without_replaying_input() {
     let fixture = Fixture::start(0, None).await;
@@ -1035,6 +1041,9 @@ async fn cached_sudo_still_requires_a_fresh_plan_and_never_receives_a_password()
             .unwrap();
         loop {
             match event(&mut output).await {
+                streams::StreamEvent::Inspection { .. } => {
+                    unreachable!("event helper filters reports")
+                }
                 streams::StreamEvent::Data { sequence, .. } => service
                     .control(&profile.id, &id, streams::Control::Ack(sequence))
                     .await
@@ -1216,6 +1225,7 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         .unwrap();
     loop {
         match event(&mut output).await {
+            streams::StreamEvent::Inspection { .. } => unreachable!("event helper filters reports"),
             streams::StreamEvent::Data { data, sequence, .. } => {
                 text.push_str(&String::from_utf8_lossy(&data));
                 service
@@ -1239,6 +1249,7 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
     let mut text = String::new();
     loop {
         match event(&mut output).await {
+            streams::StreamEvent::Inspection { .. } => unreachable!("event helper filters reports"),
             streams::StreamEvent::Data { data, sequence, .. } => {
                 text.push_str(&String::from_utf8_lossy(&data));
                 service
@@ -1255,6 +1266,25 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
     assert!(text.contains("Debian GNU/Linux 12"));
     assert!(text.contains("=== CPU counters ==="));
     assert!(text.contains("[section failed: exit"));
+    let report = structured::parse(
+        &text,
+        structured::Format::Inspection(discovery::InspectionKind::Overview),
+        Some(1),
+    );
+    assert!(report
+        .overview
+        .as_ref()
+        .unwrap()
+        .memory_total
+        .is_some_and(|bytes| bytes > 0));
+    assert!(report
+        .sections
+        .iter()
+        .any(|section| section.title == "Filesystems" && !section.rows.is_empty()));
+    assert!(report
+        .sections
+        .iter()
+        .any(|section| section.title == "Failed services" && section.state == "unavailable"));
     service.disconnect(&profile.id).await.unwrap();
 }
 

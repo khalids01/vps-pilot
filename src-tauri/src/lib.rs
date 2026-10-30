@@ -27,6 +27,7 @@ pub fn run() {
             ssh::streams::ssh_stream_ack,
             ssh::streams::ssh_stream_close,
             ssh::discovery::ssh_inspection_run,
+            ssh::discovery::ssh_inspection_describe,
             ssh::actions::ssh_action_review,
             ssh::actions::ssh_action_execute,
             ssh::actions::ssh_action_reject,

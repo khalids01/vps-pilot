@@ -499,3 +499,51 @@ The important user VPS may be connected for explicitly requested SSH and read-on
 inspection. It is not an acceptable substitute for disposable destructive test
 fixtures. Do not claim these remaining milestones are complete or enable their
 actions on the strength of mocked tests or read-only preflight output.
+
+## UX refinement — 2026-10-30
+
+The user approved restoring the bottom command console, compacting connection
+context, and replacing terminal-style inspection output with application views.
+
+- Real VPS workspaces now have a persistent expandable bottom console shared by
+  ordinary inspections and reviewed sudo actions. It shows exact commands before
+  dispatch, live bounded output, exit status, duration, cancellation, and recent
+  in-memory history. Monitoring is grouped separately and replaces its previous
+  completed sample. Histories, selected entries and drawer expansion stay scoped
+  to each open server workspace; terminal input and credentials never enter them.
+- A compact connection header keeps the server, address, connection state and
+  read-only mode visible. Host/user/port/key metadata is behind Connection details.
+- Rust produces typed presentation reports from fixed read-only output formats.
+  Overview has measured resource cards and usage bars. Other tools render
+  searchable, sortable, paginated tables for containers, Compose, images, volumes,
+  services, packages, runtime paths, filesystems, mounts, devices, firewall rules,
+  network interfaces/routes/counters/listeners, processes, logs and directory sizes.
+  Raw output lives in the console instead of the main content area.
+- Missing permissions, malformed output, unavailable tools, partial results and
+  confirmed empty results remain distinct. Report capture and displayed rows have
+  bounds. Stopped containers with empty published-port fields are preserved.
+- Explicit Inspect/Refresh and opt-in monitoring behavior is preserved. This UX
+  work does not add automatic initial discovery, enable mutations, or use the
+  user's important VPS as a test fixture.
+- Native parser/stream tests cover the presentation contract, failure states,
+  numeric limits, nested JSON, missing port fields and row bounds. Browser mocks
+  cover all tool views, drawer persistence/isolation, sorting/filtering/pagination,
+  cancel, monitoring grouping, responsive layouts and secret-free persistence.
+  The loopback OpenSSH fixture also validates measured overview parsing against
+  actual Linux output. Native WebKit acceptance remains a separate release check.
+
+### Landing page and release distribution — 2026-10-30
+
+- Added independent static green-themed landing page in website/ with responsive
+  workspace illustration, current-feature descriptions, explicit read-only scope,
+  release-asset downloads, and no-release/offline fallbacks.
+- Added GitHub Pages deployment for website/ and tag-triggered desktop release
+  matrix: Linux x64, Windows x64, macOS ARM64 and Intel. Complete asset validation,
+  version checks, draft staging, and SHA256SUMS precede publication.
+- No custom domain, updater integration, production VPS access, or signing
+  credentials introduced. GitHub-hosted builds require the workflows to be pushed;
+  Pages requires GitHub Actions selected as its repository source.
+- Validation: bun run check/build, 16 frontend tests, cargo fmt/check and
+  43 native tests passed; three landing-page browser tests passed. Actual local
+  DEB (6.50 MiB) and AppImage (87.76 MiB) bundles generated successfully.
+  Windows/macOS packaging and hosted workflows have not run yet.

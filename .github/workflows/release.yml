@@ -1,0 +1,102 @@
+name: Release VPS Pilot
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ""
+            target: ""
+          - platform: windows-latest
+            args: ""
+            target: ""
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev pkg-config
+      - run: bun install --frozen-lockfile
+      - run: bun run scripts/check-release.ts
+      - run: bun run check
+      - run: bun run build
+      - run: bun test
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: VPS Pilot ${{ github.ref_name }}
+          releaseBody: |
+            Early preview of VPS Pilot. App-triggered operations are read-only; interactive SSH terminals run commands with your normal permissions.
+            Windows installers are unsigned. macOS builds use ad-hoc signing and are not notarized.
+            See README.md for supported systems and current limitations.
+          releaseDraft: true
+          prerelease: true
+          uploadUpdaterJson: false
+          args: ${{ matrix.args }}
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const tag = context.ref.replace('refs/tags/', '');
+            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo});
+            const release = releases.find(r => r.tag_name === tag);
+            if (!release) throw new Error('Release draft missing');
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {owner, repo, release_id: release.id});
+            for (const suffix of ['_amd64.deb', '_amd64.AppImage', '.x86_64.rpm', '_x64-setup.exe', '_x64_en-US.msi', '_aarch64.dmg', '_x64.dmg']) {
+              if (!assets.some(a => a.name.endsWith(suffix))) throw new Error('Missing ' + suffix);
+            }
+            const crypto = require('node:crypto');
+            const lines = [];
+            for (const asset of assets.filter(a => a.name !== 'SHA256SUMS.txt')) {
+              const response = await github.request('GET /repos/{owner}/{repo}/releases/assets/{asset_id}', {
+                owner, repo, asset_id: asset.id, headers: {accept: 'application/octet-stream'}
+              });
+              const digest = crypto.createHash('sha256').update(Buffer.from(response.data)).digest('hex');
+              lines.push(digest + '  ' + asset.name);
+            }
+            const previous = assets.find(a => a.name === 'SHA256SUMS.txt');
+            if (previous) await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: previous.id});
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id: release.id, name: 'SHA256SUMS.txt',
+              data: Buffer.from(lines.join('\n') + '\n'),
+              headers: {'content-type': 'text/plain'}
+            });
+            await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, prerelease: false});

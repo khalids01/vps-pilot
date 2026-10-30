@@ -82,6 +82,17 @@ No saved profile reconnects automatically after an application restart.
 
 ## Real terminals and inspections
 
+The compact server header keeps connection state and read-only mode visible;
+**Connection details** reveals host, user, port and key metadata. Inspection results
+use resource cards, usage bars, and searchable/sortable tables with pagination.
+Permission failures and incomplete results are shown beside the affected section.
+
+A persistent **Command console** bar sits at the bottom of every real VPS
+workspace. Expand it for exact commands, streamed raw output, exit status,
+duration and cancellation. Its recent history follows the selected server across
+tools; background monitoring has a separate group. History and output remain in
+memory only and are cleared when the workspace closes or the app restarts.
+
 - Open Terminal on a connected real VPS, then New shell. Add tabs or split
   right/down; drag panels to group them. Rename, previous/next, maximize/restore,
   and confirmed closing are available. Up to 12 SSH streams per VPS are allowed.
@@ -144,3 +155,35 @@ affects only the selected VPS. Development shows the disconnected state.
 TanStack Query and file-based TanStack Router are wired into the app. Zustand is available for future client state. Tailwind 4, shadcn/Base UI, Lucide, and Biome match Disk Vacuum's stack. Global styles copy its exact dark green theme. Shared Button, Input, Select, and Dialog components are ready to use.
 
 See [agents/goal.md](agents/goal.md) for product scope and safeguards. Signing keys, release endpoints and mutating server-management integrations are not configured. The initial generated icon is a placeholder.
+
+## Landing page and downloads
+
+The independent static landing page lives in `website/`. Preview it with
+`python3 -m http.server 4174 --directory website`.
+Its download list reads public GitHub Releases and handles first-release,
+offline, and API-limit states without dead installer links.
+
+`.github/workflows/pages.yml` deploys that directory on main-branch changes.
+Set repository **Settings → Pages → Source** to **GitHub Actions**.
+The default URL is https://khalids01.github.io/vps-pilot/; no custom DNS is assumed.
+
+### Publishing a desktop release
+
+1. Match versions in `package.json`, `src-tauri/tauri.conf.json`, and
+   `src-tauri/Cargo.toml` (including the Cargo lockfile).
+2. Run the checks below and commit the intended release changes.
+3. Push a matching version tag, for example `v0.1.0`.
+
+The release workflow builds Linux x64 (DEB, RPM, AppImage), Windows x64
+(NSIS and MSI), and macOS Apple Silicon / Intel (DMG). It checks version
+consistency, frontend checks/tests, and native tests before packaging.
+All platform jobs upload to a draft; only a complete set is published, with
+`SHA256SUMS.txt`. A failed matrix leaves the draft unpublished.
+Releases are manual tag events, not every main-branch push.
+
+No signing credentials or updater keys are required by this initial workflow.
+Windows packages are unsigned; macOS packages are ad-hoc signed, not notarized.
+This does not enable in-app automatic updates or any server-side mutation.
+
+For a local Linux package: `bun tauri build --bundles deb,appimage`.
+Installers are written beneath `src-tauri/target/release/bundle/`.

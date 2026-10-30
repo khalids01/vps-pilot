@@ -18,6 +18,7 @@ commands.allow = [
   "ssh_stream_ack",
   "ssh_stream_close",
   "ssh_inspection_run",
+  "ssh_inspection_describe",
   "ssh_action_review",
   "ssh_action_execute",
   "ssh_action_reject",

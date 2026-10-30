@@ -128,7 +128,7 @@ function LivePanel({
                     .ack(profile.id, event.id, event.sequence)
                     .catch(fail);
               });
-            } else {
+            } else if (event.type === "closed") {
               ended = true;
               active = false;
               setMessage(

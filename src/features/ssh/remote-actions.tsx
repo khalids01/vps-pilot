@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { ShieldCheck, Square } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,12 +19,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { type ServerProfile, safeError } from "./api";
+import { useCommandActivity } from "./command-activity";
+import type { InspectionReport } from "./report-types";
 import {
   type CatalogId,
   catalogItems,
   softwareSafety,
 } from "./software-safety";
 import { type StreamEvent, streamApi } from "./streams";
+import { StructuredReport } from "./structured-report";
 
 type AppAction =
   | { type: "ufwStatus" }
@@ -57,7 +60,19 @@ export function RemoteActions({
   connected: boolean;
   tool: string;
 }) {
-  const [target, setTarget] = useState("");
+  const log = useCommandActivity();
+  const [resultReports, setResultReports] = useState<
+    Record<string, InspectionReport | null>
+  >({});
+  const [activities, setActivities] = useState<
+    Record<string, { state: string; runId: string }>
+  >({});
+  const [targets, setTargets] = useState<Record<string, string>>({});
+  const target = targets[tool] ?? "";
+  const setTarget = (value: string) =>
+    setTargets((all) => ({ ...all, [tool]: value }));
+  const resultReport = resultReports[tool];
+  const activity = activities[tool];
   const [serviceOperation, setServiceOperation] = useState<
     "logs" | "start" | "stop" | "restart" | "enable" | "disable"
   >("logs");
@@ -70,12 +85,10 @@ export function RemoteActions({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [reviewing, setReviewing] = useState(false);
-  const [error, setError] = useState("");
-  const [activity, setActivity] = useState<{
-    command: string;
-    state: string;
-    text: string;
-  } | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const error = errors[tool] ?? "";
+  const setError = (value: string) =>
+    setErrors((all) => ({ ...all, [tool]: value }));
   const mounted = useRef(true);
   const generation = useRef(0);
   const pendingPlan = useRef<Plan | null>(null);
@@ -165,12 +178,45 @@ export function RemoteActions({
     setBusy(true);
     setError("");
     const current = ++generation.current;
-    let text = "";
+    setResultReports((all) => ({ ...all, [tool]: null }));
     let ended = false;
+    const runId = log.begin(
+      tool === "Firewall"
+        ? "UFW rules"
+        : tool === "Services"
+          ? "Service journal"
+          : tool === "Docker"
+            ? "Container logs"
+            : tool === "Software"
+              ? "Software preflight"
+              : "Directory scan",
+      approved.command,
+      {
+        cancel: () => {
+          if (generation.current !== current || ended) return;
+          generation.current++;
+          ended = true;
+          const id = stream.current;
+          stream.current = null;
+          setBusy(false);
+          const state = "Cancelled. Its remote process may still be running.";
+          log.update(runId, {
+            status: "cancelled",
+            ended: Date.now(),
+            message: state,
+          });
+          setActivities((all) => ({ ...all, [tool]: { state, runId } }));
+          if (id) void streamApi.close(profile.id, id).catch(() => {});
+        },
+      },
+    );
+    let text = "";
     const decoder = new TextDecoder();
     const publish = (state: string) => {
-      if (mounted.current && current === generation.current)
-        setActivity({ command: approved.command, text, state });
+      if (mounted.current && current === generation.current) {
+        setActivities((all) => ({ ...all, [tool]: { state, runId } }));
+        log.update(runId, { output: text, message: state });
+      }
     };
     publish("Running");
     const output = new Channel<StreamEvent>();
@@ -191,9 +237,16 @@ export function RemoteActions({
             text += `\n${safeError(error)}`;
             publish("Output interrupted");
           });
+      } else if (event.type === "inspection") {
+        setResultReports((all) => ({ ...all, [tool]: event.report }));
       } else {
         ended = true;
         text += decoder.decode();
+        log.update(runId, {
+          status: event.code === 0 ? "completed" : "failed",
+          code: event.code,
+          ended: Date.now(),
+        });
         if (reviewSoftware.current)
           setReport(softwareSafety(text, reviewSoftware.current));
         publish(
@@ -217,6 +270,7 @@ export function RemoteActions({
       }
       if (!ended) stream.current = id;
     } catch (error) {
+      log.update(runId, { status: "failed", ended: Date.now() });
       publish(safeError(error));
       if (mounted.current && current === generation.current) setBusy(false);
     }
@@ -373,7 +427,7 @@ export function RemoteActions({
           </Button>
         </div>
       )}
-      {report && (
+      {report && tool === "Software" && (
         <section
           className="space-y-2 rounded-lg border border-primary/30 p-4"
           aria-label="Software preflight report"
@@ -397,51 +451,20 @@ export function RemoteActions({
         </p>
       )}
       {activity && (
-        <section
-          className="space-y-3 rounded-lg border bg-sidebar p-4"
-          aria-label={`${profile.name} reviewed command activity`}
-        >
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium">
-              Command activity · {profile.name}
-            </p>
-            {busy && (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={async () => {
-                  generation.current++;
-                  const id = stream.current;
-                  stream.current = null;
-                  setBusy(false);
-                  setActivity((old) =>
-                    old
-                      ? {
-                          ...old,
-                          state:
-                            "Cancelled. Remote process may still be running.",
-                        }
-                      : old,
-                  );
-                  if (id) await streamApi.close(profile.id, id).catch(() => {});
-                }}
-              >
-                <Square />
-                Cancel
-              </Button>
-            )}
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-4 py-3">
           <p role="status" className="text-xs text-muted-foreground">
             {activity.state}
           </p>
-          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
-            {activity.command}
-          </pre>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
-            {activity.text}
-          </pre>
-        </section>
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => log.reveal(activity.runId)}
+          >
+            View command
+          </Button>
+        </div>
       )}
+      {resultReport && <StructuredReport report={resultReport} />}
       <Dialog
         open={plan !== null}
         onOpenChange={(open) => {

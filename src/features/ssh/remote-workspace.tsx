@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useRef, useState } from "react";
 import type { ToolId } from "@/features/workspace/fixtures";
+import { CommandActivityProvider } from "./command-activity";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
 
@@ -43,19 +44,31 @@ import {
   statusQueryKey,
 } from "./api";
 
-export function RemoteWorkspace({
-  profile,
-  status,
-  selectedTool,
-  active,
-  onSelectTool,
-}: {
+interface RemoteWorkspaceProps {
   profile: ServerProfile;
   status?: ConnectionStatus;
   selectedTool: ToolId;
   active: boolean;
   onSelectTool: (tool: ToolId) => void;
-}) {
+}
+export function RemoteWorkspace(props: RemoteWorkspaceProps) {
+  return (
+    <CommandActivityProvider
+      key={props.profile.revision}
+      serverId={props.profile.id}
+      serverName={props.profile.name}
+    >
+      <RemoteWorkspaceContent {...props} />
+    </CommandActivityProvider>
+  );
+}
+function RemoteWorkspaceContent({
+  profile,
+  status,
+  selectedTool,
+  active,
+  onSelectTool,
+}: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
   const labels: Record<ToolId, string> = {
     overview: "Overview",
@@ -130,6 +143,84 @@ export function RemoteWorkspace({
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-sidebar/40 px-4 py-3 sm:px-6">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 className="text-sm font-medium">{profile.name}</h1>
+          <span
+            className="max-w-60 truncate font-mono text-[11px] text-muted-foreground"
+            title={address(profile)}
+          >
+            {address(profile)}
+          </span>
+          <span className="flex items-center gap-1.5 text-[11px]">
+            <span
+              className={`size-1.5 rounded-full ${connected ? "bg-primary" : "bg-muted-foreground"}`}
+            />
+            {connected
+              ? "Connected"
+              : busy || status?.status === "connecting"
+                ? "Connecting…"
+                : status
+                  ? "Disconnected"
+                  : "Checking…"}
+          </span>
+          <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+            Read-only actions
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <details className="group relative">
+            <summary className="cursor-pointer list-none rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
+              Connection details
+            </summary>
+            <dl className="absolute top-full right-0 z-20 mt-2 grid w-72 grid-cols-[4rem_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-xl border bg-popover p-4 text-xs shadow-lg">
+              <dt className="text-muted-foreground">Host</dt>
+              <dd className="break-all">{profile.host}</dd>
+              <dt className="text-muted-foreground">User</dt>
+              <dd>{profile.username}</dd>
+              <dt className="text-muted-foreground">Port</dt>
+              <dd>{profile.port}</dd>
+              <dt className="text-muted-foreground">Key</dt>
+              <dd className="break-all">
+                {profile.identityFile || "SSH agent / default keys"}
+              </dd>
+            </dl>
+          </details>
+          {connected ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                setError("");
+                try {
+                  await sshApi.disconnect(profile.id);
+                  await refresh();
+                } catch (error) {
+                  setError(safeError(error));
+                }
+              }}
+            >
+              <Unplug />
+              Disconnect
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={!status || busy || status.status === "connecting"}
+              onClick={inspect}
+            >
+              {busy || status?.status === "connecting"
+                ? "Connecting…"
+                : "Connect"}
+            </Button>
+          )}
+        </div>
+      </header>
+      {(error || status?.error) && (
+        <p role="alert" className="border-b px-6 py-2 text-xs text-destructive">
+          {error || status?.error}
+        </p>
+      )}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${profile.name} tools`}
@@ -172,83 +263,7 @@ export function RemoteWorkspace({
           className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8"
         >
           <div className="mx-auto w-full max-w-6xl">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h1 className="text-xl font-medium tracking-tight">
-                  {profile.name}
-                </h1>
-                <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
-                  {address(profile)}
-                </p>
-              </div>
-              {connected ? (
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    setError("");
-                    try {
-                      await sshApi.disconnect(profile.id);
-                      await refresh();
-                    } catch (error) {
-                      setError(safeError(error));
-                    }
-                  }}
-                >
-                  <Unplug aria-hidden="true" />
-                  Disconnect
-                </Button>
-              ) : (
-                <Button
-                  disabled={!status || busy || status.status === "connecting"}
-                  onClick={inspect}
-                >
-                  {busy || status?.status === "connecting"
-                    ? "Connecting…"
-                    : "Connect"}
-                </Button>
-              )}
-            </div>
-            <div className="mt-8 flex items-center gap-2 border-b pb-4 text-sm">
-              <span
-                className={`size-2 rounded-full ${connected ? "bg-primary" : "bg-muted-foreground/50"}`}
-              />
-              <span>
-                {connected
-                  ? "Connected"
-                  : status?.status === "failed"
-                    ? "Connection failed"
-                    : status?.status === "connecting"
-                      ? "Connecting…"
-                      : status
-                        ? "Disconnected"
-                        : "Checking connection…"}
-              </span>
-            </div>
-            {(error || status?.error) && (
-              <p role="alert" className="mt-4 text-sm text-destructive">
-                {error || status?.error}
-              </p>
-            )}
-            {tool === "Overview" && (
-              <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-5 py-6 text-sm">
-                <dt className="text-muted-foreground">Host</dt>
-                <dd className="break-all font-mono text-xs">{profile.host}</dd>
-                <dt className="text-muted-foreground">User</dt>
-                <dd className="font-mono text-xs">{profile.username}</dd>
-                <dt className="text-muted-foreground">Port</dt>
-                <dd className="font-mono text-xs">{profile.port}</dd>
-                <dt className="text-muted-foreground">Key</dt>
-                <dd className="break-all font-mono text-xs">
-                  {profile.identityFile || "SSH agent / default keys"}
-                </dd>
-              </dl>
-            )}
-            <p className="border-t pt-5 text-xs text-muted-foreground">
-              {connected
-                ? "SSH is connected. Open Terminal for an interactive shell, or inspect a tool below."
-                : "Connect when you’re ready. Your saved tabs won’t reconnect on their own."}
-            </p>
-            <div className="mt-6">
+            <div>
               {terminalOpened && (
                 <div
                   className={tool === "Terminal" ? "flex flex-col" : "hidden"}
@@ -293,18 +308,6 @@ export function RemoteWorkspace({
           </div>
         </main>
       </div>
-      <footer className="flex shrink-0 flex-wrap justify-between gap-2 border-t bg-sidebar px-4 py-2 text-[11px] text-muted-foreground">
-        <span className="break-all">
-          {profile.name} · {address(profile)}
-        </span>
-        <span>
-          {connected
-            ? "SSH authenticated · app actions read-only"
-            : status
-              ? "No active SSH connection"
-              : "Waiting for desktop connection status"}
-        </span>
-      </footer>
       <Dialog
         open={phase !== null}
         onOpenChange={(open) => {
