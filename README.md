@@ -161,9 +161,9 @@ See [agents/goal.md](agents/goal.md) for product scope and safeguards. Release/u
 
 The independent static landing page lives in `website/`. Preview it with
 `python3 -m http.server 4174 --directory website`.
-Its download list reads a same-origin downloads.json manifest generated during
-deployment from the published GitHub release. Visitor browsers do not call the
-GitHub API. First-release and offline states retain a GitHub releases fallback.
+Its download buttons use permanent GitHub latest-release URLs for all seven
+installer formats. Visitor browsers do not fetch a manifest or call the GitHub
+API, so stale metadata cannot select an older release.
 
 `.github/workflows/pages.yml` deploys that directory on main-branch changes.
 Set repository **Settings → Pages → Source** to **GitHub Actions**.
@@ -411,6 +411,5 @@ SQLite. Log search and pause affect only the cached display.
 Website download buttons use permanent GitHub latest-release installer filenames.
 Every release uploads all seven fixed-name copies and includes them in checksums
 before marking itself latest. Immutable versioned installers and signed updater
-URLs are preserved. Cached website metadata therefore cannot pin these buttons
-to an old build; unavailable metadata falls back to the same latest links without
-a visitor-side GitHub API request.
+URLs are preserved. The page does not fetch a download manifest or call the GitHub API at all, so
+cached or unavailable metadata cannot pin the buttons to an old build.

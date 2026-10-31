@@ -849,6 +849,6 @@ Website installer links must resolve to the latest published release even when
 Pages refresh fails or old download metadata is cached. Publish all seven fixed
 installer filenames before marking a release latest, retain immutable versioned
 assets/updater URLs, and checksum the fixed copies too. Use GitHub latest/download
-links; do not introduce per-visitor GitHub API requests. Show latest download
-links if metadata is unavailable. Verify the live website and redirects after
+links; do not fetch download metadata or introduce per-visitor GitHub API
+requests. Render the same permanent links regardless of cached metadata. Verify the live website and redirects after
 the first release that introduces the fixed filenames.
