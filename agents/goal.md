@@ -222,3 +222,14 @@ Block namespace/socket/privileged shortcuts and protected config/secret sources.
 These checks protect current host resources; they do not certify arbitrary image
 code or lock out concurrent external administrators. Test only in disposable
 fixtures, never the important VPS.
+
+
+## Latest website downloads — 2026-10-31
+
+Website installer links must resolve to the latest published release even when
+Pages refresh fails or old download metadata is cached. Publish all seven fixed
+installer filenames before marking a release latest, retain immutable versioned
+assets/updater URLs, and checksum the fixed copies too. Use GitHub latest/download
+links; do not introduce per-visitor GitHub API requests. Show latest download
+links if metadata is unavailable. Verify the live website and redirects after
+the first release that introduces the fixed filenames.

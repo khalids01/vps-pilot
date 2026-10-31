@@ -406,3 +406,11 @@ host, Python 3 and Docker/Compose access. Interruption can leave changes applied
 inspect uncertain results before retrying. Operations are serialized per VPS;
 Activity retains bounded metadata in memory, without config/secrets/output in
 SQLite. Log search and pause affect only the cached display.
+
+
+Website download buttons use permanent GitHub latest-release installer filenames.
+Every release uploads all seven fixed-name copies and includes them in checksums
+before marking itself latest. Immutable versioned installers and signed updater
+URLs are preserved. Cached website metadata therefore cannot pin these buttons
+to an old build; unavailable metadata falls back to the same latest links without
+a visitor-side GitHub API request.

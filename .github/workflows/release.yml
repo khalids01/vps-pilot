@@ -160,6 +160,33 @@ jobs:
                 'darwin-x86_64-app': macIntel,
               }
             };
+            // Stable website URLs must exist before this release can become latest.
+            const installerNames = [
+              ['_amd64.deb', 'VPS-Pilot-linux-x64.deb'],
+              ['_amd64.AppImage', 'VPS-Pilot-linux-x64.AppImage'],
+              ['.x86_64.rpm', 'VPS-Pilot-linux-x64.rpm'],
+              ['_x64-setup.exe', 'VPS-Pilot-windows-x64-setup.exe'],
+              ['_x64_en-US.msi', 'VPS-Pilot-windows-x64.msi'],
+              ['_aarch64.dmg', 'VPS-Pilot-macos-apple-silicon.dmg'],
+              ['_x64.dmg', 'VPS-Pilot-macos-intel.dmg'],
+            ];
+            const stableAssets = [];
+            for (const [suffix, name] of installerNames) {
+              const source = assets.find(a => a.name.endsWith(suffix));
+              if (!source) throw new Error('Missing installer ' + suffix);
+              const response = await github.request('GET /repos/{owner}/{repo}/releases/assets/{asset_id}', {
+                owner, repo, asset_id: source.id, headers: {accept: 'application/octet-stream'}
+              });
+              const data = Buffer.from(response.data);
+              if (!data.length) throw new Error('Empty installer ' + suffix);
+              const previous = assets.find(a => a.name === name);
+              if (previous) await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: previous.id});
+              const result = await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name, data,
+                headers: {'content-type': 'application/octet-stream'}
+              });
+              stableAssets.push(result.data);
+            }
             const oldManifest = assets.find(a => a.name === 'latest.json');
             if (oldManifest) await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: oldManifest.id});
             const uploaded = await github.rest.repos.uploadReleaseAsset({
@@ -167,7 +194,8 @@ jobs:
               data: Buffer.from(JSON.stringify(manifest, null, 2) + '\n'),
               headers: {'content-type': 'application/json'}
             });
-            const releaseAssets = [...assets.filter(a => a.name !== 'latest.json'), uploaded.data];
+            const stableNames = new Set(installerNames.map(([, name]) => name));
+            const releaseAssets = [...assets.filter(a => a.name !== 'latest.json' && !stableNames.has(a.name)), ...stableAssets, uploaded.data];
             const crypto = require('node:crypto');
             const lines = [];
             for (const asset of releaseAssets.filter(a => a.name !== 'SHA256SUMS.txt')) {

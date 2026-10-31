@@ -52,11 +52,11 @@ test("landing page keeps a release fallback when the manifest is unavailable", a
   await page.route(api, (route) => route.abort());
   await page.goto("/website/");
   await expect(page.getByRole("status")).toContainText(
-    "Could not load the download list",
+    "Download the latest published release",
   );
   await expect(
-    page.getByRole("link", { name: "Check GitHub releases" }),
-  ).toHaveCount(3);
+    page.locator("#downloads .download-button"),
+  ).toHaveCount(7);
 });
 
 test("all desktop installer formats have direct download buttons without browser API calls", async ({ page }) => {
@@ -81,4 +81,15 @@ test("all desktop installer formats have direct download buttons without browser
   await expect(page.locator("#downloads .download-button")).toHaveCount(7);
   await expect(page.getByRole("link", {name: "Check GitHub releases"})).toHaveCount(0);
   expect(apiCalls).toBe(0);
+});
+
+
+test("cached download metadata still links every installer to GitHub latest",async({page})=>{
+ const names=["VPS-Pilot-linux-x64.deb","VPS-Pilot-linux-x64.AppImage","VPS-Pilot-linux-x64.rpm","VPS-Pilot-windows-x64-setup.exe","VPS-Pilot-windows-x64.msi","VPS-Pilot-macos-apple-silicon.dmg","VPS-Pilot-macos-intel.dmg"];
+ await page.route(api,route=>route.fulfill({json:{tag_name:"v0.2.0-old-build",assets:names.map(name=>({name,browser_download_url:"https://github.com/khalids01/vps-pilot/releases/download/v0.2.0-old-build/"+name}))}}));
+ await page.goto("/website/");
+ const links=page.locator("#downloads .download-button");
+ await expect(links).toHaveCount(7);
+ for(const link of await links.all()) await expect(link).toHaveAttribute("href",/^https:\/\/github.com\/khalids01\/vps-pilot\/releases\/latest\/download\//);
+ await expect(page.getByRole("status")).not.toContainText("old-build");
 });

@@ -841,3 +841,14 @@ kept its v0.1.0 manifest. Keep Pages permissions explicit at the deployment job
 and verify identity with three bounded attempts before deployment. Never log
 identity-token values or weaken updater signing. Verify the public download
 manifest after successful deployment; GitHub release success alone is insufficient.
+
+
+## Latest website downloads — 2026-10-31
+
+Website installer links must resolve to the latest published release even when
+Pages refresh fails or old download metadata is cached. Publish all seven fixed
+installer filenames before marking a release latest, retain immutable versioned
+assets/updater URLs, and checksum the fixed copies too. Use GitHub latest/download
+links; do not introduce per-visitor GitHub API requests. Show latest download
+links if metadata is unavailable. Verify the live website and redirects after
+the first release that introduces the fixed filenames.
