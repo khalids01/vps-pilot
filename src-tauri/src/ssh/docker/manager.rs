@@ -2,14 +2,18 @@ use super::super::*;
 use russh::ChannelMsg;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::ipc::Channel;
 
 // Validated with the isolated real Docker VM protocol and bound-approval fixtures.
 pub(super) const MUTATIONS_VALIDATED: bool = true;
+// Validated with real batch cancellation and destructive cleanup only in a private KVM VM.
+const CLEANUP_EXPANSION_VALIDATED: bool = true;
 #[derive(Default)]
 pub(crate) struct State {
     pending: Mutex<HashMap<String, Plan>>,
     busy: Mutex<HashSet<String>>,
+    cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 struct Plan {
     profile: String,
@@ -21,6 +25,11 @@ struct Plan {
 }
 impl State {
     pub(crate) fn invalidate(&self, id: &str) {
+        if let Ok(active) = self.cancellations.lock() {
+            if let Some(flag) = active.get(id) {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
         self.pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -39,6 +48,23 @@ impl Drop for Lease<'_> {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.id);
     }
+}
+struct CleanupRun<'a> {
+    state: &'a State,
+    id: String,
+}
+impl Drop for CleanupRun<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.state.cancellations.lock() {
+            active.remove(&self.id);
+        }
+    }
+}
+fn expanded_cleanup(evidence: &Value) -> bool {
+    matches!(
+        evidence["action"].as_str(),
+        Some("cleanupBatch" | "systemPrune")
+    )
 }
 impl SshService {
     fn docker_lease(&self, id: &str) -> Result<Lease<'_>, String> {
@@ -155,10 +181,16 @@ impl SshService {
             },
         );
         Ok(
-            json!({"token":token,"profileId":id,"serverName":profile.name,"evidence":evidence,"expiresInSeconds":120,"enabled":MUTATIONS_VALIDATED}),
+            json!({"token":token,"profileId":id,"serverName":profile.name,"evidence":evidence,"expiresInSeconds":120,"enabled":MUTATIONS_VALIDATED && (!expanded_cleanup(&evidence)||CLEANUP_EXPANSION_VALIDATED)}),
         )
     }
-    pub(super) async fn docker_execute(&self, id: &str, token: &str) -> Result<Value, String> {
+    pub(super) async fn docker_execute(
+        &self,
+        id: &str,
+        token: &str,
+        confirmation: Option<&str>,
+        progress: Option<&Channel<Value>>,
+    ) -> Result<Value, String> {
         if !MUTATIONS_VALIDATED {
             return Err("Docker changes await disposable-VM validation.".into());
         }
@@ -177,6 +209,25 @@ impl SshService {
         {
             return Err("Docker review expired or its server changed. Review again.".into());
         }
+        if !plan.evidence["blocked"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+        {
+            return Err("This operation has unresolved safety checks.".into());
+        }
+        if expanded_cleanup(&plan.evidence) {
+            if !CLEANUP_EXPANSION_VALIDATED {
+                return Err("Expanded cleanup awaits disposable-VM validation.".into());
+            }
+            if confirmation != plan.evidence["confirmation"].as_str() {
+                return Err("Type the exact cleanup confirmation and review again.".into());
+            }
+        }
+        if plan.evidence["action"] == "cleanupBatch" {
+            return self
+                .docker_cleanup_batch(id, &plan.request, &plan.evidence, progress)
+                .await;
+        }
         let evidence =
             serde_json::to_string(&plan.evidence).map_err(|_| "Cannot encode evidence.")?;
         let payload = Zeroizing::new(format!(
@@ -185,6 +236,82 @@ impl SshService {
             plan.request.as_str()
         ));
         self.docker_call(id, payload).await
+    }
+    async fn docker_cleanup_batch(
+        &self,
+        id: &str,
+        request: &str,
+        evidence: &Value,
+        progress: Option<&Channel<Value>>,
+    ) -> Result<Value, String> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.docker_manager
+            .cancellations
+            .lock()
+            .map_err(|_| "Cleanup state unavailable.")?
+            .insert(id.into(), flag.clone());
+        if let Some(progress) = progress {
+            let _=progress.send(json!({"stage":"cleanupReady","message":"Rechecking selected resources. Cancellation stops remaining items."}));
+        }
+        let _run = CleanupRun {
+            state: &self.docker_manager,
+            id: id.into(),
+        };
+        let request: Value =
+            serde_json::from_str(request).map_err(|_| "Cleanup request is invalid.")?;
+        let recheck = Zeroizing::new(json!({"mode":"preview","request":request}).to_string());
+        if self.docker_call(id, recheck).await? != *evidence {
+            return Err("Cleanup candidates changed after review. Review again.".into());
+        }
+        let items = evidence["items"]
+            .as_array()
+            .filter(|items| !items.is_empty() && items.len() <= 20)
+            .ok_or("Cleanup review is invalid.")?;
+        let began = Instant::now();
+        let mut outcomes = Vec::new();
+        let mut last_snapshot = None;
+        let mut interrupted = false;
+        for (index, item) in items.iter().enumerate() {
+            let stop = flag.load(Ordering::SeqCst)
+                || began.elapsed() > Duration::from_secs(150)
+                || interrupted;
+            if stop {
+                outcomes.push(json!({"kind":item["kind"],"id":item["target"],"name":item["name"],"status":"skipped","message":"Not started: cleanup was canceled, blocked or its time limit was reached."}));
+                continue;
+            }
+            if let Some(progress) = progress {
+                let _=progress.send(json!({"stage":"cleanup","message":format!("Removing {} of {}: {}",index+1,items.len(),item["name"].as_str().unwrap_or("resource"))}));
+            }
+            let child = json!({"action":"cleanup","kind":item["kind"],"target":item["target"]});
+            let payload =
+                Zeroizing::new(json!({"mode":"execute","request":child,"plan":item}).to_string());
+            match self.docker_call(id, payload).await {
+                Ok(result) if result["status"] == "completed" => {
+                    last_snapshot = result.get("snapshot").cloned();
+                    outcomes.push(json!({"kind":item["kind"],"id":item["target"],"name":item["name"],"status":"removed","message":"Removed."}));
+                }
+                Ok(_) => {
+                    interrupted = true;
+                    outcomes.push(json!({"kind":item["kind"],"id":item["target"],"name":item["name"],"status":"uncertain","message":"Docker did not confirm removal. Remaining items were not started."}));
+                }
+                Err(error) => {
+                    interrupted = true;
+                    outcomes.push(json!({"kind":item["kind"],"id":item["target"],"name":item["name"],"status":"uncertain","message":error}));
+                }
+            }
+        }
+        let removed = outcomes.iter().filter(|r| r["status"] == "removed").count();
+        let cancelled = flag.load(Ordering::SeqCst);
+        let status = if removed == items.len() {
+            "completed"
+        } else if cancelled {
+            "cancelled"
+        } else {
+            "partial"
+        };
+        Ok(
+            json!({"status":status,"message":format!("Removed {removed} of {} selected resources. Completed removals cannot be undone.",items.len()),"items":outcomes,"reclaimedBytes":Value::Null,"snapshot":last_snapshot}),
+        )
     }
 }
 #[tauri::command]
@@ -215,13 +342,37 @@ pub async fn ssh_docker_execute(
     profile_id: String,
     token: String,
     progress: Channel<Value>,
+    confirmation: Option<String>,
 ) -> Result<Value, String> {
     let _=progress.send(json!({"stage":"revalidating","message":"Checking engine identity and dependencies again."}));
-    let result = service.docker_execute(&profile_id, &token).await;
+    let result = service
+        .docker_execute(
+            &profile_id,
+            &token,
+            confirmation.as_deref(),
+            Some(&progress),
+        )
+        .await;
     let _ = progress.send(
         json!({"stage":"finished","message":"Inspect the operation result before retrying."}),
     );
     result
+}
+#[tauri::command]
+pub fn ssh_docker_cancel(
+    service: tauri::State<'_, SshService>,
+    profile_id: String,
+) -> Result<(), String> {
+    let active = service
+        .docker_manager
+        .cancellations
+        .lock()
+        .map_err(|_| "Cleanup cancellation unavailable.")?;
+    let flag = active
+        .get(&profile_id)
+        .ok_or("No cancelable cleanup is running for this server.")?;
+    flag.store(true, Ordering::SeqCst);
+    Ok(())
 }
 #[tauri::command]
 pub fn ssh_docker_reject(
@@ -287,6 +438,169 @@ mod tests {
                 "docker-fixture"
             );
         }
+
+        // The VM starts empty. Verify real global prune through native approval.
+        let prune = service
+            .docker_review(
+                &profile.id,
+                json!({"action":"systemPrune","target":"system"}).to_string(),
+            )
+            .await
+            .unwrap();
+        assert!(prune["evidence"]["blocked"].as_array().unwrap().is_empty());
+        assert!(!prune["evidence"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--volumes"));
+        assert!(service
+            .docker_execute(
+                &profile.id,
+                prune["token"].as_str().unwrap(),
+                Some("WRONG"),
+                None
+            )
+            .await
+            .is_err());
+        let prune = service
+            .docker_review(
+                &profile.id,
+                json!({"action":"systemPrune","target":"system"}).to_string(),
+            )
+            .await
+            .unwrap();
+        let result = service
+            .docker_execute(
+                &profile.id,
+                prune["token"].as_str().unwrap(),
+                Some("PRUNE"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["status"], "completed");
+        let mut network_ids = Vec::new();
+        {
+            let runtime = service.runtime.lock().await;
+            services::collect(&runtime, &profile.id, "docker pull alpine:3.24 >/dev/null")
+                .await
+                .unwrap();
+            for _ in 0..3 {
+                network_ids.push(
+                    services::collect(
+                        &runtime,
+                        &profile.id,
+                        &format!("docker network create fixture-batch-{}", Uuid::new_v4()),
+                    )
+                    .await
+                    .unwrap()
+                    .trim()
+                    .to_string(),
+                );
+            }
+            services::collect(
+                &runtime,
+                &profile.id,
+                "rc-service chronyd stop >/dev/null 2>&1 || true",
+            )
+            .await
+            .unwrap();
+            services::collect(
+                &runtime,
+                &profile.id,
+                "date -s @$(($(date +%s)+777600)) >/dev/null",
+            )
+            .await
+            .unwrap();
+        }
+        let batch=json!({"action":"cleanupBatch","target":"selected","targets":[{"kind":"network","id":network_ids[0]},{"kind":"network","id":network_ids[1]}]}).to_string();
+        let review = service
+            .docker_review(&profile.id, batch.clone())
+            .await
+            .unwrap();
+        let cancel = async {
+            for _ in 0..200 {
+                if let Some(flag) = service
+                    .docker_manager
+                    .cancellations
+                    .lock()
+                    .unwrap()
+                    .get(&profile.id)
+                    .cloned()
+                {
+                    flag.store(true, Ordering::SeqCst);
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            panic!("Cleanup cancellation was not registered.");
+        };
+        let (result, ()) = tokio::join!(
+            service.docker_execute(
+                &profile.id,
+                review["token"].as_str().unwrap(),
+                Some("DELETE 2"),
+                None
+            ),
+            cancel
+        );
+        let result = result.unwrap();
+        assert_eq!(result["status"], "cancelled");
+        assert!(result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["status"] == "skipped"));
+        let review = service.docker_review(&profile.id, batch).await.unwrap();
+        let token = review["token"].as_str().unwrap();
+        let result = service
+            .docker_execute(&profile.id, token, Some("DELETE 2"), None)
+            .await
+            .unwrap();
+        assert_eq!(result["status"], "completed");
+        assert!(result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["status"] == "removed"));
+        assert!(service
+            .docker_execute(&profile.id, token, Some("DELETE 2"), None)
+            .await
+            .is_err());
+        let stale_batch = service
+            .docker_review(
+                &profile.id,
+                json!({"action":"cleanupBatch","targets":[{"kind":"network","id":network_ids[2]}]})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        {
+            let runtime = service.runtime.lock().await;
+            services::collect(
+                &runtime,
+                &profile.id,
+                &format!("docker network rm -- {}", network_ids[2]),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(service
+            .docker_execute(
+                &profile.id,
+                stale_batch["token"].as_str().unwrap(),
+                Some("DELETE 1"),
+                None
+            )
+            .await
+            .is_err());
+        assert!(service
+            .docker_review(
+                &profile.id,
+                json!({"action":"cleanupBatch","targets":[{"kind":"volume","id":"protected"}]})
+                    .to_string()
+            )
+            .await
+            .is_err());
         let target = {
             let runtime = service.runtime.lock().await;
             services::collect(
@@ -309,15 +623,24 @@ mod tests {
             .unwrap();
         let token = rejected["token"].as_str().unwrap();
         assert!(service
-            .docker_execute("different-server", token)
+            .docker_execute("different-server", token, None, None)
             .await
             .is_err());
-        assert!(service.docker_execute(&profile.id, token).await.is_err());
+        assert!(service
+            .docker_execute(&profile.id, token, None, None)
+            .await
+            .is_err());
         let review = service.docker_review(&profile.id, request).await.unwrap();
         let token = review["token"].as_str().unwrap();
-        let result = service.docker_execute(&profile.id, token).await.unwrap();
+        let result = service
+            .docker_execute(&profile.id, token, None, None)
+            .await
+            .unwrap();
         assert_eq!(result["status"], "completed");
-        assert!(service.docker_execute(&profile.id, token).await.is_err());
+        assert!(service
+            .docker_execute(&profile.id, token, None, None)
+            .await
+            .is_err());
         let stale = service
             .docker_review(
                 &profile.id,
@@ -336,7 +659,7 @@ mod tests {
             .unwrap();
         }
         assert!(service
-            .docker_execute(&profile.id, stale["token"].as_str().unwrap())
+            .docker_execute(&profile.id, stale["token"].as_str().unwrap(), None, None)
             .await
             .is_err());
         let pending = service
@@ -348,7 +671,7 @@ mod tests {
             .unwrap();
         service.disconnect(&profile.id).await.unwrap();
         assert!(service
-            .docker_execute(&profile.id, pending["token"].as_str().unwrap())
+            .docker_execute(&profile.id, pending["token"].as_str().unwrap(), None, None)
             .await
             .is_err());
     }

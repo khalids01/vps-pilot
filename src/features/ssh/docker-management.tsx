@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -21,6 +22,11 @@ import { Input } from "@/components/ui/input";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { type ServerProfile, safeError } from "./api";
 import { useCommandActivity } from "./command-activity";
+import {
+  type CleanupRequest,
+  type CleanupResult,
+  DockerCleanup,
+} from "./docker-cleanup";
 import { filesApi } from "./files-api";
 import { formatBytes } from "./structured-report";
 import { TextEditor } from "./text-editor";
@@ -31,7 +37,8 @@ export type DockerSection =
   | "Volumes"
   | "Networks"
   | "Cleanup"
-  | "Activity";
+  | "Activity"
+  | "Diagnostics";
 interface Resource {
   kind: "image" | "volume" | "network" | "container";
   id: string;
@@ -42,6 +49,9 @@ interface Resource {
   eligible: boolean;
   fingerprint: string;
   driver?: string;
+  created?: string;
+  stoppedAt?: string;
+  project?: string;
 }
 interface Snapshot {
   engine: { id: string; version: string };
@@ -61,6 +71,22 @@ interface Evidence {
   blocked: string[];
   engine: { id: string; version: string };
   retainImages?: string[];
+  confirmation?: string;
+  cutoff?: number;
+  allImages?: boolean;
+  cache?: {
+    records: number;
+    active: number;
+    size: string;
+    reclaimable: string;
+  } | null;
+  items?: {
+    kind: string;
+    id?: string;
+    target?: string;
+    name: string;
+    command?: string;
+  }[];
   services?: {
     name: string;
     image: string;
@@ -79,6 +105,8 @@ interface Review {
 }
 interface Request {
   updateExisting?: boolean;
+  targets?: { id: string; kind: string }[];
+  allImages?: boolean;
   action: string;
   target: string;
   kind?: string;
@@ -128,6 +156,8 @@ export function DockerManagement({
   onTabChange,
   onChanged,
   children,
+  diagnostics,
+  active = true,
 }: {
   profile: ServerProfile;
   connected: boolean;
@@ -135,6 +165,8 @@ export function DockerManagement({
   onTabChange: (s: DockerSection) => void;
   onChanged: () => void;
   children: ReactNode;
+  diagnostics?: ReactNode;
+  active?: boolean;
 }) {
   const activity = useCommandActivity();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
@@ -176,6 +208,11 @@ export function DockerManagement({
   >([]);
   const [search, setSearch] = useState("");
   const [updateExisting, setUpdateExisting] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(
+    null,
+  );
+  const [cancelable, setCancelable] = useState(false),
+    [cancelRequested, setCancelRequested] = useState(false);
   const mounted = useRef(true),
     inFlight = useRef(false),
     pending = useRef<string | null>(null);
@@ -216,11 +253,12 @@ export function DockerManagement({
       ),
     );
   };
-  async function scan() {
+  const scan = useCallback(async () => {
     if (inFlight.current || !connected) return;
     inFlight.current = true;
     setBusy(true);
     setError("");
+    setStage("Loading resources…");
     const entry = activity.begin(
       "Docker resource inventory",
       "Read Docker engine/container/image/network/volume metadata",
@@ -245,9 +283,26 @@ export function DockerManagement({
       }
     } finally {
       inFlight.current = false;
-      if (mounted.current) setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+        setStage("");
+      }
     }
-  }
+  }, [connected, activity, profile.id]);
+  const initialResourcesAttempted = useRef(false);
+  useEffect(() => {
+    if (
+      !active ||
+      !connected ||
+      busy ||
+      snapshot ||
+      initialResourcesAttempted.current ||
+      !["Images", "Volumes", "Networks", "Cleanup"].includes(tab)
+    )
+      return;
+    initialResourcesAttempted.current = true;
+    void scan();
+  }, [active, connected, busy, snapshot, tab, scan]);
   async function prepare(request: Request) {
     if (inFlight.current || !connected) return;
     inFlight.current = true;
@@ -310,13 +365,18 @@ export function DockerManagement({
     setBusy(true);
     setError("");
     setStage("Rechecking Docker state…");
+    setCancelRequested(false);
+    setCleanupResult(null);
     const entry = activity.begin(
       `Docker ${plan.evidence.action}`,
       plan.evidence.command,
     );
     const progress = new Channel<{ stage: string; message: string }>();
     progress.onmessage = (value) => {
-      if (mounted.current) setStage(value.message);
+      if (mounted.current) {
+        setStage(value.message);
+        if (value.stage === "cleanupReady") setCancelable(true);
+      }
     };
     try {
       const result = await invoke<{
@@ -324,14 +384,27 @@ export function DockerManagement({
         message: string;
         backup: string | null;
         snapshot?: Snapshot;
+        items?: CleanupResult["items"];
+        reclaimedBytes?: number | null;
       }>("ssh_docker_execute", {
         profileId: profile.id,
         token: plan.token,
+        confirmation: confirm,
         progress,
       });
       if (mounted.current) {
+        if (
+          ["cleanup", "cleanupBatch", "systemPrune"].includes(
+            plan.evidence.action,
+          )
+        )
+          setCleanupResult(result);
         if (result.snapshot) setSnapshot(result.snapshot);
-        if (result.status === "completed") onChanged();
+        if (
+          result.status === "completed" ||
+          result.items?.some((r) => r.status === "removed")
+        )
+          onChanged();
         setHistory((old) =>
           [
             {
@@ -351,7 +424,12 @@ export function DockerManagement({
           ].slice(0, 20),
         );
         activity.update(entry, {
-          status: result.status === "completed" ? "completed" : "failed",
+          status:
+            result.status === "completed"
+              ? "completed"
+              : result.status === "cancelled"
+                ? "cancelled"
+                : "failed",
           message: result.message,
           ended: Date.now(),
         });
@@ -380,8 +458,20 @@ export function DockerManagement({
       }
     } finally {
       inFlight.current = false;
-      if (mounted.current) setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+        setCancelable(false);
+      }
     }
+  }
+  function cancelCleanup() {
+    setCancelRequested(true);
+    void invoke("ssh_docker_cancel", { profileId: profile.id }).catch((e) => {
+      if (inFlight.current) {
+        setError(safeError(e));
+        setCancelRequested(false);
+      }
+    });
   }
   async function loadConfiguration() {
     if (!readFile || inFlight.current) return;
@@ -435,10 +525,10 @@ export function DockerManagement({
     <Context.Provider
       value={{ review: (r) => void prepare(r), busy, connected }}
     >
-      <div className="space-y-6">
+      <div className="flex flex-col gap-5">
         <nav
           aria-label="Docker sections"
-          className="flex gap-2 overflow-x-auto border-b pb-3"
+          className="flex shrink-0 gap-2 overflow-x-auto border-b bg-background py-3"
         >
           {(
             [
@@ -449,6 +539,7 @@ export function DockerManagement({
               "Networks",
               "Cleanup",
               "Activity",
+              "Diagnostics",
             ] as DockerSection[]
           ).map((section) => (
             <Button
@@ -471,22 +562,37 @@ export function DockerManagement({
           </p>
         )}
         {busy && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {stage || "Checking Docker evidence…"} Execution may continue
-            remotely if the connection is interrupted; inspect before retrying.
-          </p>
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+            <p role="status" className="text-sm text-muted-foreground">
+              {stage || "Checking Docker evidence…"}
+            </p>
+            {cancelable && (
+              <Button
+                variant="outline"
+                disabled={cancelRequested}
+                onClick={cancelCleanup}
+              >
+                {cancelRequested
+                  ? "Stopping remaining work…"
+                  : "Cancel remaining items"}
+              </Button>
+            )}
+          </div>
         )}
         {!busy && stage && (
           <p role="status" className="text-xs text-muted-foreground">
             {stage}
           </p>
         )}
-        <div className={tab === "Containers" ? "block" : "hidden"}>
+        <div className={tab === "Containers" ? "w-full" : "hidden"}>
           {children}
         </div>
-        {(
-          ["Images", "Volumes", "Networks", "Cleanup"] as DockerSection[]
-        ).includes(tab) && (
+        <div className={tab === "Diagnostics" ? "w-full" : "hidden"}>
+          {diagnostics}
+        </div>
+        {(["Images", "Volumes", "Networks"] as DockerSection[]).includes(
+          tab,
+        ) && (
           <section
             aria-label={`Docker ${tab.toLowerCase()}`}
             className="space-y-4"
@@ -497,7 +603,11 @@ export function DockerManagement({
                 <p className="text-xs text-muted-foreground">
                   {snapshot
                     ? `Snapshot ${new Date(snapshot.observedAt * 1000).toLocaleString()}`
-                    : "No resources scanned yet. Nothing runs automatically."}
+                    : !connected
+                      ? "Connect to view resources."
+                      : busy || !initialResourcesAttempted.current
+                        ? "Loading resources…"
+                        : "Resources unavailable. Refresh to try again."}
                 </p>
               </div>
               <div className="flex gap-2">
@@ -506,9 +616,7 @@ export function DockerManagement({
                   disabled={busy || !connected}
                   onClick={() => void scan()}
                 >
-                  {tab === "Cleanup"
-                    ? "Scan cleanup candidates"
-                    : "Load resources"}
+                  Refresh
                 </Button>
                 {tab !== "Cleanup" && (
                   <Button
@@ -620,10 +728,25 @@ export function DockerManagement({
             )}
           </section>
         )}
+        {tab === "Cleanup" && (
+          <DockerCleanup
+            resources={snapshot?.cleanup ?? []}
+            loaded={!!snapshot}
+            observedAt={snapshot?.observedAt ?? 0}
+            busy={busy}
+            connected={connected}
+            onRefresh={() => void scan()}
+            onReview={(request: CleanupRequest) => void prepare(request)}
+            cancelable={cancelable}
+            cancelRequested={cancelRequested}
+            progress={stage}
+            result={cleanupResult}
+          />
+        )}
         {tab === "Deploy" && (
           <section
             aria-label="Compose deployment"
-            className="max-w-3xl space-y-8 rounded-xl border bg-card/30 p-5 sm:p-7"
+            className="w-full max-w-3xl space-y-8 rounded-xl border bg-card/30 p-5 sm:p-7"
           >
             <div className="space-y-2">
               <h3 className="text-lg font-semibold">Run an application</h3>
@@ -1041,6 +1164,31 @@ export function DockerManagement({
           <pre className="whitespace-pre-wrap break-all rounded-lg border p-3 text-xs">
             {review?.evidence.command}
           </pre>
+          {review?.evidence.items && (
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium">
+                {review.evidence.action === "systemPrune"
+                  ? "Potential resource scope (not a dry run)"
+                  : "Selected removal targets"}
+              </h4>
+              {review.evidence.items.map((item) => (
+                <p
+                  key={`${item.kind}:${item.id || item.target}`}
+                  className="break-all text-xs"
+                >
+                  {item.kind} · {item.name}
+                </p>
+              ))}
+            </div>
+          )}
+          {review?.evidence.cache && (
+            <p className="rounded-lg border p-3 text-sm">
+              Build cache: {review.evidence.cache.records} records ·{" "}
+              {review.evidence.cache.size} total ·{" "}
+              {review.evidence.cache.reclaimable} reported reclaimable. Cache
+              mounts may be cleared.
+            </p>
+          )}
           {review?.evidence.services?.map((s) => (
             <div key={s.name} className="rounded-lg border p-3 text-xs">
               <p>
@@ -1077,20 +1225,24 @@ export function DockerManagement({
               changes.
             </p>
           )}
-          {review?.evidence.action === "cleanup" && (
-            <label
-              className="block space-y-2 text-sm"
-              htmlFor={`docker-cleanup-${profile.id}`}
-            >
-              Type the exact resource name to confirm irreversible removal
-              <Input
-                id={`docker-cleanup-${profile.id}`}
-                aria-label="Confirm cleanup resource name"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-            </label>
-          )}
+          {review &&
+            ["cleanup", "cleanupBatch", "systemPrune"].includes(
+              review.evidence.action,
+            ) && (
+              <label
+                className="block space-y-2 text-sm"
+                htmlFor={`docker-cleanup-${profile.id}`}
+              >
+                Type {review.evidence.confirmation || review.evidence.name} to
+                confirm irreversible removal
+                <Input
+                  id={`docker-cleanup-${profile.id}`}
+                  aria-label="Confirm cleanup resource name"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                />
+              </label>
+            )}
           <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={reject}>
               Cancel
@@ -1101,14 +1253,21 @@ export function DockerManagement({
                 !connected ||
                 !review?.enabled ||
                 !!review.evidence.blocked?.length ||
-                (review.evidence.action === "cleanup" &&
-                  confirm !== review.evidence.name)
+                (["cleanup", "cleanupBatch", "systemPrune"].includes(
+                  review.evidence.action,
+                ) &&
+                  confirm !==
+                    (review.evidence.confirmation || review.evidence.name))
               }
               onClick={() => void execute()}
             >
               {review?.evidence.action === "deploy"
                 ? "Run application"
-                : "Confirm operation"}
+                : review?.evidence.action === "cleanupBatch"
+                  ? "Remove selected"
+                  : review?.evidence.action === "systemPrune"
+                    ? "Run system prune"
+                    : "Confirm operation"}
             </Button>
           </DialogFooter>
         </DialogContent>

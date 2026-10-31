@@ -53,6 +53,7 @@ pub fn run() {
             ssh::docker::manager::ssh_docker_review,
             ssh::docker::manager::ssh_docker_execute,
             ssh::docker::manager::ssh_docker_reject,
+            ssh::docker::manager::ssh_docker_cancel,
             ssh::streams::ssh_terminal_input,
             ssh::streams::ssh_terminal_resize,
             ssh::streams::ssh_stream_ack,

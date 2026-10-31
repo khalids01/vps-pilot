@@ -304,7 +304,10 @@ export function RemoteTerminal({
     setCount(api.panels.length);
   }
   return (
-    <TerminalView label={`${profile.name} live terminals`}>
+    <TerminalView
+      defaultOptionsVisible={!container}
+      label={`${profile.name} live terminals`}
+    >
       <div data-terminal-options className="flex shrink-0 flex-wrap gap-2">
         <Button
           size="sm"

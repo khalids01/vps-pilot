@@ -43,11 +43,14 @@ export function RemoteInspection({
   profile,
   connected,
   tool,
+  active,
+  autoLoad = false,
 }: {
   profile: ServerProfile;
   connected: boolean;
   tool: string;
   active: boolean;
+  autoLoad?: boolean;
 }) {
   const kind = views[tool] ?? "overview";
   const log = useCommandActivity();
@@ -225,6 +228,18 @@ export function RemoteInspection({
       setCpuPercent(null);
     }
   }, [connected]);
+  const automaticallyLoaded = useRef(new Set<InspectionKind>());
+  useEffect(() => {
+    if (
+      !autoLoad ||
+      !active ||
+      !connected ||
+      automaticallyLoaded.current.has(kind)
+    )
+      return;
+    automaticallyLoaded.current.add(kind);
+    void run();
+  }, [autoLoad, active, connected, kind, run]);
   const snapshot = snapshots[kind];
   return (
     <section
@@ -245,7 +260,11 @@ export function RemoteInspection({
             onClick={() => void run()}
           >
             <RefreshCw className={busy ? "animate-spin" : ""} />
-            {busy ? "Inspecting…" : snapshot?.report ? "Refresh" : "Inspect"}
+            {busy
+              ? "Inspecting…"
+              : autoLoad || snapshot?.report
+                ? "Refresh"
+                : "Inspect"}
           </Button>
         </div>
       </div>

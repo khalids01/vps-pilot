@@ -123,8 +123,10 @@ or credentials. Native controls reject another server's stream IDs.
 See [supported systems](agents/supported-systems.md), [the implementation
 plan](agents/plan.md), and [disposable fixture instructions](tests/fixtures/README.md).
 The fixture-tested systemd mutator is disabled in normal builds. Software changes,
-Docker mutations, proxy changes, firewall changes and cleanup need their remaining
+proxy changes, firewall changes and general system cleanup still need their
 ownership/recovery checks and disposable VM/VPS validation before being enabled.
+Dedicated reviewed Docker management/cleanup is fixture-validated as described
+below; the generic Docker-change endpoint remains disabled.
 The important user VPS must never be used as a destructive test fixture.
 
 ## Review the terminal workspace
@@ -346,7 +348,7 @@ Terminal/editor context behavior remains unchanged.
 
 ### Docker workspace
 
-Open Docker and select **Load containers**. Inventory includes stopped containers,
+Open Docker to load containers automatically. Inventory includes stopped containers,
 state/health text, published ports and Compose project/service groups. There is
 no automatic Docker polling. Open a container for configuration, mounts and
 environment names; values are masked by the remote Docker format before SSH
@@ -376,10 +378,11 @@ Docker's supported formatting functions are documented at
 [Docker CLI formatting](https://docs.docker.com/engine/cli/formatting/).
 
 
-Docker management adds **Deploy**, **Images**, **Volumes**, **Networks**,
+Docker management adds **Run application**, **Images**, **Volumes**, **Networks**,
 **Cleanup** and **Activity** views. Start/stop/restart, image pulls and creation of
 bridge networks/volumes show fresh server/engine evidence before execution.
-Resource inventories and cleanup scans run only on request.
+Resource tabs load one shared inventory automatically on first visit.
+Use Refresh for newer data; switching tabs or returning Home does not reload it.
 
 Deploy through the form or Compose editor, or explicitly load an existing server
 Compose file into the in-memory editor. Create the application folder in Files
@@ -395,9 +398,23 @@ Cleanup considers only unreferenced untagged images, unused non-Compose bridge
 networks and eligible standalone stopped containers older than seven days.
 Mounted, infrastructure and orchestrator-managed containers remain protected.
 Removing a container also removes its writable layer/logs: back up needed files
-before confirming its exact name. All volumes and rollback image holds are
-protected. Image sizes include shared layers and are not guaranteed freed space.
-Build-cache pruning is unavailable without exact dependency evidence.
+before confirming removal. All volumes and rollback image holds are protected.
+Cleanup groups images, stopped containers, networks and build cache; protected
+items stay hidden until requested. Select up to 20 eligible resources, review
+the exact list and type DELETE N. Cancel stops remaining steps and preserves
+completed outcomes. Per-item results distinguish removals, skipped items and
+uncertain outcomes.
+
+Advanced **Docker system prune** has its own review and typed PRUNE confirmation.
+It uses a fixed seven-day cutoff, leaves --all off by default and never removes
+volumes. It refuses possible scope that includes protected stopped workloads,
+managed networks or rollback-held images. Build cache is included; cache mounts
+can be cleared and future builds can take longer. Docker has no atomic dry run
+or exclusions against concurrent administrators. Once submitted, system prune
+cannot be canceled safely. Resource/cache sizes are estimates with shared layers;
+only Docker-reported reclaimed space is shown as an actual result. These paths
+were validated in the private disposable VM, including real BuildKit cache and
+preservation of volumes and running infrastructure.
 
 Plans bind the connection, profile revision, Docker engine, resource evidence and
 configuration hashes; they expire after two minutes and are single-use.

@@ -134,3 +134,18 @@ require the disposable guest marker.
 Stop the launcher with Ctrl-C afterward: it terminates QEMU, closes its seed HTTP
 server and removes ephemeral keys/disks/metadata unless explicitly retaining
 artifacts. Downloaded tools/image remain reusable. Never use an important VPS.
+
+
+### Cleanup expansion matrix
+
+On a fresh app-created marked disposable VM, run docker-cleanup-vm.py with
+VPS_PILOT_DOCKER_VM_FILE set to its generated fixture.json. This is destructive
+only inside that guest: it tests default system prune, --all, actual BuildKit
+cache, rollback holds, protected stopped/mounted workloads, dependent resource
+cleanup, and preservation of running infrastructure and volumes. It installs
+docker-cli-buildx inside the guest for the cache fixture, never on the host.
+The guest clock is deliberately moved for seven-day policy tests, and restored
+for TLS downloads. Rerun with a fresh VM if a failed run left protected fixture
+objects. The native ignored disposable_docker_vm_bound_approvals test also
+checks native typed confirmation, batch cancellation, exact removals, stale
+targets and replay. Stop the VM launcher after all tests.

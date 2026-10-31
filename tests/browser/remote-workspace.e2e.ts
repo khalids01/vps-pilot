@@ -43,6 +43,8 @@ test.beforeEach(async ({ page }) => {
       volumes:[{kind:"volume",id:"database-data",name:"database-data",bytes:null,references:["db"],reason:"Persistent data is always protected",eligible:false,fingerprint:"volume1",driver:"local"}],
       networks:[],
       cleanup:[...(!cleanupRemoved?[{kind:"image",id:"sha256:"+"d".repeat(64),name:"dangling-fixture",bytes:1048576,references:[],reason:"",eligible:true,fingerprint:"image1"}]:[]),
+      {kind:"image",id:"sha256:"+"e".repeat(64),name:"rollback-image",bytes:2097152,references:[],reason:"Retained for application rollback",eligible:false,fingerprint:"held"},
+      ...((window as any).__twoCleanup?[{kind:"network",id:"n".repeat(64),name:"old-network",bytes:null,references:[],reason:"",eligible:true,fingerprint:"network"}]:[]),
       {kind:"volume",id:"database-data",name:"database-data",bytes:null,references:["db"],reason:"Persistent data is always protected",eligible:false,fingerprint:"volume1"}]
     });
     let next = 0;
@@ -55,7 +57,7 @@ test.beforeEach(async ({ page }) => {
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           // No credentials or user terminal input are retained by the mock.
-          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}) });
+          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}) });
           if (cmd === "app_bootstrap") {
             if ((window as any).__databaseUnavailable) throw new Error("Fixture database unavailable");
             return {
@@ -143,11 +145,20 @@ test.beforeEach(async ({ page }) => {
           if (cmd === "ssh_profiles") return profiles;
           if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, status: "connected", error: null }));
           if (cmd === "ssh_config_hosts") return [];
+          if(cmd==="ssh_docker_snapshot" && (window as any).__failDockerResources)throw "Resource inventory unavailable.";
           if(cmd==="ssh_docker_snapshot")return {snapshot:managementSnapshot(),enabled:true};
           if(cmd==="ssh_docker_review"){
             const request=JSON.parse(args.request),token=crypto.randomUUID();
             (window as any).__lastDockerUpdate=request.updateExisting;
             const evidence={action:request.action,target:request.target,name:request.action==="cleanup"?"dangling-fixture":request.target==="a".repeat(64)?"web":request.target,command:"docker "+request.action+" -- "+request.target,warning:"No automatic rollback or retry.",engine:{id:"fixture-engine-id",version:"29.0"},blocked:[] as string[],services:[] as any[]};
+            if(request.action==="cleanupBatch"){
+              Object.assign(evidence,{confirmation:"DELETE "+request.targets.length,items:request.targets.map((t:any)=>{const r=managementSnapshot().cleanup.find(r=>r.id===t.id&&r.kind===t.kind);return {kind:t.kind,target:t.id,name:r?.name??t.id};})});
+            }
+            if(request.action==="systemPrune"){
+              Object.assign(evidence,{name:"Docker system prune",confirmation:"PRUNE",items:[],cache:{records:2,active:0,size:"2MB",reclaimable:"1MB"},allImages:request.allImages,
+                command:"docker system prune --filter until=123"+(request.allImages?" --all":""),warning:"No Docker dry run exists. This is a preflight estimate, not an exact deletion list. Volumes are never included.",
+                blocked:(window as any).__blockedPrune?["Protected workload blocks global prune"]:[]});
+            }
             if(request.action==="deploy"){
               const content=request.content;
               evidence.services=[{name:"app",image:"alpine:3.24",ports:["8080"],environment:content.includes("PASSWORD")?["PASSWORD"]:[]}];
@@ -155,11 +166,23 @@ test.beforeEach(async ({ page }) => {
             }
             managementPlans.set(token,{request,evidence});return {token,serverName:"Fixture Alpha",evidence,enabled:true};
           }
+          if(cmd==="ssh_docker_cancel"){
+            (window as any).__resolveCleanup?.();return;
+          }
           if(cmd==="ssh_docker_reject"){managementPlans.delete(args.token);return;}
           if(cmd==="ssh_docker_execute"){
             const plan=managementPlans.get(args.token);managementPlans.delete(args.token);
             if(!plan)throw "Review expired or already used.";
             if((window as any).__dockerStale)throw "Docker state changed after review; nothing was changed.";
+            if(plan.request.action==="cleanupBatch"){
+              args.progress.onmessage({stage:"cleanupReady",message:"Removing selected resources"});
+              if((window as any).__holdCleanup)return new Promise(resolve=>{
+                (window as any).__resolveCleanup=()=>{cleanupRemoved=true;resolve({status:"cancelled",message:"Removed 1 of 2 selected resources. Remaining items were canceled.",items:plan.evidence.items.map((item:any,index:number)=>({kind:item.kind,id:item.target,name:item.name,status:index?"skipped":"removed",message:index?"Not started: canceled.":"Removed."})),snapshot:managementSnapshot()});};
+              });
+              cleanupRemoved=true;
+              return {status:"completed",message:"Removed selected resources.",items:plan.evidence.items.map((item:any)=>({kind:item.kind,id:item.target,name:item.name,status:"removed",message:"Removed."})),reclaimedBytes:null,snapshot:managementSnapshot()};
+            }
+            if(plan.request.action==="systemPrune")return {status:"completed",message:"Docker system prune completed.",reclaimedBytes:1048576,snapshot:managementSnapshot()};
             if(plan.request.action==="cleanup")cleanupRemoved=true;
             if(plan.request.action==="stop")webState="exited";
             if(plan.request.action==="start"||plan.request.action==="restart")webState="running";
@@ -167,6 +190,8 @@ test.beforeEach(async ({ page }) => {
             return {status:"completed",message:"Docker confirmed the operation",backup:plan.request.action==="deploy"?"/srv/my-app/.vps-pilot-compose-backup-fixture/compose.yaml":null,snapshot:managementSnapshot()};
           }
           if(cmd==="ssh_docker_query"){
+            if(args.query==="list" && (window as any).__failDockerList)throw "Container inventory unavailable.";
+
             const id="a".repeat(64),secondId="b".repeat(64);
             const data=args.query==="list"?[
               {id,name:"web",image:"nginx:stable",state:webState,status:webState==="running"?"Up 2 hours (healthy)":"Exited (0)",ports:"8080->80/tcp",project:"website",service:"web"},
@@ -387,11 +412,10 @@ test("structured overview keeps raw output in the bottom drawer and connection d
   await page.screenshot({ path: testInfo.outputPath("persistent-console.png") });
 });
 
-test("Docker, Services, Storage and other inspections render application tables", async ({ page }, testInfo) => {
+test("Docker diagnostics and other inspections render application tables", async ({ page }, testInfo) => {
   const nav = page.getByRole("navigation", { name: "Fixture Alpha tools" });
   await nav.getByRole("button", { name: "Docker", exact: true }).click();
-  await page.getByText("Images, volumes and Docker diagnostics",{exact:true}).click();
-  await page.getByRole("button", { name: "Inspect", exact: true }).click();
+  await page.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Diagnostics",exact:true}).click();
   const containers = page.getByRole("region", { name: "Containers", exact: true });
   await expect(containers).toContainText("web-00");
   await expect(containers.getByRole("row")).toHaveCount(26);
@@ -401,7 +425,7 @@ test("Docker, Services, Storage and other inspections render application tables"
   await expect(containers.getByRole("row")).toHaveCount(2);
   await expect(containers).toContainText("web-07");
   await page.screenshot({ path: testInfo.outputPath("docker-content.png") });
-  for (const tool of ["Services", "Storage", "Software", "Proxy", "Network", "Firewall"]) {
+  for (const tool of ["Services", "Proxy", "Network", "Firewall"]) {
     await nav.getByRole("button", { name: tool, exact: true }).click();
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
     await expect(page.getByRole("main").getByRole("table").first()).toBeVisible();
@@ -879,21 +903,21 @@ test("File manager single-click opening and overflow details preserve drafts on 
   await expect(editor).toContainText("preserve this draft");
 });
 
-test("Docker workspace loads only on demand, groups Compose and masks details",async({page})=>{
+test("Docker workspace loads automatically once, groups Compose and masks details",async({page})=>{
  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
  await nav.getByRole("button",{name:"Docker",exact:true}).click();
  const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
- expect(await page.evaluate(()=>(window as any).__calls.some((c:any)=>c.cmd==="ssh_docker_query"))).toBe(false);
- await docker.getByRole("button",{name:"Load containers",exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_query" && c.query==="list").length)).toBe(1);
+ await expect(docker.getByRole("status",{name:"Container results"})).toContainText("Showing 3 of 3 containers");
  const filter=docker.getByRole("combobox",{name:"Container project filter"});
- await expect(filter).toContainText("All containers (3)");
+ await expect(filter).toContainText("All projects");
  await filter.click();
- await page.getByRole("option",{name:"website · 1/2 running",exact:true}).click();
+ await page.getByRole("option",{name:/website.*2 containers/}).click();
  await expect(filter).toContainText("website");
  await expect(docker.getByRole("button",{name:"worker",exact:true})).toBeVisible();
  await expect(docker.getByRole("button",{name:"standalone",exact:true})).toHaveCount(0);
  await filter.click();
- await page.getByRole("option",{name:"All containers (3)",exact:true}).click();
+ await page.getByRole("option",{name:"All projects",exact:true}).click();
  await expect(docker.getByRole("button",{name:"standalone",exact:true})).toBeVisible();
  await docker.getByRole("button",{name:"web",exact:true}).click();
  const detail=docker.getByRole("region",{name:"Container details",exact:true});
@@ -913,7 +937,7 @@ test("Docker workspace loads only on demand, groups Compose and masks details",a
 test("Docker logs require review and container terminals stay alive across navigation",async({page},testInfo)=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
  const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
- await docker.getByRole("button",{name:"Load containers",exact:true}).click();
+ await expect(docker.getByRole("status",{name:"Container results"})).toContainText("Showing 3 of 3 containers");
  await docker.getByRole("button",{name:"web",exact:true}).click();
  await docker.getByRole("button",{name:"Review live logs",exact:true}).click();
  await page.getByRole("dialog",{name:"Follow container logs?",exact:true}).getByRole("button",{name:"Cancel",exact:true}).click();
@@ -922,44 +946,56 @@ test("Docker logs require review and container terminals stay alive across navig
  await page.getByRole("dialog",{name:"Follow container logs?",exact:true}).getByRole("button",{name:"Follow logs",exact:true}).click();
  await expect(docker.getByRole("region",{name:"Container live logs",exact:true})).toContainText("fixture application ready");
  await docker.getByRole("button",{name:"Stop logs",exact:true}).click();
+ await docker.getByRole("navigation",{name:"Container detail views"}).getByRole("button",{name:"Terminal",exact:true}).click();
  await docker.getByRole("button",{name:"Open container terminal",exact:true}).click();
  await expect(docker.getByRole("textbox",{name:"Fixture Alpha interactive terminal",exact:true})).toBeVisible();
  const count=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_terminal_open").length);
  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_terminal_open").at(-1).container)).toBe("a".repeat(64));
+ const closed=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_stream_close").length);
+ await docker.getByRole("button",{name:"Close details",exact:true}).click();
+ await expect(docker.getByRole("complementary",{name:"Container inspector"})).toBeHidden();
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_stream_close").length)).toBe(closed);
+ await docker.getByRole("button",{name:"Open container details",exact:true}).click();
+ await expect(docker.getByRole("textbox",{name:"Fixture Alpha interactive terminal",exact:true})).toBeVisible();
  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
  await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_terminal_open").length)).toBe(count);
  await page.screenshot({path:testInfo.outputPath("docker-workspace.png")});
 });
 
-test("Docker cleanup scans only on request, protects volumes and requires exact confirmation",async({page})=>{
+test("Docker cleanup defaults to eligible items, protects data and reviews a selected batch",async({page},testInfo)=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
  const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
  await docker.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Cleanup",exact:true}).click();
- expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_snapshot").length)).toBe(0);
- await docker.getByRole("button",{name:"Scan cleanup candidates",exact:true}).click();
- await docker.getByRole("button",{name:"Actions for database-data",exact:true}).click();
- await expect(page.getByRole("menuitem",{name:"Review removal",exact:true})).toBeDisabled();
- await page.keyboard.press("Escape");
- await docker.getByRole("button",{name:"Actions for dangling-fixture",exact:true}).click();
- await page.getByRole("menuitem",{name:"Review removal",exact:true}).click();
+ const cleanup=docker.getByRole("region",{name:"Docker cleanup",exact:true});
+ await expect(cleanup.getByRole("checkbox",{name:"Select dangling-fixture",exact:true})).toBeVisible();
+ await expect(cleanup.getByRole("checkbox",{name:"Select rollback-image",exact:true})).toHaveCount(0);
+ await cleanup.getByRole("checkbox",{name:"Show protected items",exact:true}).check();
+ await expect(cleanup.getByRole("checkbox",{name:"Select rollback-image",exact:true})).toBeDisabled();
+ await page.screenshot({path:testInfo.outputPath("docker-cleanup-initial.png")});
+
+
+ await cleanup.getByRole("button",{name:"Select eligible",exact:true}).click();
+ await cleanup.getByRole("button",{name:"Review cleanup",exact:true}).click();
  const review=page.getByRole("dialog",{name:"Review Docker operation",exact:true});
- await expect(review).toContainText("fixture-engine-id");
- await expect(review.getByRole("button",{name:"Confirm operation",exact:true})).toBeDisabled();
+ await expect(review).toContainText("dangling-fixture");
+ await expect(review.getByRole("button",{name:"Remove selected",exact:true})).toBeDisabled();
  await review.getByRole("button",{name:"Cancel",exact:true}).click();
  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_execute").length)).toBe(0);
- await docker.getByRole("button",{name:"Actions for dangling-fixture",exact:true}).click();
- await page.getByRole("menuitem",{name:"Review removal",exact:true}).click();
- await review.getByRole("textbox",{name:"Confirm cleanup resource name"}).fill("dangling-fixture");
- await review.getByRole("button",{name:"Confirm operation",exact:true}).click();
- await expect(docker.getByRole("button",{name:"Actions for dangling-fixture",exact:true})).toHaveCount(0);
- await expect(docker).toContainText("Persistent data is always protected");
+ await cleanup.getByRole("button",{name:"Review cleanup",exact:true}).click();
+ await review.getByRole("textbox",{name:"Confirm cleanup resource name"}).fill("DELETE 1");
+ await review.getByRole("button",{name:"Remove selected",exact:true}).click();
+ await expect(cleanup.getByRole("region",{name:"Cleanup result",exact:true})).toContainText("Removed selected resources");
+ await expect(cleanup.getByRole("checkbox",{name:"Select dangling-fixture",exact:true})).toHaveCount(0);
+ await cleanup.getByText("Protected volumes (1)",{exact:true}).click();
+ await expect(cleanup).toContainText("database-data");
+ await page.screenshot({path:testInfo.outputPath("docker-cleanup.png")});
 });
 
 test("Docker lifecycle reviews refresh state and stale evidence is never retried",async({page})=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
  const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
- await docker.getByRole("button",{name:"Load containers",exact:true}).click();
+ await expect(docker.getByRole("status",{name:"Container results"})).toContainText("Showing 3 of 3 containers");
  await docker.getByRole("button",{name:"web",exact:true}).click();
  await docker.getByRole("button",{name:"Review stop",exact:true}).click();
  const review=page.getByRole("dialog",{name:"Review Docker operation",exact:true});
@@ -999,7 +1035,7 @@ test("Compose deployment keeps secrets out of preview/history and blocks unsafe 
 test("Docker log search and pause do not start new server requests",async({page})=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
  const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
- await docker.getByRole("button",{name:"Load containers",exact:true}).click();
+ await expect(docker.getByRole("status",{name:"Container results"})).toContainText("Showing 3 of 3 containers");
  await docker.getByRole("button",{name:"web",exact:true}).click();
  await docker.getByRole("button",{name:"Review live logs",exact:true}).click();
  await page.getByRole("dialog",{name:"Follow container logs?",exact:true}).getByRole("button",{name:"Follow logs",exact:true}).click();
@@ -1036,7 +1072,7 @@ test("Compose import requires confirmation and keeps file contents out of activi
 test("Docker layout keeps filters aligned, forms spaced and repeated server details out of the header",async({page},testInfo)=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
  const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
- await docker.getByRole("button",{name:"Load containers",exact:true}).click();
+ await expect(docker.getByRole("status",{name:"Container results"})).toContainText("Showing 3 of 3 containers");
  const filter=await docker.getByRole("combobox",{name:"Container project filter"}).boundingBox();
  const search=await docker.getByRole("textbox",{name:"Search containers"}).boundingBox();
  const table=await docker.locator("table").first().boundingBox();
@@ -1060,4 +1096,133 @@ test("Docker layout keeps filters aligned, forms spaced and repeated server deta
  await page.setViewportSize({width:480,height:900});
  const mobileFilter=await docker.getByRole("textbox",{name:"Deployment image"}).boundingBox();
  expect(mobileFilter!.x+mobileFilter!.width).toBeLessThanOrEqual(480);
+});
+
+test("Docker counts, filters and inspector stay separate without refreshing cached inventory",async({page},testInfo)=>{
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+ const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
+ await expect(docker.getByRole("status",{name:"Container results"})).toContainText("Showing 3 of 3 containers");
+ await expect(docker.locator("table:visible")).toHaveCount(1);
+ const results=docker.getByRole("status",{name:"Container results"});
+ await expect(results).toContainText("Showing 3 of 3 containers");
+ await expect(results).toContainText("1 Compose project");
+ const filter=docker.getByRole("combobox",{name:"Container project filter"});
+ const before=await filter.boundingBox();
+ await filter.click();
+ const popup=page.getByRole("listbox");
+ await expect(popup).toBeVisible();
+ await expect.poll(async()=>(await popup.boundingBox())!.width).toBeGreaterThanOrEqual(before!.width-1);
+ await page.getByRole("option",{name:"Standalone containers",exact:true}).click();
+ await expect(results).toContainText("Showing 1 of 3 containers");
+ await docker.getByRole("combobox",{name:"Container state filter"}).click();
+ await page.getByRole("option",{name:"Stopped",exact:true}).click();
+ await expect(results).toContainText("Showing 0 of 3 containers");
+ await docker.getByRole("button",{name:"Clear filters",exact:true}).click();
+ await expect(results).toContainText("Showing 3 of 3 containers");
+ const queries=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_query").length);
+ await docker.getByRole("button",{name:"web",exact:true}).click();
+ const inspector=docker.getByRole("complementary",{name:"Container inspector"});
+ await expect(inspector).toBeVisible();
+ const table=await docker.locator("table").first().boundingBox(),panel=await inspector.boundingBox();
+ expect(panel!.x).toBeGreaterThan(table!.x+table!.width);
+ await page.screenshot({path:testInfo.outputPath("docker-inspector.png")});
+ await inspector.getByRole("navigation",{name:"Container detail views"}).getByRole("button",{name:"Logs",exact:true}).click();
+ await expect(inspector.getByRole("button",{name:"Review live logs",exact:true})).toBeVisible();
+ await inspector.getByRole("button",{name:"Close details",exact:true}).click();
+ await expect(inspector).toBeHidden();
+ await docker.getByRole("textbox",{name:"Search containers"}).fill("worker");
+ await docker.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Images",exact:true}).click();
+ await docker.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Containers",exact:true}).click();
+ await expect(docker.getByRole("textbox",{name:"Search containers"})).toHaveValue("worker");
+ // The standalone container also uses worker:1; search includes image names.
+ await expect(results).toContainText("Showing 2 of 3 containers");
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_query").length)).toBe(queries+1);
+ await page.setViewportSize({width:430,height:900});
+ await docker.getByRole("button",{name:"worker",exact:true}).click();
+ await expect(inspector).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await page.screenshot({path:testInfo.outputPath("docker-inspector-mobile.png")});
+});
+
+test("Docker resource tabs load once, share cached inventory and refresh explicitly",async({page})=>{
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+ const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
+ await expect(docker.getByRole("status",{name:"Container results"})).toBeVisible();
+ const tabs=docker.getByRole("navigation",{name:"Docker sections"});
+ await tabs.getByRole("button",{name:"Images",exact:true}).click();
+ await expect(docker.getByRole("button",{name:"Actions for dangling-fixture",exact:true})).toBeVisible();
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_snapshot").length)).toBe(1);
+ for(const tab of ["Volumes","Networks","Cleanup","Images"])await tabs.getByRole("button",{name:tab,exact:true}).click();
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_snapshot").length)).toBe(1);
+ await docker.getByRole("region",{name:"Docker images",exact:true}).getByRole("button",{name:"Refresh",exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_snapshot").length)).toBe(2);
+ await tabs.getByRole("button",{name:"Containers",exact:true}).click();
+ await docker.getByRole("button",{name:"Refresh containers",exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_query"&&c.query==="list").length)).toBe(2);
+});
+
+test("failed automatic Docker loads wait for Refresh instead of retrying",async({page})=>{
+ await page.evaluate(()=>{(window as any).__failDockerList=true;(window as any).__failDockerResources=true;});
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+ const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
+ await expect(docker.getByRole("alert")).toContainText("Container inventory unavailable");
+ await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+ await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_query").length)).toBe(1);
+ await page.evaluate(()=>(window as any).__failDockerList=false);
+ await docker.getByRole("button",{name:"Refresh containers",exact:true}).click();
+ await expect(docker.getByRole("status",{name:"Container results"})).toBeVisible();
+ const tabs=docker.getByRole("navigation",{name:"Docker sections"});
+ await tabs.getByRole("button",{name:"Images",exact:true}).click();
+ await expect(docker.getByRole("alert")).toContainText("Resource inventory unavailable");
+ await tabs.getByRole("button",{name:"Networks",exact:true}).click();
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_snapshot").length)).toBe(1);
+ await page.evaluate(()=>(window as any).__failDockerResources=false);
+ await docker.getByRole("region",{name:"Docker networks",exact:true}).getByRole("button",{name:"Refresh",exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_snapshot").length)).toBe(2);
+});
+
+test("system prune is advanced, typed and blocked by protected resource evidence",async({page})=>{
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+ const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
+ await docker.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Cleanup",exact:true}).click();
+ const cleanup=docker.getByRole("region",{name:"Docker cleanup",exact:true});
+ await cleanup.getByText("Advanced cleanup · Docker system prune",{exact:true}).click();
+ const all=cleanup.getByRole("checkbox",{name:"Also remove unused tagged images (--all)",exact:true});
+ await expect(all).not.toBeChecked();
+ await cleanup.getByRole("button",{name:"Review system prune",exact:true}).click();
+ const review=page.getByRole("dialog",{name:"Review Docker operation",exact:true});
+ await expect(review).toContainText("No Docker dry run");
+ await expect(review).not.toContainText("--volumes");
+ await expect(review.getByRole("button",{name:"Run system prune",exact:true})).toBeDisabled();
+ await review.getByRole("textbox",{name:"Confirm cleanup resource name"}).fill("PRUNE");
+ await review.getByRole("button",{name:"Run system prune",exact:true}).click();
+ await expect(cleanup.getByRole("region",{name:"Cleanup result",exact:true})).toContainText("Docker reported reclaimed space");
+ await page.evaluate(()=>(window as any).__blockedPrune=true);
+ await all.check();
+ await cleanup.getByRole("button",{name:"Review system prune",exact:true}).click();
+ await expect(review).toContainText("--all");
+ await expect(review).toContainText("Protected workload");
+ await review.getByRole("textbox",{name:"Confirm cleanup resource name"}).fill("PRUNE");
+ await expect(review.getByRole("button",{name:"Run system prune",exact:true})).toBeDisabled();
+});
+
+test("canceling cleanup preserves completed results and skips remaining selections",async({page})=>{
+ await page.evaluate(()=>{(window as any).__twoCleanup=true;(window as any).__holdCleanup=true;});
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+ const docker=page.getByRole("region",{name:"Fixture Alpha Docker",exact:true});
+ await docker.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Cleanup",exact:true}).click();
+ const cleanup=docker.getByRole("region",{name:"Docker cleanup",exact:true});
+ await cleanup.getByRole("checkbox",{name:"Select dangling-fixture",exact:true}).check();
+ await cleanup.getByRole("navigation",{name:"Cleanup categories"}).getByRole("button",{name:/Networks/}).click();
+ await cleanup.getByRole("checkbox",{name:"Select old-network",exact:true}).check();
+ await cleanup.getByRole("button",{name:"Review cleanup",exact:true}).click();
+ const review=page.getByRole("dialog",{name:"Review Docker operation",exact:true});
+ await review.getByRole("textbox",{name:"Confirm cleanup resource name"}).fill("DELETE 2");
+ await review.getByRole("button",{name:"Remove selected",exact:true}).click();
+ await docker.getByRole("button",{name:"Cancel remaining items",exact:true}).click();
+ const result=cleanup.getByRole("region",{name:"Cleanup result",exact:true});
+ await expect(result).toContainText("removed");
+ await expect(result).toContainText("skipped");
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_cancel").length)).toBe(1);
 });

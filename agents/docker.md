@@ -7,14 +7,14 @@ Compose inventory, projected details, masked environment keys and on-demand
 resource snapshots. No automatic Docker polling, daemon installation, sudo,
 group membership changes or default-host Docker testing.
 
-Management views: Deploy, Images, Volumes, Networks, Cleanup and Activity.
+Management views: Containers, Run application, Images, Volumes, Networks, Cleanup and Activity.
 Dedicated Rust commands carry a fixed isolated Python stdlib program over the
 verified SSH connection, with JSON requests on stdin. No user shell fragments,
 config or credentials are interpolated into commands/history. Python 3 and
 Docker/Compose are prerequisites; errors never forward raw config/stderr.
 
 Supported operations: reviewed start/stop/restart, image pull, bridge-network/
-volume creation, Compose deployment and eligible one-resource cleanup. The
+volume creation, Compose deployment and eligible exact-resource cleanup. The
 legacy AppAction::DockerChange route remains disabled; it is not a bypass.
 
 ## Review, boundaries and safety
@@ -34,7 +34,7 @@ Uncertain outcomes stay visible and never trigger an automatic retry.
 
 Mutations require a local Unix-socket Docker engine on the SSH host. Inspecting
 a changed/remote context cannot authorize a mutation against another endpoint.
-No force, prune-all, volume removal, global daemon/service restart, Compose down,
+No force, volume removal, global daemon/service restart, Compose down,
 automatic image builds or database rollback.
 
 Container protections: infrastructure/database names/projects/images; host
@@ -72,7 +72,7 @@ outside this app are not coordinated by this per-user metadata.
 
 ## Cleanup
 
-One exact resource per approval, typed exact name; no blind pruning.
+Category-based cleanup defaults to eligible items, with optional protected items\nand cached dependency details. Select at most 20 exact resources across categories,\nreview once and type DELETE N. Native execution enforces this confirmation,\nrevalidates the whole batch and rechecks every exact resource before removal.\nCancel stops future steps; completed removals stay applied. A failure/unknown\noutcome stops the batch and leaves per-item removed/skipped/uncertain results.\nThe batch stops starting new items after 150 seconds; an in-flight SSH call keeps\nits existing 180-second deadline. Individual resource reviews remain available.
 - Image: untagged, unreferenced by all containers/parent images, not held for
   rollback, older than seven days. No --force.
 - Network: unreferenced (including stopped containers), bridge, non-built-in,
@@ -80,7 +80,26 @@ One exact resource per approval, typed exact name; no blind pruning.
 - Container: exited standalone, no mounts, no infrastructure/orchestrator/host
   integration, stopped more than seven days. No -v or --force.
 - Volumes: always protected, even with zero references. No volume deletion API.
-- Build cache: unsupported because exact dependency evidence is unavailable.
+- Build cache: reviewed only through the separate advanced system-prune workflow.
+
+Advanced system prune requires PRUNE at the native boundary, --all is off by
+default, --volumes/--force are never offered. Approval fixes a server-clock cutoff
+at least seven days old. Review reads bounded Docker system df metadata only on
+request, shows possible scope/cache estimates, and blocks unknown or active cache
+evidence and protected stopped workloads, networks or rollback-held images that
+global prune could reach. Dependencies used solely by approved eligible stopped
+containers may become unused during prune; running workloads remain referenced.
+No exact-ID dry run or exclusion list exists in Docker: concurrent external
+changes cannot be atomically prevented. Build-cache mounts may be cleared and
+future builds may slow down. Cancel is for batch items, not an already submitted
+system prune. Actual reclaimed bytes come only from Docker's completion report;
+selected-resource cleanup does not pretend image sizes equal space freed.
+
+Real private Alpine/Docker VM tests validated default prune, --all, actual
+BuildKit cache pruning, retained images, protected stopped/mounted workloads,
+dependent image/network cleanup, preserved running infrastructure/volumes,
+native typed approval, batch cancellation, stale targets and token replay.
+The expanded gate is enabled after these checks; generic mutation gates stay shut.
 
 No recursive data/volume scans, claimed zero-cost monitoring or guaranteed freed
 space. Image sizes include shared layers. Unknown sizes remain Unknown.
@@ -136,3 +155,42 @@ Additional namespace/socket, lifecycle-hook and host-privilege shortcuts and
 protected config/secret file sources are refused. Preflight is repeated at
 execution, with Docker's own bind checks as the final guard against concurrent
 external changes. This is not a security certification of arbitrary image code.
+
+
+## Docker container workspace refinement — 2026-10-31
+
+Containers is a single full-width inventory, not a combined Docker report.
+Diagnostics requires its own explicit tab. Keep filters/navigation/table headers
+visible with a bounded scrolling table; preserve filters, selection and sessions
+across tab/Home navigation. Deduplicate inventory by full container ID. Clearly
+separate container result totals, state totals and Compose project counts; a
+project dropdown is not a list of individual containers.
+
+Use compact readable names/images and distinguish published host bindings from
+internal-only ports; retain complete IDs/digests/bindings in cached details and
+tooltips. The inspector has Overview, Logs and Terminal views. Hiding/closing the
+inspector must not stop streams or unmount container shells. On narrower windows
+the same inspector is an overlay, with a close action and no page overflow.
+No new polling, privileged commands or important-VPS tests are authorized by this
+layout change. Keep existing native mutation protections and approvals.
+
+
+## Automatic Docker inventory — user correction, 2026-10-31
+
+Automatically load containers on the first connected, visible Docker visit.
+Load one shared images/volumes/networks/cleanup snapshot when its first resource
+tab is visited, and load diagnostics when opened. These initial read-only loads
+are now authorized; this supersedes the older explicit-Load requirement.
+Use Refresh controls afterward. Preserve cached results across tab/Home
+navigation, do not duplicate concurrent loads or introduce periodic polling,
+and do not automatically retry failed loads. Mutation reviews remain mandatory.
+
+
+## Docker page scrolling — user correction
+
+Docker content uses the workspace page scroll, with no bounded vertical scroll
+regions around inventory, resources, cleanup, forms or history. Keep Docker's
+section tabs in normal page flow, scrolling with the content (user correction,
+2026-11-01); do not make them sticky. Horizontal table
+overflow and bounded terminal/log output or mobile inspector overlays retain
+their appropriate scrolling.

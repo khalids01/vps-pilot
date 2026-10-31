@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 export function TerminalView({
   label,
   children,
+  defaultOptionsVisible = true,
 }: {
   label: string;
   children: ReactNode;
+  defaultOptionsVisible?: boolean;
 }) {
   const [fullView, setFullView] = useState(false);
-  const [optionsVisible, setOptionsVisible] = useState(true);
+  const [optionsVisible, setOptionsVisible] = useState(defaultOptionsVisible);
   const optionsId = useId();
 
   return (

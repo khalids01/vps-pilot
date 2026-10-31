@@ -124,7 +124,7 @@ def snapshot():
             refs = [c["name"] for c in containers if c["image"] == i["Id"]]
             refs += ["image "+child["Id"] for child in raw if child.get("Parent")==i["Id"]]
             tags = i.get("RepoTags") or []
-            images.append({"kind":"image","id":i["Id"],"name":", ".join(tags) or i["Id"][:19],"tags":tags,"bytes":i["Size"],"created":i["Created"],"references":refs,
+            images.append({"kind":"image","id":i["Id"],"name":", ".join(tags) or i["Id"][:19],"tags":tags,"retained":i["Id"] in retained,"bytes":i["Size"],"created":i["Created"],"references":refs,
                            "reason":"Referenced by containers/images" if refs else "Retained for application rollback" if i["Id"] in retained else "Tagged images are retained for redeploy/rollback" if tags else "Younger than seven days" if not old_enough(i["Created"]) else ""})
     volume_rows = lines(["volume", "ls", "--format", '{"name":{{json .Name}},"driver":{{json .Driver}}}'])
     volumes = [{"kind":"volume","id":v["name"],"name":v["name"],"driver":v["driver"],"references":[c["name"] for c in containers if any(m.get("Name")==v["name"] for m in c["mounts"])],"reason":"Persistent data is always protected from cleanup","bytes":None} for v in volume_rows]
@@ -139,15 +139,15 @@ def snapshot():
                       else "Referenced by containers, including stopped containers" if refs
                       else "Compose-managed network" if (n.get("Labels") or {}).get("com.docker.compose.project")
                       else "Younger than seven days" if not old_enough(n.get("Created")) else "")
-            networks.append({"kind":"network","id":n["Id"],"name":n["Name"],"driver":n["Driver"],"references":refs,"reason":reason,"bytes":None})
-    stopped = [{"kind":"container","id":c["id"],"name":c["name"],"references":[],"bytes":None,
+            networks.append({"kind":"network","id":n["Id"],"name":n["Name"],"driver":n["Driver"],"created":n.get("Created"),"compose":bool((n.get("Labels") or {}).get("com.docker.compose.project")),"references":refs,"reason":reason,"bytes":None})
+    stopped = [{"kind":"container","id":c["id"],"name":c["name"],"project":c.get("project") or "","created":c["created"],"stoppedAt":c["finished"] if c["state"]=="exited" else None,"references":[],"bytes":None,
                 "reason":c["protectedReason"] or ("Not stopped" if c["state"]!="exited" else "Mounted data is protected" if c["mounts"] else "Compose-managed container" if c["project"] else "Stopped less than seven days ago" if not old_enough(c["finished"]) else "")} for c in containers]
     resources = images + networks + volumes + stopped
     for r in resources:
         r["eligible"] = not r["reason"]
         r["fingerprint"] = fingerprint(r)
     return {"engine":identity,"containers":containers,"images":images,"networks":networks,"volumes":volumes,"cleanup":resources,
-            "observedAt":int(dt.datetime.now(dt.timezone.utc).timestamp()),"buildCache":"Not eligible: exact cache dependency evidence is not available"}
+            "observedAt":int(dt.datetime.now(dt.timezone.utc).timestamp()),"buildCache":"Build cache is reviewed separately under Advanced cleanup."}
 def protect(c):
     if c.get("orchestrator") or c.get("pod"):
         return "Orchestrator-managed container is protected"
@@ -318,14 +318,114 @@ def check_ports(plan,snap,project):
                 plan["blocked"].append(service["name"]+": use a single explicit published port per mapping.")
             elif ("tcp",published) in reserved or ("udp",published) in reserved or any((p,published) in listening and (p,published) not in owned for p in ("tcp","udp")):
                 plan["blocked"].append(service["name"]+": published port "+published+" is reserved or already listening.")
-def preview(request):
+def before_cutoff(value, cutoff):
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z","+00:00")).timestamp()<=cutoff
+    except (ValueError,TypeError):
+        return None
+def prune_plan(request,snap,cutoff=None):
+    now=int(dt.datetime.now(dt.timezone.utc).timestamp())
+    cutoff=now-7*86400 if cutoff is None else cutoff
+    if not isinstance(cutoff,int) or cutoff<0 or cutoff>now-7*86400:
+        raise Refused("System prune requires a fixed cutoff at least seven days old.")
+    all_images=request.get("allImages") is True
+    blocked=[]
+    candidates=[]
+    potential_containers=[]
+    # Rechecked immediately before execution; Docker never prunes running containers.
+    for c in snap["containers"]:
+        if c["state"] in ("running","paused","restarting"):
+            continue
+        old=before_cutoff(c["created"],cutoff)
+        if old is False:
+            continue
+        r=next(r for r in snap["cleanup"] if r["kind"]=="container" and r["id"]==c["id"])
+        if old is None or not r["eligible"]:
+            blocked.append("Container "+c["name"]+": global prune cannot exclude this stopped protected workload.")
+        else:
+            candidates.append(r)
+            potential_containers.append(c["name"])
+    for r in snap["networks"]:
+        if r["name"] in ("bridge","host","none"):
+            continue
+        old=before_cutoff(r.get("created"),cutoff)
+        if old is False or any(name not in potential_containers for name in r["references"]):
+            continue
+        becomes_unused=bool(r["references"]) and not r.get("compose") and r.get("driver")=="bridge" and r["reason"].startswith("Referenced by")
+        if old is None or not (r["eligible"] or becomes_unused):
+            blocked.append("Network "+r["name"]+": "+r["reason"]+".")
+        else:
+            candidates.append(r)
+    for r in snap["images"]:
+        if r.get("tags") and not all_images:
+            continue
+        old=before_cutoff(r.get("created"),cutoff)
+        if old is False:
+            continue
+        remaining_refs=[name for name in r["references"] if name not in potential_containers]
+        # Image-parent references may disappear during pruning: fail closed.
+        if any(not name.startswith("image ") for name in remaining_refs):
+            continue
+        allow_tagged=all_images and r["reason"]=="Tagged images are retained for redeploy/rollback"
+        becomes_unused=bool(r["references"]) and not remaining_refs and not r.get("retained") and r["reason"]=="Referenced by containers/images"
+        if old is None or r.get("retained") or not (r["eligible"] or allow_tagged or becomes_unused):
+            blocked.append("Image "+r["name"]+": "+r["reason"]+".")
+        else:
+            candidates.append(r)
+    caches=lines(["system","df","--format","{{json .}}"])
+    cache=next((r for r in caches if str(r.get("Type","")).lower().replace(" ","")=="buildcache"),None)
+    if not cache:
+        blocked.append("Build cache usage could not be verified.")
+        cache_summary=None
+    else:
+        try:
+            total=int(cache["TotalCount"]); active=int(cache["Active"])
+            if total<0 or active<0 or active>total:
+                raise ValueError()
+            cache_summary={"records":total,"active":active,
+                "size":str(cache.get("Size","Unknown"))[:80],
+                "reclaimable":str(cache.get("Reclaimable","Unknown"))[:80]}
+            if active:
+                blocked.append("Build cache reports active records; finish builds before system prune.")
+        except (KeyError,ValueError,TypeError):
+            raise Refused("Build cache evidence was incomplete.")
+    args=["system","prune","--filter","until="+str(cutoff)]
+    if all_images:
+        args.append("--all")
+    return {"cutoff":cutoff,"allImages":all_images,"items":candidates,"cache":cache_summary,
+        "blocked":blocked,"confirmation":"PRUNE","name":"Docker system prune",
+        "command":shlex.join(["docker"]+args),
+        "warning":"No Docker dry run exists. This is a preflight estimate, not an exact deletion list. Unused build cache, including cache mounts, can be cleared and future builds may be slower. The age filter is not an exact cache-item protection. Volumes are never included. Do not run concurrent external Docker changes. This operation cannot be rolled back or canceled after submission."}
+def preview(request,snap=None,cutoff=None):
     action=request["action"]
-    snap=snapshot()
+    snap=snapshot() if snap is None else snap
     plan={"action":action,"engine":snap["engine"],"name":"","target":request.get("target",""),"warning":"No automatic retry or rollback. Completed changes remain applied.","blocked":[]}
     target=request.get("target","")
     if not snap["engine"]["localSocket"]:
         plan["blocked"].append("Mutations require a Docker engine on this SSH host's local Unix socket.")
-    if action in ("start","stop","restart"):
+    if action=="cleanupBatch":
+        targets=request.get("targets")
+        if not isinstance(targets,list) or not 1<=len(targets)<=20:
+            raise Refused("Select one to 20 exact cleanup resources.")
+        seen=set(); items=[]
+        for item in targets:
+            if not isinstance(item,dict) or item.get("kind") not in ("image","network","container") or not isinstance(item.get("id"),str):
+                raise Refused("Select exact non-volume cleanup resources.")
+            key=(item["kind"],item["id"])
+            if key in seen:
+                raise Refused("Duplicate cleanup resource.")
+            seen.add(key)
+            child=preview({"action":"cleanup","kind":item["kind"],"target":item["id"]},snap)
+            items.append(child)
+        plan.update(name=str(len(items))+" selected resources",items=items,
+            confirmation="DELETE "+str(len(items)),
+            command="\n".join(item["command"] for item in items),
+            warning="Selected resources are permanently removed. Container writable layers and logs are deleted; back up needed files first. Volumes are never removed. Cancel stops remaining items; completed changes stay applied.")
+    elif action=="systemPrune":
+        existing=plan["blocked"]
+        plan.update(prune_plan(request,snap,cutoff))
+        plan["blocked"]+=existing
+    elif action in ("start","stop","restart"):
         c=next((c for c in snap["containers"] if c["id"]==target),None)
         if not c:
             raise Refused("Container is no longer available.")
@@ -377,16 +477,22 @@ def preview(request):
     return plan
 def execute(request):
     expected=request["plan"]
-    current=preview(request["request"])
+    current=preview(request["request"],cutoff=expected.get("cutoff"))
     if fingerprint(current)!=fingerprint(expected):
         raise Refused("Docker state or dependencies changed after review. Nothing was changed.")
     if current.get("blocked"):
-        raise Refused("This deployment has unresolved safety checks.")
+        raise Refused("This operation has unresolved safety checks.")
     action=current["action"]
     target=current["target"]
     backup=None
     retain_images(current["engine"]["id"],current.get("retainImages",[]))
-    if action in ("start","stop","restart"):
+    if action=="cleanupBatch":
+        raise Refused("Batch cleanup requires the native cancelable orchestrator.")
+    if action=="systemPrune":
+        args=["system","prune","--filter","until="+str(current["cutoff"])]
+        if current["allImages"]:
+            args.append("--all")
+    elif action in ("start","stop","restart"):
         args=[action]
         if action in ("stop","restart"):
             args+=["--time","10"]
@@ -426,7 +532,7 @@ def execute(request):
                 os.unlink(stage)
         args=["compose","--project-name",target,"--project-directory",directory,"-f",str(target_path),"up","-d","--no-build","--pull","never","--wait","--wait-timeout","20"]
     try:
-        cli(args)
+        output=cli(args,"y\n" if action=="systemPrune" else None)
     except Refused:
         return {"status":"uncertain","message":"Docker did not confirm success. Changes/configuration may already be applied. Inspect before retrying.","backup":str(backup) if backup else None}
     result=snapshot()
@@ -435,7 +541,13 @@ def execute(request):
         wanted="exited" if action=="stop" else "running"
         if not container or container["state"]!=wanted:
             return {"status":"uncertain","message":"Post-action state was not confirmed. Inspect before retrying.","backup":None}
-    return {"status":"completed","message":"Docker confirmed the operation; inventory was refreshed.","backup":str(backup) if backup else None,"snapshot":result}
+    reclaimed=None
+    if action=="systemPrune":
+        match=re.search(r"Total reclaimed space:\s*([0-9.]+)\s*([kmgtpe]?B)",output,re.I)
+        if match:
+            units={"b":1,"kb":1000,"mb":1000**2,"gb":1000**3,"tb":1000**4,"pb":1000**5,"eb":1000**6}
+            reclaimed=int(float(match.group(1))*units[match.group(2).lower()])
+    return {"status":"completed","message":"Docker confirmed the operation; inventory was refreshed.","backup":str(backup) if backup else None,"snapshot":result,"reclaimedBytes":reclaimed}
 def main(request):
     if request["mode"]=="snapshot":
         return snapshot()

@@ -806,7 +806,7 @@ action gates remain unchanged. Volumes/infrastructure/orchestrator workloads,
 active references, retained rollback images and internal metadata are protected.
 
 The implementation does not include builds, registry credential storage, volume
-backup/restore, automatic data/image rollback, bulk destructive operations,
+backup/restore, automatic data/image rollback, unbounded bulk destructive operations,
 retention purging or persistent cross-launch history. See agents/docker.md for
 bounds and tested behavior. The important VPS and default Docker daemon were
 never test targets.
@@ -852,3 +852,35 @@ assets/updater URLs, and checksum the fixed copies too. Use GitHub latest/downlo
 links; do not fetch download metadata or introduce per-visitor GitHub API
 requests. Render the same permanent links regardless of cached metadata. Verify the live website and redirects after
 the first release that introduces the fixed filenames.
+
+
+## Cleanup redesign and advanced prune — authorized 2026-10-31
+
+Implement category-based cleanup with eligible-only defaults, optional protected
+items, bounded multi-selection, one review and per-item outcomes. Batch cleanup
+rechecks each exact approved resource and supports canceling remaining steps.
+Volumes stay protected. Estimates must not be presented as guaranteed reclaimed
+space; show Docker-reported reclaimed space only where available.
+
+Add separately reviewed advanced docker system prune, with a fixed seven-day
+creation cutoff, --all off by default and no volume flag. Docker has no dry run
+or exact-ID exclusions: refuse the operation when its possible scope reaches
+protected resources, infrastructure, mounted data or rollback holds. Build cache
+is included by Docker and must be disclosed as an estimate with possible rebuild
+cost. Revalidate at execution; never claim an atomic preview against external
+administrators. Never use the important VPS/default daemon for validation.
+Keep new batch/prune execution gated until real disposable-VM tests pass.
+
+
+### Cleanup redesign implemented and validated
+
+Eligible-only categories, protected details/volumes, bounded cross-category
+selection, exact batch review, native typed confirmation and cancel-remaining
+progress with per-item outcomes. Advanced fixed-cutoff system prune defaults
+--all off, excludes volumes, blocks protected possible scope and distinguishes
+estimates from Docker-reported reclaimed bytes. Revalidation remains optimistic
+against external admins; no automatic retries or cancellation of submitted prune.
+Real isolated KVM tests passed for native batch cancellation/stale/replay, default
+prune, --all, actual BuildKit cache, rollback holds and preserved mounted/stopped
+and running infrastructure data. Gates enabled after validation. No important VPS
+or default Docker daemon was used.

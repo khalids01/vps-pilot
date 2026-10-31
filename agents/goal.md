@@ -186,7 +186,7 @@ Implement the proposed application-oriented Docker workflow, including lifecycle
 reviews, Compose configuration/deployment preparation, focused detail views,
 log filtering, image/network/volume inventory and dependency-aware cleanup
 previews. Protect volumes, active references, system/infrastructure workloads,
-and mounted host data. Never use force/prune-all or blindly remove resources.
+and mounted host data. Never use force, unreviewed global prune or blindly remove resources.
 Keep secrets out of history/SQLite. Validate mutations in a separate disposable
 VM before enabling production execution; no tests against the important VPS.
 All deployment/cleanup proposals require exact targets, dependency evidence and
@@ -198,8 +198,9 @@ Alpine 3.24 VM with Docker 29.9.2 / Compose 5.6.1. Dedicated Docker management
 actions may execute only through the engine/dependency-bound review protocol.
 This does not enable the legacy generic Docker-change or system-service gates.
 Volumes, infrastructure/orchestrator workloads, host-integrated containers and
-referenced resources stay protected. No system prune, force removal, image builds
-or automatic database rollback. Rollback image IDs are retained in private
+referenced resources stay protected. No force removal, image builds or automatic
+database rollback. The later cleanup increment adds separately reviewed system
+prune under its stricter policy below. Rollback image IDs are retained in private
 per-SSH-user metadata; Files protects that metadata and its parent roots.
 
 
@@ -240,3 +241,69 @@ the first release that introduces the fixed filenames.
 Fresh installations open Home with no server tabs. Do not automatically open
 Production, Staging or Development demo workspaces in either browser or desktop.
 Continue restoring deliberately saved server tabs on subsequent launches.
+
+
+## Docker container workspace refinement — 2026-10-31
+
+Containers is a single full-width inventory, not a combined Docker report.
+Diagnostics requires its own explicit tab. Keep filters/navigation/table headers
+visible with a bounded scrolling table; preserve filters, selection and sessions
+across tab/Home navigation. Deduplicate inventory by full container ID. Clearly
+separate container result totals, state totals and Compose project counts; a
+project dropdown is not a list of individual containers.
+
+Use compact readable names/images and distinguish published host bindings from
+internal-only ports; retain complete IDs/digests/bindings in cached details and
+tooltips. The inspector has Overview, Logs and Terminal views. Hiding/closing the
+inspector must not stop streams or unmount container shells. On narrower windows
+the same inspector is an overlay, with a close action and no page overflow.
+No new polling, privileged commands or important-VPS tests are authorized by this
+layout change. Keep existing native mutation protections and approvals.
+
+
+## Automatic Docker inventory — user correction, 2026-10-31
+
+Automatically load containers on the first connected, visible Docker visit.
+Load one shared images/volumes/networks/cleanup snapshot when its first resource
+tab is visited, and load diagnostics when opened. These initial read-only loads
+are now authorized; this supersedes the older explicit-Load requirement.
+Use Refresh controls afterward. Preserve cached results across tab/Home
+navigation, do not duplicate concurrent loads or introduce periodic polling,
+and do not automatically retry failed loads. Mutation reviews remain mandatory.
+
+
+## Cleanup redesign and advanced prune — authorized 2026-10-31
+
+Implement category-based cleanup with eligible-only defaults, optional protected
+items, bounded multi-selection, one review and per-item outcomes. Batch cleanup
+rechecks each exact approved resource and supports canceling remaining steps.
+Volumes stay protected. Estimates must not be presented as guaranteed reclaimed
+space; show Docker-reported reclaimed space only where available.
+
+Add separately reviewed advanced docker system prune, with a fixed seven-day
+creation cutoff, --all off by default and no volume flag. Docker has no dry run
+or exact-ID exclusions: refuse the operation when its possible scope reaches
+protected resources, infrastructure, mounted data or rollback holds. Build cache
+is included by Docker and must be disclosed as an estimate with possible rebuild
+cost. Revalidate at execution; never claim an atomic preview against external
+administrators. Never use the important VPS/default daemon for validation.
+Keep new batch/prune execution gated until real disposable-VM tests pass.
+
+
+Cleanup expansion validation completed in the private disposable Alpine/Docker VM:
+native batch approval/cancellation/stale-target/replay, default and --all system
+prune, real BuildKit cache removal, retained images, protected stopped workloads,
+dependent image/network cleanup and preserved running infrastructure/volumes.
+Batch/prune gates are enabled; generic system/firewall/proxy gates stay unchanged.
+Native confirmation is DELETE N or PRUNE, volumes are never a deletion target,
+and interrupted/uncertain operations never auto-retry.
+
+
+## Docker page scrolling — user correction
+
+Docker content uses the workspace page scroll, with no bounded vertical scroll
+regions around inventory, resources, cleanup, forms or history. Keep Docker's
+section tabs in normal page flow, scrolling with the content (user correction,
+2026-11-01); do not make them sticky. Horizontal table
+overflow and bounded terminal/log output or mobile inspector overlays retain
+their appropriate scrolling.

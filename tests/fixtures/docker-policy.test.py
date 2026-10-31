@@ -77,5 +77,53 @@ class Policy(unittest.TestCase):
             manager.check_ports(plan,snap,"project")
         self.assertTrue(any("already listening" in v for v in plan["blocked"]))
 
+class CleanupPolicy(unittest.TestCase):
+    def base(self):
+        return {"containers":[],"images":[],"networks":[],"cleanup":[]}
+    def cache(self):
+        return patch.object(manager,"lines",return_value=[{"Type":"Build Cache","TotalCount":"0","Active":"0","Size":"0B","Reclaimable":"0B"}])
+    def test_system_prune_protects_stopped_workloads_and_never_uses_volume_or_force_flags(self):
+        snap=self.base()
+        snap["containers"]=[{"id":"a","name":"database","state":"exited","created":"2020-01-01T00:00:00Z"}]
+        snap["cleanup"]=[{"id":"a","kind":"container","eligible":False,"reason":"Mounted data"}]
+        with self.cache():plan=manager.prune_plan({},snap)
+        self.assertTrue(plan["blocked"])
+        self.assertNotIn("--volumes",plan["command"])
+        self.assertNotIn("--force",plan["command"])
+        self.assertNotIn("--all",plan["command"])
+        self.assertIn("until=",plan["command"])
+        snap["containers"][0]["state"]="running"
+        with self.cache():self.assertEqual(manager.prune_plan({},snap)["blocked"],[])
+    def test_rollback_holds_and_unused_compose_networks_block_global_prune(self):
+        snap=self.base()
+        snap["images"]=[{"id":"i","kind":"image","name":"held","created":"2020-01-01T00:00:00Z","tags":[],"references":[],"eligible":False,"reason":"Retained for application rollback"}]
+        snap["networks"]=[{"name":"project_default","created":"2020-01-01T00:00:00Z","references":[],"eligible":False,"reason":"Compose-managed network"}]
+        with self.cache():plan=manager.prune_plan({},snap)
+        self.assertTrue(any("rollback" in r for r in plan["blocked"]))
+        self.assertTrue(any("Compose" in r for r in plan["blocked"]))
+    def test_prune_closure_cannot_erase_a_rollback_hold(self):
+        snap=self.base()
+        snap["containers"]=[{"id":"c","name":"old","state":"exited","created":"2020-01-01T00:00:00Z"}]
+        snap["cleanup"]=[{"kind":"container","id":"c","name":"old","eligible":True}]
+        snap["images"]=[{"kind":"image","id":"i","name":"image","created":"2020-01-01T00:00:00Z","tags":[],"references":["old"],"reason":"Referenced by containers/images","retained":True,"eligible":False}]
+        with self.cache():self.assertTrue(manager.prune_plan({},snap)["blocked"])
+        snap["images"][0]["retained"]=False
+        with self.cache():self.assertEqual(manager.prune_plan({},snap)["blocked"],[])
+    def test_system_prune_reuses_review_cutoff_and_rejects_younger_filter(self):
+        with self.cache():
+            plan=manager.prune_plan({},self.base())
+            self.assertEqual(manager.prune_plan({},self.base(),plan["cutoff"])["cutoff"],plan["cutoff"])
+            with self.assertRaises(manager.Refused):manager.prune_plan({},self.base(),int(dt.datetime.now(dt.timezone.utc).timestamp()))
+    def test_active_or_unknown_build_cache_is_blocked(self):
+        with patch.object(manager,"lines",return_value=[]):self.assertTrue(manager.prune_plan({},self.base())["blocked"])
+        with patch.object(manager,"lines",return_value=[{"Type":"Build Cache","TotalCount":"2","Active":"1","Size":"1MB","Reclaimable":"0B"}]):
+            self.assertTrue(manager.prune_plan({},self.base())["blocked"])
+    def test_batch_rejects_volumes_duplicate_ids_and_more_than_twenty(self):
+        snap={"engine":{"localSocket":True},"cleanup":[{"id":"image","kind":"image","name":"image","eligible":True,"fingerprint":"f"}]}
+        for targets in ([{"kind":"volume","id":"v"}],[{"kind":"image","id":"image"}]*2,[{"kind":"image","id":"image"}]*21):
+            with self.assertRaises(manager.Refused):manager.preview({"action":"cleanupBatch","targets":targets},snap)
+        plan=manager.preview({"action":"cleanupBatch","targets":[{"kind":"image","id":"image"}]},snap)
+        self.assertEqual(plan["confirmation"],"DELETE 1")
+        self.assertEqual(plan["items"][0]["target"],"image")
 if __name__=="__main__":
     unittest.main()

@@ -20,6 +20,7 @@ commands.allow = [
   "ssh_docker_review",
   "ssh_docker_execute",
   "ssh_docker_reject",
+  "ssh_docker_cancel",
   "ssh_terminal_input",
   "ssh_terminal_resize",
   "ssh_stream_ack",

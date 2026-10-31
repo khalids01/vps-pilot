@@ -280,10 +280,14 @@ function RemoteWorkspaceContent({
         {settingsOpen && <SettingsPage />}
         <main
           aria-label={`${profile.name}: Connection`}
-          className={`${settingsOpen ? "hidden" : ""} min-h-0 min-w-0 flex-1 overflow-y-auto p-5 sm:p-8`}
+          className={`${settingsOpen ? "hidden" : ""} min-h-0 min-w-0 flex-1 ${tool === "Docker" ? "overflow-y-auto p-4 sm:p-6" : "overflow-y-auto p-5 sm:p-8"}`}
         >
-          <div className="mx-auto w-full max-w-6xl">
-            <div>
+          <div
+            className={
+              tool === "Docker" ? "w-full" : "mx-auto w-full max-w-6xl"
+            }
+          >
+            <div className={tool === "Docker" ? "w-full" : undefined}>
               {terminalOpened && (
                 <div
                   className={tool === "Terminal" ? "flex flex-col" : "hidden"}
@@ -294,9 +298,13 @@ function RemoteWorkspaceContent({
                 </div>
               )}
               {dockerOpened && (
-                <div className={tool === "Docker" ? "block" : "hidden"}>
+                <div className={tool === "Docker" ? "w-full" : "hidden"}>
                   <Suspense fallback={<p>Loading Docker workspace…</p>}>
-                    <RemoteDocker profile={profile} connected={connected} />
+                    <RemoteDocker
+                      profile={profile}
+                      connected={connected}
+                      active={active && tool === "Docker" && !settingsOpen}
+                    />
                   </Suspense>
                 </div>
               )}
