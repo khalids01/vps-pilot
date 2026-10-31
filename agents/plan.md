@@ -831,3 +831,13 @@ Block namespace/socket/privileged shortcuts and protected config/secret sources.
 These checks protect current host resources; they do not certify arbitrary image
 code or lock out concurrent external administrators. Test only in disposable
 fixtures, never the important VPS.
+
+
+### Download website recovery — 2026-10-31
+
+Release v0.2.0-build.9 published both signed-update Mac architectures successfully,
+but the Pages deployment hit an OIDC request timeout. The website consequently
+kept its v0.1.0 manifest. Keep Pages permissions explicit at the deployment job
+and verify identity with three bounded attempts before deployment. Never log
+identity-token values or weaken updater signing. Verify the public download
+manifest after successful deployment; GitHub release success alone is insufficient.

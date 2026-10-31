@@ -16,6 +16,10 @@ permissions:
   id-token: write
 jobs:
   deploy:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     runs-on: ubuntu-22.04
     concurrency:
       group: pages
@@ -63,5 +67,23 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: website
+      - name: Verify Pages deployment identity
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+              throw new Error('Pages deployment requires id-token: write on this job and its caller.');
+            }
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                await core.getIDToken();
+                core.info('Pages deployment identity verified.');
+                break;
+              } catch {
+                if (attempt === 3) throw new Error('GitHub OIDC is unavailable after three attempts. Retry this Pages job; desktop installers remain published.');
+                core.warning('GitHub OIDC request failed; retrying without exposing token details.');
+                await new Promise(resolve => setTimeout(resolve, 3000));
+              }
+            }
       - uses: actions/deploy-pages@v4
         id: deployment
