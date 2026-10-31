@@ -1,10 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { defaultPreferences, sanitizePreferences } from "./preferences";
 
-describe("sample workspace preference boundaries", () => {
+describe("workspace preference boundaries", () => {
+  test("fresh installations start on Home with no open server tabs", () => {
+    const preferences = defaultPreferences();
+    expect(preferences.page).toBe("fleet");
+    expect(preferences.openServerIds).toEqual([]);
+    expect(preferences.activeServerId).toBeNull();
+  });
   test("restores known tabs in order and each server's own preferences", () => {
     const input = defaultPreferences();
-    input.openServerIds.reverse();
+    input.openServerIds = [
+      "sample-development",
+      "sample-staging",
+      "sample-production",
+    ];
     input.activeServerId = "sample-staging";
     input.servers["sample-production"].tool = "terminal";
     input.servers["sample-staging"].softwareCategory = "Proxies";
@@ -84,4 +94,25 @@ test("restores remote tab IDs and UI preferences without accepting connection me
   expect(output?.servers[id].commandExpanded).toBe(false);
   expect(JSON.stringify(output)).not.toContain("not-ui-data");
   expect(JSON.stringify(output)).not.toContain("must not persist");
+});
+
+test("untouched legacy demo startup opens Home without removing customized sessions", () => {
+  const legacy = {
+    ...defaultPreferences(),
+    page: "server",
+    openServerIds: [
+      "sample-production",
+      "sample-staging",
+      "sample-development",
+    ],
+    activeServerId: "sample-production",
+  };
+  const result = sanitizePreferences(legacy);
+  expect(result?.openServerIds).toEqual([]);
+  expect(result?.page).toBe("fleet");
+  expect(result?.activeServerId).toBeNull();
+  legacy.servers["sample-production"].tool = "terminal";
+  expect(sanitizePreferences(legacy)?.openServerIds).toEqual(
+    legacy.openServerIds,
+  );
 });

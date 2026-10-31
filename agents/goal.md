@@ -233,3 +233,10 @@ assets/updater URLs, and checksum the fixed copies too. Use GitHub latest/downlo
 links; do not fetch download metadata or introduce per-visitor GitHub API
 requests. Render the same permanent links regardless of cached metadata. Verify the live website and redirects after
 the first release that introduces the fixed filenames.
+
+
+## First launch — 2026-10-31
+
+Fresh installations open Home with no server tabs. Do not automatically open
+Production, Staging or Development demo workspaces in either browser or desktop.
+Continue restoring deliberately saved server tabs on subsequent launches.

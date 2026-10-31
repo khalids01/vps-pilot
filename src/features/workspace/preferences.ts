@@ -1,4 +1,3 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import {
   readPreference,
@@ -37,8 +36,8 @@ export function defaultPreferences(): WorkspacePreferences {
   return {
     version: 1,
     page: "fleet",
-    openServerIds: sampleServers.map((server) => server.id),
-    activeServerId: sampleServers[0].id,
+    openServerIds: [],
+    activeServerId: null,
     servers: Object.fromEntries(
       sampleServers.map((server) => [
         server.id,
@@ -118,15 +117,20 @@ export function sanitizePreferences(
         preference.helperScenario = raw.helperScenario;
     }
   }
-  return result;
-}
-function initialPreferences() {
-  const preferences = defaultPreferences();
-  if (isTauri()) {
-    preferences.openServerIds = [];
-    preferences.activeServerId = null;
+  // Older releases persisted the automatically seeded, untouched demo workspace.
+  // Clear only that exact state; never remove a real VPS or a customized session.
+  if (
+    result.openServerIds.length === sampleServers.length &&
+    result.openServerIds.every((id, index) => id === sampleServers[index].id) &&
+    result.activeServerId === sampleServers[0].id &&
+    JSON.stringify(result.servers) ===
+      JSON.stringify(defaultPreferences().servers)
+  ) {
+    result.openServerIds = [];
+    result.activeServerId = null;
+    result.page = "fleet";
   }
-  return preferences;
+  return result;
 }
 function loadPreferences(): {
   preferences: WorkspacePreferences;
@@ -134,20 +138,19 @@ function loadPreferences(): {
 } {
   try {
     const raw = readPreference(workspacePreferenceKey);
-    if (!raw) return { preferences: initialPreferences(), notice: "" };
+    if (!raw) return { preferences: defaultPreferences(), notice: "" };
     const parsed =
       raw.length <= 64_000 ? sanitizePreferences(JSON.parse(raw)) : null;
     return {
-      preferences: parsed ?? initialPreferences(),
+      preferences: parsed ?? defaultPreferences(),
       notice: parsed
         ? ""
-        : "Saved workspace preferences were invalid. The default sample workspace was restored.",
+        : "Saved workspace preferences were invalid. Home was restored.",
     };
   } catch {
     return {
-      preferences: initialPreferences(),
-      notice:
-        "Workspace preferences could not be read. Using the default sample workspace.",
+      preferences: defaultPreferences(),
+      notice: "Workspace preferences could not be read. Opening Home instead.",
     };
   }
 }

@@ -279,26 +279,28 @@ function ServerWorkspace({
             <p className="hidden px-3 pt-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
               Workspace
             </p>
-            {tools.map(({ id, label, icon: Icon }, index) => (
-              <div key={id} className={id === "helper" ? "md:pt-5" : ""}>
-                {index === 2 && (
-                  <p className="mt-4 hidden border-t px-3 pt-4 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
-                    Manage
-                  </p>
-                )}
-                <Button
-                  variant="ghost"
-                  aria-current={
-                    !settingsOpen && selectedTool === id ? "page" : undefined
-                  }
-                  onClick={() => navigateToTool(id)}
-                  className={`h-10 w-full justify-start gap-3 px-3 ${!settingsOpen && selectedTool === id ? "bg-sidebar-accent text-primary hover:bg-sidebar-accent hover:text-primary" : "text-muted-foreground"}`}
-                >
-                  <Icon className="size-4" aria-hidden="true" />
-                  {label}
-                </Button>
-              </div>
-            ))}
+            {tools
+              .filter(({ id }) => id !== "software" && id !== "storage")
+              .map(({ id, label, icon: Icon }, index) => (
+                <div key={id} className={id === "helper" ? "md:pt-5" : ""}>
+                  {index === 2 && (
+                    <p className="mt-4 hidden border-t px-3 pt-4 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
+                      Manage
+                    </p>
+                  )}
+                  <Button
+                    variant="ghost"
+                    aria-current={
+                      !settingsOpen && selectedTool === id ? "page" : undefined
+                    }
+                    onClick={() => navigateToTool(id)}
+                    className={`h-10 w-full justify-start gap-3 px-3 ${!settingsOpen && selectedTool === id ? "bg-sidebar-accent text-primary hover:bg-sidebar-accent hover:text-primary" : "text-muted-foreground"}`}
+                  >
+                    <Icon className="size-4" aria-hidden="true" />
+                    {label}
+                  </Button>
+                </div>
+              ))}
             <SidebarFooter
               settingsOpen={settingsOpen}
               onSettings={onSettings}
