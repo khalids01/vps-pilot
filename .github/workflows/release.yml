@@ -66,6 +66,9 @@ jobs:
       - run: bun run check
       - run: bun run build
       - run: bun test
+      - name: Check Docker safety policy
+        if: runner.os == 'Linux'
+        run: python3 tests/fixtures/docker-policy.test.py
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
       - name: Verify updater signing credentials
@@ -88,7 +91,7 @@ jobs:
           releaseCommitish: ${{ github.sha }}
           releaseName: VPS Pilot ${{ needs.prepare.outputs.tag }}
           releaseBody: |
-            Early preview of VPS Pilot. App-triggered operations are read-only; interactive SSH terminals run commands with your normal permissions.
+            Early preview of VPS Pilot. File writes and Docker management require reviewed approvals and native safety checks. Interactive SSH terminals run commands with your normal permissions.
             Windows installers are unsigned. macOS builds use ad-hoc signing and are not notarized.
             See README.md for supported systems and current limitations.
           releaseDraft: true

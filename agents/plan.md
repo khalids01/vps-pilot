@@ -744,3 +744,90 @@ browser flows passed. Browser checks include selected/background context menus,
 overflow equivalence, single-click opening, details/draft preservation, narrow
 layout, pointer selection, native-review flows and cancellation. Native file
 operation policy and confirmations were retained.
+
+## Docker increment — 2026-10-31
+
+Add typed native Docker projections and container validation, inventory/Compose
+grouping, cached detail panel, explicit one-shot stats, bounded live logs, and
+container PTYs using existing stream limits/backpressure. Add lifecycle review
+types behind the production mutation gate, without enabling unvalidated changes.
+Validate command allowlists, masking, UI isolation and stream cleanup locally.
+
+### Docker increment implementation and validation
+
+Implemented retained Docker workspace, explicit projected inventory/details/stats,
+Compose grouping, masked environment names, reviewed bounded follow logs, and
+container PTYs. Existing images/volume diagnostics remain accessible. Native
+lifecycle action types are rejected before network work; start/stop/restart
+remain unavailable pending disposable-server safety validation.
+
+Validation passed: check/build/TypeScript, 23 frontend tests, 56 native unit tests
+(four fixture tests ignored by default), strict all-target Clippy, the actual
+Docker CLI against a loopback fake API for list/inspect/stats and env omission,
+the disposable rootless OpenSSH PTY-exec fixture, and all 39 browser regressions.
+The log decoder was kept outside React state updater functions to preserve
+streaming UTF-8 semantics. These fixtures do not establish real Docker lifecycle
+or real-engine container exec compatibility. No production VPS or default Docker
+daemon was contacted, and no lifecycle changes have been enabled.
+
+Docker filter simplification: replaced project buttons with the shared themed
+Select, retaining All containers and project running counts. Local selection
+filters the cached inventory without extra server requests. Browser coverage
+checks switching between a Compose project and all containers, including
+standalone entries. Broader Docker UX expansion remains a proposal, not newly
+authorized implementation scope.
+
+
+## Docker management + cleanup — authorized 2026-10-31
+
+1. Build isolated local VM validation where available, without host package
+   installation or contacting an existing/default Docker daemon.
+2. Implement native image/network/volume/dependency snapshots, engine identity,
+   exact cleanup eligibility/review and protected resource policy.
+3. Add application navigation, focused detail views, local log search/pause,
+   deployment editor and configuration validation/preflight.
+4. Add bounded, server-bound action/operation progress and confirmations.
+5. Enable only mutations supported by real disposable-VM evidence; keep any
+   unvalidated operations explicitly unavailable, not simulated as success.
+
+### Implemented Docker management/cleanup increment
+
+Added application deployment form/Compose editor/import, reviewed lifecycle
+actions, pull/network/volume creation, resource/dependency inventory, individual
+cleanup reviews with typed names, local log filter/pause and memory-only task
+history. Previous configuration backups can be loaded for a fresh deployment
+review. No secrets/config are persisted in local SQLite or command output.
+
+A private local KVM VM (Alpine 3.24, Docker 29.9.2, Compose 5.6.1) validated real
+lifecycle/deploy/backup/create/pull/age-based cleanup and stale/protected cases.
+Native SSH approval tests also proved wrong-server, replay and disconnect
+invalidation. The dedicated Docker protocol is enabled; generic Docker/system
+action gates remain unchanged. Volumes/infrastructure/orchestrator workloads,
+active references, retained rollback images and internal metadata are protected.
+
+The implementation does not include builds, registry credential storage, volume
+backup/restore, automatic data/image rollback, bulk destructive operations,
+retention purging or persistent cross-launch history. See agents/docker.md for
+bounds and tested behavior. The important VPS and default Docker daemon were
+never test targets.
+
+
+## Docker UX and creation preflight — 2026-10-31
+
+Use Run application as the visible deployment entry. Space tabs away from the
+divider; put project filter and search beside each other with a gap before the
+table. Application/image/ports/environment sections use block labels, consistent
+spacing and shared controls. Compose editing/import is secondary. Remove repeated
+VPS name/environment/connection status from the workspace header; keep identity in
+the top tab and retain its address tooltip. Hide sidebar scrollbars without
+disabling wheel/keyboard scrolling.
+
+Creation reviews check live host listeners and all Docker reservations, container
+name collisions and mounted-data overlap. An existing project requires explicit
+update selection and a verified matching Compose working directory; service-
+specific port exemptions cannot bypass another container's reservation.
+Recheck application identity/state/dependencies immediately before execution.
+Block namespace/socket/privileged shortcuts and protected config/secret sources.
+These checks protect current host resources; they do not certify arbitrary image
+code or lock out concurrent external administrators. Test only in disposable
+fixtures, never the important VPS.

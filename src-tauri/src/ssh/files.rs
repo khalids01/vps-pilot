@@ -207,7 +207,11 @@ fn writable(value: &str) -> Result<(), String> {
         "/snap",
         "/efi",
     ];
-    if value == "/"
+    if value.ends_with("/.local")
+        || value.ends_with("/.local/state")
+        || value.contains("/.local/state/vps-pilot/")
+        || value.ends_with("/.local/state/vps-pilot")
+        || value == "/"
         || protected.iter().any(|root| {
             value == *root
                 || value.starts_with(&format!("{root}/"))

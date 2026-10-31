@@ -39,6 +39,7 @@ export const streamApi = {
     cols: number,
     rows: number,
     receive: (event: StreamEvent) => void,
+    container?: string,
   ) => {
     const output = new Channel<StreamEvent>();
     output.onmessage = receive;
@@ -46,6 +47,7 @@ export const streamApi = {
       profileId,
       cols,
       rows,
+      container: container ?? null,
       output,
     });
   },

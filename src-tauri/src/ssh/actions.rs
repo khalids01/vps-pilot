@@ -19,6 +19,13 @@ pub enum AppAction {
     DockerLogs {
         container: String,
     },
+    DockerFollow {
+        container: String,
+    },
+    DockerChange {
+        container: String,
+        operation: docker::Operation,
+    },
     DiskScan {
         path: String,
     },
@@ -85,6 +92,8 @@ impl AppAction {
             Self::SoftwarePreflight { software } => (software.preflight(), format!("Inspect {} installation ownership, system support, listeners, inactive container port reservations, and deployment platform ownership. No software is installed or changed.", software.binary()), false),
             Self::UfwStatus {} => ("/usr/sbin/ufw status numbered".into(), "Read UFW status and numbered rules. No firewall rules will change.".into(), true),
             Self::ServiceLogs { unit: name } => (format!("/usr/bin/journalctl --no-pager -n 200 -u {}", quote(unit(name)?)), format!("Read the last 200 journal entries for {name}. Output may contain application secrets; it stays in memory."), true),
+            Self::DockerFollow{container:id}=>(format!("timeout -k 2s 55s docker logs --follow --timestamps --tail 200 -- {}",docker::id(id)?),"Follow container logs in bounded memory. Logs may contain application secrets; stop the stream when finished.".into(),false),
+            Self::DockerChange{container:id,operation}=>(format!("docker {} -- {}",operation.verb(),docker::id(id)?),"Change the selected container lifecycle. This can interrupt its application; no automatic retry.".into(),false),
             Self::DockerLogs { container: id } => (format!("docker logs --tail 200 -- {}", quote(container(id)?)), "Read the selected container's last 200 log lines. Output stays in memory.".into(), false),
             Self::DiskScan { path } => {
                 if !path.starts_with('/') || path.len() > 1024 || path.chars().any(char::is_control) {
@@ -101,6 +110,9 @@ impl SshService {
         profile_id: &str,
         action: AppAction,
     ) -> Result<ActionPlan, String> {
+        if matches!(action, AppAction::DockerChange { .. }) {
+            return Err("Docker lifecycle changes remain disabled pending disposable-server safety validation. Logs, details and explicit container terminals remain available.".into());
+        }
         if matches!(action, AppAction::ServiceChange { .. }) && !self.changes_enabled {
             return Err("This build is read-only for app actions. Service changes require disposable-server validation before they can be enabled. SSH terminals and read-only inspections remain available.".into());
         }

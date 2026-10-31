@@ -4,6 +4,7 @@ mod catalog;
 mod command;
 mod config;
 pub mod discovery;
+pub mod docker;
 pub mod files;
 pub mod monitor;
 mod services;
@@ -81,6 +82,7 @@ pub struct SshService {
     // Service mutations stay gated; reviewed SFTP application-file writes have a separate policy.
     changes_enabled: bool,
     files: files::State,
+    docker_manager: docker::manager::State,
     store: Mutex<Store>,
     runtime: AsyncMutex<Runtime>,
 }
@@ -105,6 +107,7 @@ impl SshService {
         Self {
             changes_enabled: false,
             files: files::State::default(),
+            docker_manager: docker::manager::State::default(),
             store: Mutex::new(Store::open(path)),
             runtime: AsyncMutex::new(Runtime {
                 jobs: HashMap::new(),
@@ -466,6 +469,7 @@ impl SshService {
     }
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
         self.files.invalidate(id);
+        self.docker_manager.invalidate(id);
         let handle = {
             let mut runtime = self.runtime.lock().await;
             runtime.jobs.remove(id);

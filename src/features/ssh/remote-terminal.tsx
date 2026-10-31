@@ -35,6 +35,7 @@ import "@/features/terminal/terminal.css";
 const ServerContext = createContext<{
   profile: ServerProfile;
   connected: boolean;
+  container?: string;
 } | null>(null);
 function EmptyWorkspace() {
   return (
@@ -140,6 +141,7 @@ function LivePanel({
               void streamApi.close(profile.id, event.id).catch(() => {});
             }
           },
+          context?.container,
         );
       })
       .then((opened) => {
@@ -200,7 +202,15 @@ function LivePanel({
       terminal.dispose();
       if (id) void streamApi.close(profile.id, id).catch(() => {});
     };
-  }, [api, profile?.id, profile?.name, profile, params.serverId, requested]);
+  }, [
+    api,
+    profile?.id,
+    profile?.name,
+    profile,
+    params.serverId,
+    requested,
+    context?.container,
+  ]);
   if (!requested)
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
@@ -240,9 +250,11 @@ const theme = {
 export function RemoteTerminal({
   profile,
   connected,
+  container,
 }: {
   profile: ServerProfile;
   connected: boolean;
+  container?: string;
 }) {
   const [api, setApi] = useState<DockviewApi | null>(null);
   const [count, setCount] = useState(0);
@@ -257,7 +269,7 @@ export function RemoteTerminal({
       setCount(api.panels.length);
       if (api.width <= 0 || api.height <= 0) return;
       const layout = sanitizeLayout(api.toJSON(), profile.id, "remote");
-      if (layout) {
+      if (layout && !container) {
         try {
           writePreference(
             layoutKey(profile.id, "remote"),
@@ -272,7 +284,7 @@ export function RemoteTerminal({
     };
     const listener = api.onDidLayoutChange(update);
     return () => listener.dispose();
-  }, [api, profile.id]);
+  }, [api, profile.id, container]);
   function add(direction?: "right" | "below") {
     if (!api || !connected || api.panels.length >= 12) return;
     const active = api.activePanel;
@@ -370,13 +382,28 @@ export function RemoteTerminal({
         className="relative min-h-[28rem] flex-1 overflow-hidden rounded-lg border"
       >
         <div className="absolute inset-0">
-          <ServerContext.Provider value={{ profile, connected }}>
+          <ServerContext.Provider value={{ profile, connected, container }}>
             <DockviewReact
               components={components}
               watermarkComponent={EmptyWorkspace}
               tabComponents={tabComponents}
               onReady={({ api }) => {
-                const saved = readLayout(profile.id, "remote");
+                const saved = container
+                  ? { notice: null, layout: null }
+                  : readLayout(profile.id, "remote");
+                if (container)
+                  api.addPanel({
+                    id: crypto.randomUUID(),
+                    title: "Container shell",
+                    component: "terminal",
+                    tabComponent: "session",
+                    params: {
+                      serverId: profile.id,
+                      kind: "shell",
+                      start: true,
+                    },
+                    renderer: "always",
+                  });
                 if (saved.notice) setNotice(saved.notice);
                 if (saved.layout) {
                   try {

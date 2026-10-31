@@ -17,13 +17,15 @@ import { SettingsPage } from "@/features/settings/settings-page";
 import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
-import { EnvironmentBadge, useFleet } from "@/features/workspace/fleet-store";
 import { CommandActivityProvider } from "./command-activity";
 import { LiveMetricsProvider } from "./live-metrics";
 import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
 
+const RemoteDocker = lazy(() =>
+  import("./remote-docker").then((m) => ({ default: m.RemoteDocker })),
+);
 const RemoteFiles = lazy(() =>
   import("./remote-files").then((module) => ({ default: module.RemoteFiles })),
 );
@@ -45,7 +47,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Tooltip } from "@/components/ui/tooltip";
 import {
   address,
   type ConnectionStatus,
@@ -91,7 +92,6 @@ function RemoteWorkspaceContent({
   settingsOpen,
 }: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
-  const fleet = useFleet();
   const labels: Record<ToolId, string> = {
     overview: "Overview",
     terminal: "Terminal",
@@ -107,6 +107,7 @@ function RemoteWorkspaceContent({
     processes: "Processes",
   };
   const tool = labels[selectedTool];
+  const [dockerOpened, setDockerOpened] = useState(selectedTool === "docker");
   const [filesOpened, setFilesOpened] = useState(selectedTool === "files");
   const [terminalOpened, setTerminalOpened] = useState(
     selectedTool === "terminal",
@@ -114,6 +115,7 @@ function RemoteWorkspaceContent({
   useEffect(() => {
     if (selectedTool === "terminal") setTerminalOpened(true);
     if (selectedTool === "files") setFilesOpened(true);
+    if (selectedTool === "docker") setDockerOpened(true);
   }, [selectedTool]);
   const [phase, setPhase] = useState<
     "inspect" | "identity" | "password" | null
@@ -176,30 +178,12 @@ function RemoteWorkspaceContent({
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-sidebar/40 px-4 py-3 sm:px-6">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <h1 className="min-w-0 text-sm font-medium">
-            <Tooltip content={address(profile)}>
-              <span className="block max-w-40 truncate rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                {profile.name}
-              </span>
-            </Tooltip>
-          </h1>
-          <EnvironmentBadge
-            environment={fleet.metadata(profile.id).environment}
-          />
-          <span className="flex items-center gap-1.5 text-[11px]">
-            <span
-              className={`size-1.5 rounded-full ${connected ? "bg-primary" : "bg-muted-foreground"}`}
-            />
-            {connected
-              ? "Connected"
-              : busy || status?.status === "connecting"
-                ? "Connecting…"
-                : status
-                  ? "Disconnected"
-                  : "Checking…"}
-          </span>
           <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
-            {tool === "Files" ? "Reviewed file writes" : "Read-only actions"}
+            {tool === "Files"
+              ? "Reviewed file writes"
+              : tool === "Docker"
+                ? "Reviewed Docker actions"
+                : "Read-only actions"}
           </span>
         </div>
         <LiveMetricsBar />
@@ -254,9 +238,9 @@ function RemoteWorkspaceContent({
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${profile.name} tools`}
-          className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
+          className="sidebar-scroll flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
         >
-          <div className="flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
+          <div className="sidebar-scroll flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
             {[
               { label: "Overview", icon: LayoutDashboard },
               { label: "Terminal", icon: Terminal },
@@ -313,6 +297,13 @@ function RemoteWorkspaceContent({
                   </Suspense>
                 </div>
               )}
+              {dockerOpened && (
+                <div className={tool === "Docker" ? "block" : "hidden"}>
+                  <Suspense fallback={<p>Loading Docker workspace…</p>}>
+                    <RemoteDocker profile={profile} connected={connected} />
+                  </Suspense>
+                </div>
+              )}
               {filesOpened && (
                 <div className={tool === "Files" ? "block" : "hidden"}>
                   <Suspense fallback={<p>Loading files workspace…</p>}>
@@ -324,6 +315,7 @@ function RemoteWorkspaceContent({
                 className={
                   tool === "Terminal" ||
                   tool === "Files" ||
+                  tool === "Docker" ||
                   tool === "Server helper"
                     ? "hidden"
                     : "block"

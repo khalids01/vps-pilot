@@ -149,10 +149,17 @@ impl SshService {
                     .await
                     .map_err(|_| "Could not request a remote terminal.")?;
                 accepted(&mut channel).await?;
-                channel
-                    .request_shell(true)
-                    .await
-                    .map_err(|_| "Could not request a shell.")?;
+                if let Some(command) = command {
+                    channel
+                        .exec(true, command)
+                        .await
+                        .map_err(|_| "Could not open the container shell.")?;
+                } else {
+                    channel
+                        .request_shell(true)
+                        .await
+                        .map_err(|_| "Could not request a shell.")?;
+                }
             } else {
                 channel
                     .exec(true, command.ok_or("Missing app command.")?)
@@ -402,14 +409,33 @@ pub async fn ssh_terminal_open(
     profile_id: String,
     cols: u32,
     rows: u32,
+    container: Option<String>,
     output: IpcChannel<StreamEvent>,
 ) -> Result<String, String> {
     dimensions(cols, rows)?;
+    let command = if let Some(container) = container {
+        let container = docker::id(&container)?;
+        let runtime = service.runtime.lock().await;
+        let running = services::collect(
+            &runtime,
+            &profile_id,
+            &format!(
+                "docker inspect --type container --format '{{{{.State.Running}}}}' -- {container}"
+            ),
+        )
+        .await?;
+        if running.trim() != "true" {
+            return Err("The container is not running. Refresh its state.".into());
+        }
+        Some(format!("docker exec -it -- {container} /bin/sh"))
+    } else {
+        None
+    };
     service
         .start_stream(
             &profile_id,
             Some((cols, rows)),
-            None,
+            command.as_deref(),
             Arc::new(move |event| output.send(event).is_ok()),
         )
         .await

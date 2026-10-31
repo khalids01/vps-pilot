@@ -100,3 +100,13 @@
   -webkit-text-fill-color: var(--foreground);
   -webkit-box-shadow: 0 0 0 1000px var(--background) inset;
 }
+
+/* Keep sidebar navigation scrollable without a visible scroll track. */
+.sidebar-scroll {
+  scrollbar-width: none;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

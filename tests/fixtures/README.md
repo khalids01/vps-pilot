@@ -87,3 +87,50 @@ single-use/no-overwrite review, cancellation leaving only private partial data,
 trash/restore and rename. Cleanup touches only the test's unique fixture path.
 Linux mount-boundary parsing and protected system/data paths have native unit
 tests. None of these checks may run against an important or production VPS.
+
+Docker-specific checks:
+- python3 tests/fixtures/docker-format.py runs the actual Docker CLI against a
+  temporary loopback fake Engine API, with an explicit --host. It never uses an
+  existing/default daemon or container, and validates list/details/stats formats
+  plus omission of environment values.
+- bash tests/fixtures/run-ssh.sh disposable_openssh_container_style verifies the
+  real SSH PTY+exec channel branch used by container shells.
+These two checks alone do not validate lifecycle mutations. The separate real-VM
+matrix below validates the dedicated protocol. Never substitute the important VPS
+or default Docker daemon.
+
+
+### Real disposable Docker VM
+
+run-docker-vm.py requires KVM, SSH/OpenSSL and a private downloaded QEMU/image
+cache (VPS_PILOT_VM_TOOLS, default /tmp/vps-pilot-docker-vm-tools).
+No host Docker daemon or package installation. On Debian use apt-get download
+for qemu-system-x86/common/data, seabios, qemu-utils and runtime libraries;
+place .deb files in the cache. The launcher extracts them under cache/root.
+Cache an official Alpine cloud-init QCOW2 as alpine.qcow2 with its matching
+official SHA-512 file as alpine.sha512; it verifies the image before boot.
+
+Validated image: Alpine 3.24.2 x86_64 cloud-init r2, from
+https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/cloud/.
+Run python3 tests/fixtures/run-docker-vm.py in a separate terminal. It prints
+the private fixture.json path and creates a unique ephemeral SSH key/disk,
+loopback SSH forwarding, and Docker inside the guest. Wait for cloud-init and
+the guest marker. If initial Docker startup failed, start it only in that
+explicitly identified guest. Requires 1.5 GiB RAM, two virtual CPUs and a sparse
+6 GiB disposable disk.
+
+Use the exact generated metadata path:
+
+    VPS_PILOT_DOCKER_VM_FILE=/tmp/vps-pilot-docker-vm-EXAMPLE/fixture.json python3 tests/fixtures/docker-management-vm.py
+    VPS_PILOT_DOCKER_VM_FILE=/tmp/vps-pilot-docker-vm-EXAMPLE/fixture.json cargo test --locked --manifest-path src-tauri/Cargo.toml --lib disposable_docker_vm_bound_approvals -- --ignored
+    python3 tests/fixtures/docker-policy.test.py
+
+The matrix changes only the guest clock by nine days for age-based cleanup.
+It tests lifecycle/create/pull/deploy/config backups, stale/unsafe refusals and
+exact resource cleanup while preserving volumes. Native tests verify approval
+binding/replay/disconnect. Tests reject non-loopback/non-generated metadata and
+require the disposable guest marker.
+
+Stop the launcher with Ctrl-C afterward: it terminates QEMU, closes its seed HTTP
+server and removes ephemeral keys/disks/metadata unless explicitly retaining
+artifacts. Downloaded tools/image remain reusable. Never use an important VPS.

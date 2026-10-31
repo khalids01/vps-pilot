@@ -13,7 +13,8 @@ The user authorized the remaining scope on 2026-10-29 without intermediate
 approval pauses. Their available VPS is important and is **not disposable**.
 Do not use it for installation, firewall, proxy rollback, cleanup, or destructive
 integration tests. Production builds enforce read-only server-management actions in Rust; reviewed
-SFTP application-file operations use the separate Files policy below;
+SFTP application-file operations and validated Docker management workflows use
+their separate policies below; systemd/firewall/proxy mutation gates remain closed;
 interactive terminal commands retain normal user-entered shell behavior.
 Mutating integrations require a separate disposable VM/VPS and their safety gates
 before they can be enabled. Keep real workspaces separate from sample fixtures.
@@ -167,3 +168,57 @@ menus and a matching overflow menu. View details opens a side panel, with cached
 metadata and explicit folder-size calculation. Preserve reviews, cancellation,
 native path protections, drafts and open SSH sessions. Do not replace terminal
 or editor context behavior with a global menu.
+
+## Docker workspace — authorized 2026-10-31
+
+Implement on-demand container/Compose inventory, projected details with environment
+values masked on the server, one-shot resource readings, explicitly started logs
+and container PTYs. Reuse existing verified SSH channels and bounded streams.
+Keep sessions across navigation, no automatic polling or secret persistence.
+Start/stop/restart use fresh server/container-bound reviews; production lifecycle
+changes stay disabled until disposable-server validation and native safety gates
+are complete. Never test against the user's important VPS or default Docker host.
+
+
+## Docker management and cleanup expansion — authorized 2026-10-31
+
+Implement the proposed application-oriented Docker workflow, including lifecycle
+reviews, Compose configuration/deployment preparation, focused detail views,
+log filtering, image/network/volume inventory and dependency-aware cleanup
+previews. Protect volumes, active references, system/infrastructure workloads,
+and mounted host data. Never use force/prune-all or blindly remove resources.
+Keep secrets out of history/SQLite. Validate mutations in a separate disposable
+VM before enabling production execution; no tests against the important VPS.
+All deployment/cleanup proposals require exact targets, dependency evidence and
+fresh approval. Keep interrupted/uncertain results visible; never auto-retry.
+
+
+Docker management validation completed against an app-created disposable KVM
+Alpine 3.24 VM with Docker 29.9.2 / Compose 5.6.1. Dedicated Docker management
+actions may execute only through the engine/dependency-bound review protocol.
+This does not enable the legacy generic Docker-change or system-service gates.
+Volumes, infrastructure/orchestrator workloads, host-integrated containers and
+referenced resources stay protected. No system prune, force removal, image builds
+or automatic database rollback. Rollback image IDs are retained in private
+per-SSH-user metadata; Files protects that metadata and its parent roots.
+
+
+## Docker UX and creation preflight — 2026-10-31
+
+Use Run application as the visible deployment entry. Space tabs away from the
+divider; put project filter and search beside each other with a gap before the
+table. Application/image/ports/environment sections use block labels, consistent
+spacing and shared controls. Compose editing/import is secondary. Remove repeated
+VPS name/environment/connection status from the workspace header; keep identity in
+the top tab and retain its address tooltip. Hide sidebar scrollbars without
+disabling wheel/keyboard scrolling.
+
+Creation reviews check live host listeners and all Docker reservations, container
+name collisions and mounted-data overlap. An existing project requires explicit
+update selection and a verified matching Compose working directory; service-
+specific port exemptions cannot bypass another container's reservation.
+Recheck application identity/state/dependencies immediately before execution.
+Block namespace/socket/privileged shortcuts and protected config/secret sources.
+These checks protect current host resources; they do not certify arbitrary image
+code or lock out concurrent external administrators. Test only in disposable
+fixtures, never the important VPS.

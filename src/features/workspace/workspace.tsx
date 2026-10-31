@@ -273,9 +273,9 @@ function ServerWorkspace({
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${server.name} tools`}
-          className="flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
+          className="sidebar-scroll flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
         >
-          <div className="flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
+          <div className="sidebar-scroll flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
             <p className="hidden px-3 pt-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
               Workspace
             </p>

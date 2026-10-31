@@ -2,6 +2,7 @@ import { useSortable } from "@dnd-kit/react/sortable";
 import { GripVertical, Server, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip } from "@/components/ui/tooltip";
 import type { ConnectionStatus } from "@/features/ssh/api";
 import type { SampleServer } from "./fixtures";
 import type { Environment } from "./fleet-data";
@@ -42,7 +43,9 @@ export function ServerTab({
         className="pr-10 pl-8"
       >
         <Server className="size-3.5" aria-hidden="true" />
-        {server.name}
+        <Tooltip content={server.detail || server.name}>
+          <span>{server.name}</span>
+        </Tooltip>
         <EnvironmentBadge environment={environment} />
         {server.detail && (
           <span

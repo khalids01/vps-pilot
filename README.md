@@ -343,3 +343,66 @@ Right-clicking a selected item preserves the whole selection. View details
 shows metadata in a side panel; folder sizes are calculated there on request.
 Per-item download/calculation controls and permission columns are hidden.
 Terminal/editor context behavior remains unchanged.
+
+### Docker workspace
+
+Open Docker and select **Load containers**. Inventory includes stopped containers,
+state/health text, published ports and Compose project/service groups. There is
+no automatic Docker polling. Open a container for configuration, mounts and
+environment names; values are masked by the remote Docker format before SSH
+transmits them. Command arguments and health-check output are not requested.
+**Refresh resource snapshot** reads one CPU/memory/I/O/PID snapshot explicitly.
+
+**Review live logs** previews the exact server/container command before following
+the last 200 lines. The remote follow process has a 55-second limit; the existing
+client stream also enforces time, output and acknowledgment limits. The display
+retains at most 64 KiB. Stop closes that stream without disconnecting SSH. Log
+contents stay in the view, outside SQLite and command activity output.
+
+**Open container terminal** checks the full ID and current running state and
+opens an interactive /bin/sh using Docker's configured container user. There is
+no sudo or fallback to a host shell. Images without /bin/sh report the CLI error.
+Container terminals remain mounted across Home/tools/VPS navigation, with at most
+four container workspaces per VPS. Their layouts are not persisted or restored
+automatically. Normal terminal close confirmation and stream limits apply.
+
+Commands use the SSH user's effective Docker CLI context and socket permissions.
+No Docker daemon is installed or Docker group membership changed. Reviewed start/stop/restart and Docker management now use a separate native,
+engine-bound protocol validated in a disposable VM. The legacy generic action
+endpoint remains disabled. No volume deletion, force removal or system prune is
+provided. Images and volume inspections remain under Docker diagnostics.
+
+Docker's supported formatting functions are documented at
+[Docker CLI formatting](https://docs.docker.com/engine/cli/formatting/).
+
+
+Docker management adds **Deploy**, **Images**, **Volumes**, **Networks**,
+**Cleanup** and **Activity** views. Start/stop/restart, image pulls and creation of
+bridge networks/volumes show fresh server/engine evidence before execution.
+Resource inventories and cleanup scans run only on request.
+
+Deploy through the form or Compose editor, or explicitly load an existing server
+Compose file into the in-memory editor. Create the application folder in Files
+first. Validation checks normalized configuration, resolved local image IDs,
+port reservations/listeners, protected paths and host privileges. Images must
+already be pulled; builds are not enabled. Existing configuration gets a private
+backup, and Activity can load that backup into the editor for a new review.
+Deployment waits for readiness for up to 20 seconds. This is configuration
+recovery, not automatic image/database rollback; external concurrent writers are
+not locked out.
+
+Cleanup considers only unreferenced untagged images, unused non-Compose bridge
+networks and eligible standalone stopped containers older than seven days.
+Mounted, infrastructure and orchestrator-managed containers remain protected.
+Removing a container also removes its writable layer/logs: back up needed files
+before confirming its exact name. All volumes and rollback image holds are
+protected. Image sizes include shared layers and are not guaranteed freed space.
+Build-cache pruning is unavailable without exact dependency evidence.
+
+Plans bind the connection, profile revision, Docker engine, resource evidence and
+configuration hashes; they expire after two minutes and are single-use.
+Execution rechecks them. Mutations require a local Unix-socket engine on the SSH
+host, Python 3 and Docker/Compose access. Interruption can leave changes applied;
+inspect uncertain results before retrying. Operations are serialized per VPS;
+Activity retains bounded metadata in memory, without config/secrets/output in
+SQLite. Log search and pause affect only the cached display.
