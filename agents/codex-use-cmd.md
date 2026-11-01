@@ -12,10 +12,26 @@ VPS Pilot, also read `agents/goal.md` and the applicable implementation plan.
 
 ## Responsibility and division of work
 
-Codex remains the coordinator and reviewer. Use Command Code when a concrete,
-separable task can benefit from another coding pass: a focused module, targeted
-bug fix, tests for meaningful behavior, a limited refactor or an independent
-review. Do not delegate tiny edits merely to claim use of the CLI.
+The user's preferred workflow is Command Code first for implementation, to
+reduce Codex code-writing cost. Codex coordinates, specifies and independently
+reviews; Command Code should write most feature code, including native/backend
+logic, UI and meaningful tests. Do not routinely keep the main implementation
+with Codex and delegate only tests. Precise specifications and review are the
+way to handle complex or sensitive logic within the authorized scope.
+
+Break a feature into bounded implementation tasks with exact interfaces,
+invariants, allowed files and acceptance tests. Have Command Code implement a
+coherent slice, inspect the actual diff, run relevant checks, then resume the
+same chat with concrete review findings and failing evidence for fixes. Codex
+should normally request those fixes instead of immediately rewriting the code.
+Avoid unnecessary rereads, duplicate implementations and ceremonial delegation
+of tiny edits. Keep prompts concise while preserving the necessary constraints.
+
+Codex may directly edit this workflow guide, documentation, trivial integration
+fixes, or make a targeted repair when the CLI is blocked, unavailable or repeatedly
+fails. Explain a substantial fallback candidly. Do not let the cost preference
+weaken validation, authorize unrelated work or cause endless retry loops. Actual
+savings depend on CLI pricing, inference usage and rework; do not promise them.
 
 Keep architecture, integration, scope and safety decisions with Codex. For VPS
 Pilot, preserve native approval gates, server identity checks, secrets handling,
@@ -25,6 +41,8 @@ agent validate dangerous actions against the user's important VPS.
 Before delegating, inspect enough code to specify the task accurately. Give:
 
 - The exact goal, accepted behavior and relevant source files.
+- Exact IPC/function contracts, types, state transitions and integration points.
+- Race/failure behavior, bounds and concrete examples of accepted/rejected input.
 - The files it may edit and files/resources it must leave alone.
 - Applicable project instructions and safety constraints.
 - Required checks and the expected result/report.
@@ -190,3 +208,5 @@ Report candidly whether Command Code actually wrote code, only reviewed/read,
 failed before editing, or stopped with partial work. Include meaningful validation
 and any remaining limitations. Do not claim its work as independently verified
 until you have verified it. Never hide a failed CLI attempt or invent test results.
+When summarizing a delegated feature, distinguish Command Code's implementation
+from Codex's specification, review, validation and any direct repairs.
