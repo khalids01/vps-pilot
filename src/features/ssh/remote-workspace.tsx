@@ -2,7 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Container,
   Folder,
+  KeyRound,
   LayoutDashboard,
+  ListChecks,
   Network,
   Plug,
   Shield,
@@ -16,6 +18,7 @@ import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
 import { CommandActivityProvider } from "./command-activity";
+import { ConfigurationScaffold } from "./configuration-scaffold";
 import { LiveMetricsProvider } from "./live-metrics";
 import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
@@ -92,6 +95,8 @@ function RemoteWorkspaceContent({
   const queryClient = useQueryClient();
   const labels: Record<ToolId, string> = {
     overview: "Overview",
+    "quick-setup": "Quick Setup",
+    "ssh-access": "SSH Access",
     terminal: "Terminal",
     files: "Files",
     software: "Software",
@@ -241,6 +246,8 @@ function RemoteWorkspaceContent({
           <div className="sidebar-scroll flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
             {[
               { label: "Overview", icon: LayoutDashboard },
+              { label: "Quick Setup", icon: ListChecks },
+              { label: "SSH Access", icon: KeyRound },
               { label: "Terminal", icon: Terminal },
               { label: "Files", icon: Folder },
               { label: "Docker", icon: Container },
@@ -315,8 +322,19 @@ function RemoteWorkspaceContent({
                   </Suspense>
                 </div>
               )}
+              {(selectedTool === "quick-setup" ||
+                selectedTool === "ssh-access") && (
+                <ConfigurationScaffold
+                  tool={selectedTool}
+                  profile={profile}
+                  connected={connected}
+                  onNavigate={onSelectTool}
+                />
+              )}
               <div
                 className={
+                  tool === "Quick Setup" ||
+                  tool === "SSH Access" ||
                   tool === "Terminal" ||
                   tool === "Files" ||
                   tool === "Docker" ||

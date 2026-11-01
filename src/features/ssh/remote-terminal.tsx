@@ -24,7 +24,10 @@ import {
   readLayout,
   sanitizeLayout,
 } from "@/features/terminal/layout";
-import { terminalColors } from "@/features/terminal/sample-panel";
+import {
+  observeTerminalTheme,
+  terminalColors,
+} from "@/features/terminal/sample-panel";
 import { TerminalView } from "@/features/terminal/terminal-view";
 import { type ServerProfile, safeError } from "./api";
 import { streamApi } from "./streams";
@@ -82,6 +85,7 @@ function LivePanel({
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(element);
+    const stopThemeObserver = observeTerminalTheme(terminal, element);
     terminal.textarea?.setAttribute(
       "aria-label",
       `${profile.name} interactive terminal`,
@@ -199,6 +203,7 @@ function LivePanel({
       visibility.dispose();
       input.dispose();
       binary.dispose();
+      stopThemeObserver();
       terminal.dispose();
       if (id) void streamApi.close(profile.id, id).catch(() => {});
     };

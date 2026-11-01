@@ -9,6 +9,8 @@ import {
   useAppSettings,
 } from "./app-settings";
 
+import { ThemePicker } from "./theme-picker";
+
 const labels: Record<StatId, string> = {
   cpu: "CPU",
   ram: "RAM",
@@ -120,7 +122,8 @@ export function SettingsPage() {
           <h2 id="appearance-heading" className="font-medium">
             Appearance
           </h2>
-          <div className="flex flex-wrap items-center gap-3">
+          <ThemePicker />
+          <div className="flex flex-wrap items-center gap-3 border-t pt-4">
             <span className="text-sm">App zoom</span>
             <Button
               variant="outline"

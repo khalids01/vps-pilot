@@ -1,6 +1,8 @@
 // Deliberately fictional. These fixtures never represent a real SSH connection.
 export const toolIds = [
   "overview",
+  "quick-setup",
+  "ssh-access",
   "terminal",
   "files",
   "software",

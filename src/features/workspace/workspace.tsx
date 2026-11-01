@@ -8,7 +8,9 @@ import {
   Folder,
   HardDrive,
   House,
+  KeyRound,
   LayoutDashboard,
+  ListChecks,
   Network,
   Package,
   Plug,
@@ -82,6 +84,18 @@ const tools = [
     label: "Overview",
     icon: LayoutDashboard,
     description: "Your server, at a glance.",
+  },
+  {
+    id: "quick-setup",
+    label: "Quick Setup",
+    icon: ListChecks,
+    description: "Inspect configuration and choose individual setup actions.",
+  },
+  {
+    id: "ssh-access",
+    label: "SSH Access",
+    icon: KeyRound,
+    description: "SSH authentication, keys, and safe access changes.",
   },
   {
     id: "terminal",
@@ -551,7 +565,7 @@ function WorkspaceContent() {
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="flex shrink-0 items-end gap-2 border-b bg-sidebar px-3 pt-2">
+        <div className="flex shrink-0 items-end gap-2 border-b bg-shell px-3 pt-2">
           <div className="mb-2 mr-2 flex shrink-0 items-center gap-2 px-2 text-primary">
             <img
               src="/app-icon.png"

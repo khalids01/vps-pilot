@@ -307,3 +307,26 @@ section tabs in normal page flow, scrolling with the content (user correction,
 2026-11-01); do not make them sticky. Horizontal table
 overflow and bounded terminal/log output or mobile inspector overlays retain
 their appropriate scrolling.
+
+## Quick Setup, SSH Access and firewall phase — authorized 2026-11-01
+
+The user reviewed the planning deliverable and requested implementation step by
+step. Follow `agents/quick-setup-plan.md` in dependency order. Start with shared
+theme clarity and honest page scaffolds, then bounded read-only detection. Keep
+new privileged adapters gated until their disposable Debian/Ubuntu VM safety and
+independent server-side recovery tests pass. Never use the important VPS.
+
+For this phase, improve VPS Pilot's forest-green/mint theme for readability
+independently from Disk Vacuum. A future local SSH-config writer must be a
+separate opt-in reviewed action; ordinary app-profile saves still never modify
+`~/.ssh/config`. Existing Files protections and generic mutation gates remain.
+
+## Theme selection — authorized 2026-11-01
+
+Settings → Appearance offers small app previews for Tokyo Night, One Dark Pro,
+GitHub Dark and the existing Forest Mint default. Apply the chosen palette to
+shared controls, open terminals and editors without reconnecting or discarding
+drafts. Store the selection in the existing local SQLite settings and restore
+it before rendering the workspace on restart. Older settings lacking a theme
+retain Forest Mint and all prior preferences. Bundle palette license notices;
+no runtime theme download or VS Code extension execution is required.

@@ -1,10 +1,26 @@
 import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { unifiedMergeView } from "@codemirror/merge";
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
 import { useEffect, useRef } from "react";
+
+const syntaxColors = HighlightStyle.define([
+  { tag: tags.keyword, color: "var(--syntax-keyword)" },
+  {
+    tag: [tags.string, tags.special(tags.string)],
+    color: "var(--syntax-string)",
+  },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--syntax-number)" },
+  {
+    tag: [tags.propertyName, tags.attributeName],
+    color: "var(--syntax-property)",
+  },
+  { tag: tags.comment, color: "var(--syntax-comment)" },
+]);
 
 export function TextEditor({
   value,
@@ -45,6 +61,7 @@ export function TextEditor({
       doc: initial.current,
       extensions: [
         basicSetup,
+        syntaxHighlighting(syntaxColors),
         EditorView.domEventHandlers({
           keydown(event) {
             if (
@@ -75,8 +92,8 @@ export function TextEditor({
           {
             "&": {
               height: "100%",
-              backgroundColor: "var(--background)",
-              color: "var(--foreground)",
+              backgroundColor: "var(--editor-background)",
+              color: "var(--editor-foreground)",
               fontSize: "13px",
             },
             ".cm-scroller": {
@@ -84,21 +101,21 @@ export function TextEditor({
               fontFamily: "ui-monospace, monospace",
             },
             ".cm-gutters": {
-              backgroundColor: "var(--card)",
-              color: "var(--muted-foreground)",
+              backgroundColor: "var(--editor-gutter-background)",
+              color: "var(--editor-gutter-foreground)",
               borderColor: "var(--border)",
             },
             ".cm-activeLine,.cm-activeLineGutter": {
-              backgroundColor: "var(--muted)",
+              backgroundColor: "var(--editor-line)",
             },
             ".cm-selectionBackground": {
-              backgroundColor: "var(--accent) !important",
+              backgroundColor: "var(--editor-selection) !important",
             },
-            ".cm-cursor": { borderLeftColor: "var(--primary)" },
+            ".cm-cursor": { borderLeftColor: "var(--editor-cursor)" },
             ".cm-searchMatch": { backgroundColor: "var(--accent)" },
             ".cm-panels": {
               backgroundColor: "var(--card)",
-              color: "var(--foreground)",
+              color: "var(--editor-foreground)",
             },
           },
           { dark: true },

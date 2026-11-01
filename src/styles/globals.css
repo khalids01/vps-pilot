@@ -9,6 +9,13 @@
   --font-sans:
     "Manrope Variable", "Avenir Next", Avenir, ui-sans-serif, system-ui,
     sans-serif;
+  --color-shell: var(--shell);
+  --color-control: var(--control);
+  --color-table-header: var(--table-header);
+  --color-row-hover: var(--row-hover);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -42,31 +49,38 @@
 
 :root {
   --radius: 0.875rem;
-  --background: oklch(0.105 0.018 160);
-  --foreground: oklch(0.95 0.016 155);
-  --card: oklch(0.145 0.027 158);
-  --card-foreground: oklch(0.95 0.016 155);
-  --popover: oklch(0.145 0.027 158);
-  --popover-foreground: oklch(0.95 0.016 155);
-  --primary: oklch(0.79 0.15 158);
-  --primary-foreground: oklch(0.13 0.025 160);
-  --secondary: oklch(0.2 0.033 158);
-  --secondary-foreground: oklch(0.95 0.016 155);
-  --muted: oklch(0.2 0.028 158);
-  --muted-foreground: oklch(0.65 0.025 155);
-  --accent: oklch(0.25 0.055 158);
-  --accent-foreground: oklch(0.96 0.02 155);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.34 0.045 158 / 65%);
-  --input: oklch(0.25 0.04 158);
-  --ring: oklch(0.72 0.14 158);
-  --sidebar: oklch(0.12 0.025 160);
-  --sidebar-foreground: oklch(0.93 0.018 155);
-  --sidebar-accent: oklch(0.24 0.045 158);
-  --sidebar-accent-foreground: oklch(0.97 0.015 155);
-  --sidebar-border: oklch(0.31 0.04 158 / 68%);
-  --sidebar-ring: oklch(0.72 0.14 158);
+  --background: #151b18;
+  --foreground: #f0f3f1;
+  --card: #1e2622;
+  --card-foreground: #f0f3f1;
+  --popover: #1e2622;
+  --popover-foreground: #f0f3f1;
+  --primary: #84d9b0;
+  --primary-foreground: #0b1210;
+  --secondary: #28312c;
+  --secondary-foreground: #f0f3f1;
+  --muted: #28312c;
+  --muted-foreground: #b1bcb5;
+  --accent: #303d35;
+  --accent-foreground: #f0f3f1;
+  --destructive: #ff999e;
+  --destructive-foreground: #0b1210;
+  --border: #3d4841;
+  --input: #718077;
+  --ring: #84d9b0;
+  --sidebar: #101a16;
+  --sidebar-foreground: #f0f3f1;
+  --sidebar-accent: #283b30;
+  --sidebar-accent-foreground: #f0f3f1;
+  --sidebar-border: #3d4841;
+  --sidebar-ring: #84d9b0;
+  --shell: #0b1210;
+  --control: #28312c;
+  --table-header: #28312c;
+  --row-hover: #253029;
+  --success: #86d6a4;
+  --warning: #f0c779;
+  --info: #b1bcb5;
 }
 
 @layer base {
@@ -77,11 +91,6 @@
   body {
     @apply m-0 overflow-hidden bg-background text-foreground antialiased;
     font-family: var(--font-sans);
-    background-image: radial-gradient(
-      circle at 88% -12%,
-      oklch(0.48 0.12 158 / 20%),
-      transparent 32%
-    );
   }
 
   button:not(:disabled),
@@ -91,7 +100,7 @@
 }
 
 ::selection {
-  background: oklch(0.79 0.15 158 / 40%);
+  background: color-mix(in srgb, var(--primary) 40%, transparent);
 }
 
 /* Keep browser autofill consistent with the shared Input component. */
@@ -109,4 +118,39 @@
   display: none;
   width: 0;
   height: 0;
+}
+
+/* Preserve VS Code workbench fills instead of tinting controls with border colors.
+   Scope to these two palettes: GitHub Dark and Forest Mint retain their appearance. */
+:root:is([data-theme="tokyo-night"], [data-theme="one-dark-pro"]) {
+  & [data-slot="input"],
+  & [data-slot="select-trigger"] {
+    background-color: var(--input-background);
+    color: var(--input-foreground);
+  }
+
+  & [data-slot="button"][data-variant="default"] {
+    background-color: var(--button-background);
+    color: var(--button-foreground);
+  }
+
+  & [data-slot="button"][data-variant="default"]:hover {
+    background-color: var(--button-hover);
+  }
+
+  & [data-slot="button"][data-variant="outline"] {
+    background-color: var(--secondary);
+    color: var(--secondary-foreground);
+    border-color: var(--border);
+  }
+
+  & [data-slot="button"][data-variant="outline"]:hover {
+    background-color: var(--accent);
+  }
+}
+
+:root:is([data-theme="tokyo-night"], [data-theme="one-dark-pro"])
+  nav
+  [aria-current="page"] {
+  color: var(--sidebar-accent-foreground);
 }

@@ -1226,3 +1226,138 @@ test("canceling cleanup preserves completed results and skips remaining selectio
  await expect(result).toContainText("skipped");
  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_cancel").length)).toBe(1);
 });
+
+test("configuration scaffolds preserve shells and never inspect or mutate on navigation", async ({page}, testInfo) => {
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await page.getByRole("button",{name:"New shell",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  const before=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>/ssh_(terminal_open|stream_close|inspection_run|action_execute|connect)/.test(c.cmd)));
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(setup.getByText("Not inspected",{exact:true})).toHaveCount(6);
+  await expect(setup.getByText("Detection is coming next",{exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("quick-setup.png")});
+  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  const access=page.getByRole("region",{name:"SSH Access",exact:true});
+  await expect(access.getByText("SSH server policy",{exact:true})).toBeVisible();
+  await expect(access.getByText("Not inspected",{exact:true})).toBeVisible();
+  await expect(access.getByText("tester",{exact:true})).toBeVisible();
+  await page.setViewportSize({width:700,height:800});
+  await page.screenshot({path:testInfo.outputPath("ssh-access-narrow.png")});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>/ssh_(terminal_open|stream_close|inspection_run|action_execute|connect)/.test(c.cmd)))).toEqual(before);
+});
+
+test("shared theme text and input boundaries meet contrast targets",async({page})=>{
+  const ratios=await page.evaluate(()=>{
+    const color=(name:string)=>{
+      const node=document.createElement("span");
+      node.style.color=`var(--${name})`;
+      document.body.append(node);
+      const channels=getComputedStyle(node).color.match(/[\d.]+/g)!.slice(0,3).map(Number);
+      node.remove();
+      const linear=channels.map(v=>{const c=v/255;return c<=0.04045?c/12.92:((c+0.055)/1.055)**2.4;});
+      return linear[0]*0.2126+linear[1]*0.7152+linear[2]*0.0722;
+    };
+    const ratio=(a:string,b:string)=>{const x=color(a),y=color(b);return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05);};
+    return {
+      text:["foreground","muted-foreground","success","warning","destructive","info"].flatMap(text=>["background","card","secondary","sidebar","accent"].map(bg=>({pair:`${text}/${bg}`,value:ratio(text,bg)}))),
+      primary:ratio("primary","primary-foreground"),
+      boundary:ratio("input","background"),
+      focus:ratio("ring","background"),
+    };
+  });
+  for(const pair of ratios.text) expect(pair.value,pair.pair).toBeGreaterThanOrEqual(4.5);
+  expect(ratios.primary).toBeGreaterThanOrEqual(4.5);
+  expect(ratios.boundary).toBeGreaterThanOrEqual(3);
+  expect(ratios.focus).toBeGreaterThanOrEqual(3);
+});
+
+test("Appearance previews apply themes in place and restore each choice after restart",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await page.getByRole("button",{name:"New shell",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  const sessions=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>["ssh_terminal_open","ssh_stream_close"].includes(c.cmd)));
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  const appearance=page.getByRole("region",{name:"Appearance",exact:true});
+  await expect(appearance.getByRole("radio")).toHaveCount(4);
+  await appearance.getByRole("radio",{name:"Tokyo Night",exact:true}).check();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","tokyo-night");
+  await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem("__fixture_settings")??"{}").theme)).toBe("tokyo-night");
+  await appearance.scrollIntoViewIfNeeded();
+  await appearance.screenshot({path:testInfo.outputPath("appearance-themes.png")});
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>["ssh_terminal_open","ssh_stream_close"].includes(c.cmd)))).toEqual(sessions);
+  // xterm's viewport is recolored through options without replacing its SSH session.
+  await expect(page.locator(".xterm-scrollable-element").first()).toHaveCSS("background-color","rgb(22, 22, 30)");
+  for(const [name,id] of [["Tokyo Night","tokyo-night"],["One Dark Pro","one-dark-pro"],["GitHub Dark","github-dark"],["Forest Mint","forest-mint"]]){
+    await page.getByRole("button",{name:"Settings",exact:true}).click();
+    await appearance.getByRole("radio",{name,exact:true}).check();
+    await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem("__fixture_settings")??"{}").theme)).toBe(id);
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme",id);
+    await page.getByRole("button",{name:"Settings",exact:true}).click();
+    await expect(appearance.getByRole("radio",{name,exact:true})).toBeChecked();
+    await nav.getByRole("button",{name:"Overview",exact:true}).click();
+  }
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  await appearance.getByRole("radio",{name:"Forest Mint",exact:true}).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(appearance.getByRole("radio",{name:"Tokyo Night",exact:true})).toBeChecked();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","tokyo-night");
+});
+
+test("failed theme saves are visible and retain the last saved selection after restart",async({page})=>{
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  await page.getByRole("radio",{name:"GitHub Dark",exact:true}).check();
+  await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem("__fixture_settings")??"{}").theme)).toBe("github-dark");
+  await page.evaluate(()=>{(window as any).__databaseSaveFailure=true;});
+  await page.getByRole("radio",{name:"One Dark Pro",exact:true}).check();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","one-dark-pro");
+  await expect(page.getByRole("alert")).toContainText("Settings could not be saved");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme","github-dark");
+});
+
+test("theme changes recolor the remote editor and retain unsaved drafts",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Files",exact:true}).click();
+  const files=page.getByRole("region",{name:"Fixture Alpha files"});
+  await files.getByRole("button",{name:"Edit folder path"}).click();
+  await files.getByRole("textbox",{name:"Remote folder path"}).fill("/home/tester");
+  await files.getByRole("button",{name:"Go",exact:true}).click();
+  await files.getByRole("button",{name:"app.yaml",exact:true}).click();
+  const editor=files.getByRole("textbox",{name:"Remote file editor",exact:true});
+  await editor.fill("port: 4567");
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  await page.getByRole("radio",{name:"GitHub Dark",exact:true}).check();
+  await nav.getByRole("button",{name:"Files",exact:true}).click();
+  await expect(editor).toContainText("port: 4567");
+  await expect(files.locator(".cm-editor")).toHaveCSS("background-color","rgb(13, 17, 23)");
+  await expect(files).toContainText("Unsaved changes");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_file_read").length)).toBe(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_file_commit").length)).toBe(0);
+});
+
+test("Tokyo Night and One Dark Pro use original workbench fills without changing GitHub Dark",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  for(const [name,id,foreground,button] of [
+    ["Tokyo Night","tokyo-night","rgb(169, 177, 214)","rgba(61, 89, 161, 0.867)"],
+    ["One Dark Pro","one-dark-pro","rgb(171, 178, 191)","rgb(64, 71, 84)"],
+    ["GitHub Dark","github-dark","rgb(230, 237, 243)","rgb(121, 192, 255)"],
+  ]){
+    await page.getByRole("button",{name:"Settings",exact:true}).click();
+    await page.getByRole("radio",{name,exact:true}).check();
+    await expect(page.locator("html")).toHaveAttribute("data-theme",id);
+    await page.getByRole("region",{name:"Appearance",exact:true}).screenshot({path:testInfo.outputPath(`${id}-picker.png`)});
+    await nav.getByRole("button",{name:"Overview",exact:true}).click();
+    await expect(page.locator("body")).toHaveCSS("color",foreground);
+    await expect(page.getByRole("button",{name:"Inspect",exact:true})).toHaveCSS("background-color",button);
+    await page.screenshot({path:testInfo.outputPath(`${id}-workspace.png`)});
+  }
+});

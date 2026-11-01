@@ -154,7 +154,7 @@ export function ReportSection({ section }: { section: InspectionSection }) {
       {visible.length ? (
         <div className="max-w-full overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="border-b bg-muted/20 text-muted-foreground">
+            <thead className="border-b bg-table-header text-muted-foreground">
               <tr>
                 {section.columns.map((column, index) => (
                   <th
@@ -194,7 +194,7 @@ export function ReportSection({ section }: { section: InspectionSection }) {
             </thead>
             <tbody className="divide-y">
               {visible.map(({ row, key }) => (
-                <tr key={key} className="hover:bg-muted/20">
+                <tr key={key} className="hover:bg-row-hover">
                   {row.map((value, index) => (
                     <td
                       key={section.columns[index] ?? index}

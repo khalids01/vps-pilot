@@ -15,6 +15,8 @@ import { useFleet } from "./fleet-store";
 
 const tools: Record<ToolId, string> = {
   overview: "Overview",
+  "quick-setup": "Quick Setup",
+  "ssh-access": "SSH Access",
   terminal: "Terminal",
   files: "Files",
   software: "Software",

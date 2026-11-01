@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -16,6 +17,10 @@ import {
   storageErrorEvent,
 } from "./persistence";
 
+import { applyTheme, defaultTheme, isThemeId, type ThemeId } from "./themes";
+
+const browserSettingsKey = "vps-pilot:app-settings:v1";
+
 export const statIds = ["cpu", "ram", "storage", "diskIo", "network"] as const;
 export type StatId = (typeof statIds)[number];
 export interface AppSettings {
@@ -23,12 +28,14 @@ export interface AppSettings {
   intervalSeconds: number;
   visibleStats: StatId[];
   zoomPercent: number;
+  theme: ThemeId;
 }
 export const defaultSettings: AppSettings = {
   liveStats: true,
   intervalSeconds: 1,
   visibleStats: [...statIds],
   zoomPercent: 100,
+  theme: defaultTheme,
 };
 interface ContextValue {
   settings: AppSettings;
@@ -69,8 +76,26 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           const { useUpdateStore } = await import("../updates/update-store");
           await useUpdateStore.persist.rehydrate();
           if (disposed) return;
-          current.current = data.settings;
-          setSettings(data.settings);
+          const loaded = {
+            ...data.settings,
+            theme: isThemeId(data.settings.theme)
+              ? data.settings.theme
+              : defaultTheme,
+          };
+          current.current = loaded;
+          setSettings(loaded);
+        }
+        if (!isTauri()) {
+          const raw = localStorage.getItem(browserSettingsKey);
+          if (raw) {
+            const saved = JSON.parse(raw);
+            const loaded = {
+              ...defaultSettings,
+              theme: isThemeId(saved?.theme) ? saved.theme : defaultTheme,
+            };
+            current.current = loaded;
+            setSettings(loaded);
+          }
         }
         if (!disposed) {
           setReady(true);
@@ -88,6 +113,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       disposed = true;
     };
   }, [attempt]);
+  useLayoutEffect(() => {
+    applyTheme(settings.theme);
+  }, [settings.theme]);
   const update = useCallback<ContextValue["update"]>((patch) => {
     const next =
       typeof patch === "function"
@@ -102,6 +130,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     writes.current = writes.current.then(async () => {
       try {
         if (isTauri()) await invoke("app_save_settings", { settings: next });
+        else localStorage.setItem(browserSettingsKey, JSON.stringify(next));
         if (generation === saveGeneration.current) {
           setSaving(false);
           setError("");

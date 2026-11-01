@@ -16,6 +16,17 @@ pub struct Settings {
     pub interval_seconds: u64,
     pub visible_stats: Vec<Stat>,
     pub zoom_percent: u16,
+    #[serde(default)]
+    pub theme: Theme,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    #[default]
+    ForestMint,
+    TokyoNight,
+    OneDarkPro,
+    GithubDark,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +50,7 @@ impl Default for Settings {
                 Stat::Network,
             ],
             zoom_percent: 100,
+            theme: Theme::default(),
         }
     }
 }
@@ -350,6 +362,46 @@ mod tests {
         settings.zoom_percent = 500;
         assert!(settings.validate().is_err());
     }
+    #[test]
+    fn themes_default_for_old_settings_and_persist_across_database_reopens() {
+        let legacy =
+            r#"{"liveStats":false,"intervalSeconds":5,"visibleStats":["cpu"],"zoomPercent":125}"#;
+        let legacy_settings: Settings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(legacy_settings.theme, Theme::ForestMint);
+        assert!(!legacy_settings.live_stats);
+        assert_eq!(legacy_settings.zoom_percent, 125);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite3");
+        let db = LocalDatabase::open(&path).unwrap();
+        db.write("settings", legacy).unwrap();
+        drop(db);
+        assert_eq!(
+            LocalDatabase::open(&path).unwrap().settings().unwrap(),
+            legacy_settings
+        );
+        for theme in [
+            Theme::TokyoNight,
+            Theme::OneDarkPro,
+            Theme::GithubDark,
+            Theme::ForestMint,
+        ] {
+            let db = LocalDatabase::open(&path).unwrap();
+            let mut settings = db.settings().unwrap();
+            settings.theme = theme.clone();
+            db.write("settings", &serde_json::to_string(&settings).unwrap())
+                .unwrap();
+            drop(db);
+            let actual = LocalDatabase::open(&path).unwrap().settings().unwrap();
+            assert_eq!(actual.theme, theme);
+            assert_eq!(actual.interval_seconds, 5);
+            assert_eq!(actual.visible_stats, vec![Stat::Cpu]);
+        }
+        assert!(serde_json::from_str::<Settings>(
+            &legacy.replace("125}", "125,\"theme\":\"arbitrary\"}")
+        )
+        .is_err());
+    }
+
     #[test]
     fn keeps_corrupt_and_newer_databases_intact() {
         let dir = tempfile::tempdir().unwrap();

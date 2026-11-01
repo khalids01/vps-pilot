@@ -20,13 +20,39 @@ export function terminalColors(element: HTMLElement) {
     return `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
   }
   return {
-    background: resolve("--background"),
-    foreground: resolve("--foreground"),
-    cursor: resolve("--primary"),
-    selectionBackground: resolve("--accent"),
-    green: resolve("--primary"),
-    brightBlack: resolve("--muted-foreground"),
+    background: resolve("--terminal-background"),
+    foreground: resolve("--terminal-foreground"),
+    cursor: resolve("--terminal-cursor"),
+    selectionBackground: resolve("--terminal-selection"),
+    black: resolve("--terminal-black"),
+    red: resolve("--terminal-red"),
+    green: resolve("--terminal-green"),
+    yellow: resolve("--terminal-yellow"),
+    blue: resolve("--terminal-blue"),
+    magenta: resolve("--terminal-magenta"),
+    cyan: resolve("--terminal-cyan"),
+    white: resolve("--terminal-white"),
+    brightRed: resolve("--terminal-bright-red"),
+    brightGreen: resolve("--terminal-bright-green"),
+    brightYellow: resolve("--terminal-bright-yellow"),
+    brightBlue: resolve("--terminal-bright-blue"),
+    brightMagenta: resolve("--terminal-bright-magenta"),
+    brightCyan: resolve("--terminal-bright-cyan"),
+    brightWhite: resolve("--terminal-bright-white"),
+    brightBlack: resolve("--terminal-bright-black"),
   };
+}
+
+// Refresh xterm options in place: theme changes must never reopen SSH or clear output.
+export function observeTerminalTheme(terminal: Terminal, element: HTMLElement) {
+  const observer = new MutationObserver(() => {
+    terminal.options.theme = terminalColors(element);
+  });
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+  return () => observer.disconnect();
 }
 
 export function SampleTerminalPanel({
@@ -60,6 +86,7 @@ export function SampleTerminalPanel({
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(element);
+    const stopThemeObserver = observeTerminalTheme(terminal, element);
     if (terminal.textarea)
       terminal.textarea.setAttribute(
         "aria-label",
@@ -102,6 +129,7 @@ export function SampleTerminalPanel({
     return () => {
       visible.dispose();
       observer.disconnect();
+      stopThemeObserver();
       terminal.dispose();
     };
   }, [api, params.kind, server]);
