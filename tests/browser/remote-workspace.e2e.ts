@@ -53,7 +53,7 @@ test.beforeEach(async ({ page }) => {
     const heldConfigurationCancels = new Map<string, {resolve:()=>void}>();
     const configurationEvidence = (profileId: string, connectionId: string) => {
       const evidence=(id:string,title:string,values:Record<string,string>,state="ready",message:string|null=null)=>({id,title,values,state,message});
-      return {profileId,connectionId,observedAt:Date.now(),sections:[
+      return {profileId,connectionId,observedAt:Date.now(),snapshotId:crypto.randomUUID(),sections:[
         evidence("system","System",{"Operating system":profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC","Cached updates":"5 updates (cached; not a current update check)","Update cache timestamp":"2026-10-30 00:00:00 UTC"}),
         evidence("essentials","Essential software",{git:"/usr/bin/git","git package":"git 2.39.5 (installed)","git ownership":"git: /usr/bin/git",curl:"Not found",attention:"true"}),
         evidence("resources","System resources",{"Memory total":"8388608 KiB","Swap total":"0 KiB"}),
@@ -64,6 +64,28 @@ test.beforeEach(async ({ page }) => {
         evidence("listeners","Listening sockets",{"Socket 1":"tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"},"ready","Listeners do not prove public reachability."),
       ]};
     };
+    const configurationSnapshots = new Map<string, any>();
+    const configurationReviews = new Map<string, any>();
+    const heldConfigurationReviews = new Map<string, {resolve:(value:any)=>void; reject:(reason:any)=>void; record:any}>();
+    const configurationProfileRevision = (profileId: string) => profiles.find(profile => profile.id === profileId)?.revision ?? "";
+    const configurationReviewTitles: Record<string,string> = {system:"System",ssh:"Users and SSH",security:"Security",essentials:"Essential software",docker:"Docker",resources:"Resources"};
+    const configurationReviewNext: Record<string,string> = {system:"Review operating-system and update evidence directly before making changes.",ssh:"Verify key and runtime-policy behavior independently before treating SSH access as hardened.",security:"Verify firewall recovery and security service behavior independently before making changes.",essentials:"Confirm package ownership and fresh update candidates independently.",docker:"Review existing workloads and their dependencies in the Docker workspace.",resources:"Treat resource capacity as advisory context only; no capacity guarantee is implied."};
+    const configurationReviewOrder = ["system","ssh","security","essentials","docker","resources"];
+    const configurationReviewItems = (snapshot: any, selected: string[]) => configurationReviewOrder.filter(id => selected.includes(id)).map(id => {
+      const section = snapshot.sections.find((item: any) => item.id === id);
+      const evidenceState = section?.state ?? "unavailable";
+      const blockers = ["Execution unavailable: validated backups, approvals and independent recovery are not implemented for this workflow."];
+      if (evidenceState !== "ready") blockers.push(evidenceState === "partial" ? `Evidence for ${configurationReviewTitles[id]} is incomplete; verify the remaining items directly on the server.` : `Evidence for ${configurationReviewTitles[id]} is unavailable; verify it directly on the server.`);
+      return {id,title:configurationReviewTitles[id],evidenceState,blockers,nextStep:configurationReviewNext[id]};
+    });
+    const configurationStoreSnapshot = (snapshot: any) => {
+      configurationSnapshots.set(snapshot.profileId,{...snapshot,profileRevision:configurationProfileRevision(snapshot.profileId),collectedAt:Date.now()});
+    };
+    const configurationPrune = (now: number) => {
+      for(const [id, record] of configurationReviews) if(now-record.created > 120000) configurationReviews.delete(id);
+      for(const [profileId, snapshot] of configurationSnapshots) if(now-snapshot.collectedAt > 300000) configurationSnapshots.delete(profileId);
+    };
+    const configurationReviewResponse = (record: any) => ({id:record.id,profileId:record.profileId,connectionId:record.connectionId,profileRevision:record.profileRevision,snapshotId:record.snapshotId,observedAt:record.observedAt,expiresAt:record.expiresAt,canExecute:false,items:record.items});
     Object.assign(window, {
       isTauri: true,
       __calls: calls,
@@ -75,7 +97,16 @@ test.beforeEach(async ({ page }) => {
           const held = heldConfiguration.get(key);
           if (!held) return false;
           heldConfiguration.delete(key);
-          held.resolve(configurationEvidence(profileId, connectionId));
+          const snapshot = configurationEvidence(profileId, connectionId);
+          configurationStoreSnapshot(snapshot);
+          held.resolve(snapshot);
+          return true;
+        },
+        releaseReview: (profileId: string) => {
+          const held = heldConfigurationReviews.get(profileId);
+          if (!held) return false;
+          heldConfigurationReviews.delete(profileId);
+          held.resolve(configurationReviewResponse(held.record));
           return true;
         },
         releaseCancel: (profileId: string, connectionId: string, operationId: string) => {
@@ -97,7 +128,7 @@ test.beforeEach(async ({ page }) => {
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           // No credentials or user terminal input are retained by the mock.
-          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId} : {}) });
+          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId, ...(args.snapshotId?{snapshotId:args.snapshotId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(Array.isArray(args.selected)?{selected:args.selected}:{})} : {}) });
           if (cmd === "app_bootstrap") {
             if ((window as any).__databaseUnavailable) throw new Error("Fixture database unavailable");
             return {
@@ -196,7 +227,35 @@ test.beforeEach(async ({ page }) => {
               if(heldConfiguration.has(key)) throw "Fixture configuration snapshot is already pending for this operation.";
               return new Promise((resolve,reject)=>{heldConfiguration.set(key,{resolve,reject});});
             }
-            return configurationEvidence(args.profileId,args.connectionId);
+            const snapshot = configurationEvidence(args.profileId,args.connectionId);
+            configurationStoreSnapshot(snapshot);
+            return snapshot;
+          }
+          if(cmd === "ssh_configuration_review") {
+            if((window as any).__configurationReviewFailure) throw "Fixture configuration review unavailable";
+            const now = Date.now();
+            configurationPrune(now);
+            const snapshot = configurationSnapshots.get(args.profileId);
+            if(!snapshot || snapshot.snapshotId !== args.snapshotId || snapshot.connectionId !== args.connectionId) throw "Inspection evidence changed. Inspect this server again.";
+            if(!Array.isArray(args.selected) || !args.selected.length || args.selected.length > 6 || new Set(args.selected).size !== args.selected.length) throw "Configuration review selection is invalid.";
+            const record = {id:crypto.randomUUID(),profileId:args.profileId,connectionId:args.connectionId,profileRevision:configurationProfileRevision(args.profileId),snapshotId:snapshot.snapshotId,observedAt:snapshot.observedAt,expiresAt:now+120000,canExecute:false,items:configurationReviewItems(snapshot,args.selected),created:now};
+            configurationReviews.set(record.id,record);
+            while(configurationReviews.size > 100) configurationReviews.delete(configurationReviews.keys().next().value as string);
+            if((window as any).__holdConfigurationReview) {
+              return new Promise((resolve,reject)=>{heldConfigurationReviews.set(args.profileId,{resolve,reject,record});});
+            }
+            return configurationReviewResponse(record);
+          }
+          if(cmd === "ssh_configuration_review_validate") {
+            if((window as any).__configurationReviewValidationFailure) throw "Fixture configuration review validation unavailable";
+            const now = Date.now();
+            configurationPrune(now);
+            const record = configurationReviews.get(args.reviewId);
+            if(!record) throw "Configuration review expired. Create a new review.";
+            if(record.profileId !== args.profileId || record.connectionId !== args.connectionId) throw "Configuration review no longer matches this server.";
+            const snapshot = configurationSnapshots.get(args.profileId);
+            if(!snapshot || snapshot.snapshotId !== record.snapshotId || snapshot.connectionId !== record.connectionId || snapshot.profileRevision !== record.profileRevision) throw "Inspection evidence changed. Inspect this server again.";
+            return configurationReviewResponse(record);
           }
           if(cmd === "ssh_configuration_cancel") {
             if((window as any).__configurationCancelFailure) throw "Fixture cancellation unavailable";
@@ -1687,4 +1746,153 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
   await page.clock.fastForward(10500);
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
+});
+
+test("native readiness review blocks every category and rechecks cached evidence without SSH",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await setup.getByRole("checkbox",{name:"Select Essential software",exact:true}).check();
+  await setup.getByRole("checkbox",{name:"Select Users and SSH",exact:true}).check();
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Review setup selection",exact:true});
+  await expect(dialog).toContainText("Preview only");
+  await expect(dialog).toContainText("Execution is unavailable");
+  await expect(dialog).toContainText("Users and SSH");
+  await expect(dialog).toContainText("Essential software");
+  await expect(dialog).toContainText("Partial evidence");
+  await expect(dialog).toContainText("Evidence ready");
+  await expect(dialog).toContainText("validated backups, approvals and independent recovery");
+  await expect(dialog).toContainText("incomplete; verify the remaining items directly on the server");
+  await expect(dialog.locator("li").filter({hasText:"Execution unavailable: validated backups, approvals and independent recovery are not implemented for this workflow."})).toHaveCount(1);
+  await expect(dialog.getByRole("button",{name:"Apply",exact:true})).toHaveCount(0);
+  await dialog.getByRole("button",{name:"Recheck review",exact:true}).click();
+  await expect(dialog.getByRole("status")).toContainText("Review still matches the current connection and snapshot.");
+  await expect(dialog.getByRole("status")).toContainText("cached evidence, not a fresh remote inspection");
+  const reviews=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review"));
+  const validations=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review_validate"));
+  expect(reviews).toHaveLength(1);
+  expect(reviews[0]).toMatchObject({profileId:first,connectionId:`connection-${first}-1`,selected:["essentials","ssh"]});
+  expect(reviews[0].snapshotId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(validations).toHaveLength(1);
+  expect(validations[0].reviewId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_inspection_run","ssh_action_execute","ssh_connect","ssh_disconnect"].includes(call.cmd)))).toHaveLength(0);
+  await page.screenshot({path:testInfo.outputPath("native-review-wide.png")});
+  await page.setViewportSize({width:800,height:600});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("native-review-narrow.png")});
+});
+
+test("native review errors require explicit retry and never retry automatically",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
+  await page.evaluate(()=>{(window as any).__configurationReviewFailure=true;});
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Review setup selection",exact:true});
+  await expect(dialog.getByRole("alert")).toContainText("Fixture configuration review unavailable");
+  await expect(dialog.getByRole("button",{name:"Retry review",exact:true})).toBeEnabled();
+  await page.clock.fastForward(10000);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review"))).toHaveLength(1);
+  await page.evaluate(()=>{(window as any).__configurationReviewFailure=false;});
+  await dialog.getByRole("button",{name:"Retry review",exact:true}).click();
+  await expect(dialog).toContainText("Execution is unavailable");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  const reviews=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review"));
+  expect(reviews).toHaveLength(2);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_action_execute"))).toHaveLength(0);
+});
+
+test("closing a pending native review ignores late data and context changes invalidate it",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
+  await page.evaluate(()=>{(window as any).__holdConfigurationReview=true;});
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Review setup selection",exact:true});
+  await expect(dialog.getByRole("status")).toContainText("Creating review…");
+  await dialog.getByRole("button",{name:"Close review",exact:true}).click();
+  await expect(page.getByRole("dialog",{name:"Review setup selection",exact:true})).toHaveCount(0);
+  await page.evaluate(()=>Boolean((window as any).__configurationHeld.releaseReview("11111111-1111-4111-8111-111111111111")));
+  await page.clock.fastForward(1000);
+  await expect(page.getByRole("dialog",{name:"Review setup selection",exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+
+  // A new selection must create a review for only the newly selected category.
+  await page.evaluate(()=>{(window as any).__holdConfigurationReview=false;});
+  await setup.getByRole("checkbox",{name:"Select System",exact:true}).uncheck();
+  await setup.getByRole("checkbox",{name:"Select Docker",exact:true}).check();
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  await expect(dialog).toContainText("Docker");
+  const reviews=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review"));
+  expect(reviews).toHaveLength(2);
+  expect(reviews[1].selected).toEqual(["docker"]);
+
+  // A reconnected generation invalidates and closes the displayed review.
+  await page.evaluate(()=>{(window as any).__connectionGeneration=2;});
+  await page.clock.fastForward(2100);
+  await expect(page.getByRole("dialog",{name:"Review setup selection",exact:true})).toHaveCount(0);
+  await expect(setup).toContainText("Previous connection; stale evidence");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_inspection_run","ssh_action_execute","ssh_connect","ssh_disconnect"].includes(call.cmd)))).toHaveLength(0);
+});
+
+test("expired native review recheck fails explicitly and retry creates a new review without SSH",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Review setup selection",exact:true});
+  await expect(dialog).toContainText("Execution is unavailable");
+  await page.clock.fastForward(120001);
+  await dialog.getByRole("button",{name:"Recheck review",exact:true}).click();
+  await expect(dialog.getByRole("alert")).toContainText("expired");
+  await expect(dialog.getByRole("alert")).toContainText("Create a new review");
+  await expect(dialog).not.toContainText("Execution is unavailable");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review_validate"))).toHaveLength(1);
+  // Explicit retry creates a new review from the cached source; it never extends the old one.
+  await dialog.getByRole("button",{name:"Retry review",exact:true}).click();
+  await expect(dialog).toContainText("Execution is unavailable");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review"))).toHaveLength(2);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_review_validate"))).toHaveLength(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_action_execute"))).toHaveLength(0);
+});
+
+test("native review keeps all six categories readable and keyboard reachable at narrow widths",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  for(const name of ["System","Users and SSH","Security","Essential software","Docker","Resources"])
+    await setup.getByRole("checkbox",{name:`Select ${name}`,exact:true}).check();
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Review setup selection",exact:true});
+  for(const name of ["System","Users and SSH","Security","Essential software","Docker","Resources"])
+    await expect(dialog).toContainText(name);
+  await page.screenshot({path:testInfo.outputPath("native-review-six-categories.png")});
+  await page.setViewportSize({width:800,height:600});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  expect(await dialog.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  await dialog.getByRole("button",{name:"Recheck review",exact:true}).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByRole("status")).toContainText("Review still matches the current connection and snapshot.");
+  await page.screenshot({path:testInfo.outputPath("native-review-six-categories-narrow.png")});
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_action_execute"))).toHaveLength(0);
 });

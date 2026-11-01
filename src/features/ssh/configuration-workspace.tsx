@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
   ConfigurationNotice,
@@ -14,11 +15,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { ToolId } from "@/features/workspace/fixtures";
-import type { ServerProfile } from "./api";
+import { type ServerProfile, safeError } from "./api";
 import { useConfiguration } from "./configuration-context";
 import {
   type ConfigurationEvidence,
+  type ConfigurationReview,
   evidenceStatus,
+  reviewMatchesContext,
 } from "./configuration-model";
 import { RemoteActions } from "./remote-actions";
 
@@ -79,6 +82,14 @@ const sshLabels: Record<string, string> = {
   port: "Default configured ports",
   listenaddress: "Default configured listeners",
 };
+const reviewStateLabels = {
+  ready: "Evidence ready",
+  partial: "Partial evidence",
+  unavailable: "Evidence unavailable",
+} as const;
+function reviewErrorText(error: unknown) {
+  return safeError(error);
+}
 function Evidence({
   section,
   title,
@@ -295,6 +306,7 @@ export function ConfigurationWorkspace({
 }) {
   const {
     snapshot,
+    connectionId,
     busy,
     error,
     stale,
@@ -306,8 +318,46 @@ export function ConfigurationWorkspace({
     selected,
     select,
   } = useConfiguration();
-  const [review, setReview] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [review, setReview] = useState<ConfigurationReview | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<
+    "idle" | "creating" | "rechecking"
+  >("idle");
+  const [reviewError, setReviewError] = useState("");
+  const [reviewMessage, setReviewMessage] = useState("");
+  const reviewVersion = useRef(0);
+  const reviewPending = useRef(false);
+  const lastReview = useRef<ConfigurationReview | null>(null);
   const page = useRef<HTMLElement>(null);
+  // Any identity, evidence, selection, connection or inspection change makes
+  // an older review response unusable, even if it arrives after this render.
+  const contextKey = [
+    profile.id,
+    profile.revision,
+    connected ? "connected" : "disconnected",
+    connectionId ?? "",
+    snapshot?.snapshotId ?? "",
+    snapshot?.connectionId ?? "",
+    selected.join(","),
+    busy ? "busy" : "idle",
+  ].join("|");
+  // Kept current during render so an awaited response can compare against the
+  // context that exists now, not only the captured context of its request.
+  const latestContextKey = useRef(contextKey);
+  latestContextKey.current = contextKey;
+  const previousContextKey = useRef(contextKey);
+  useLayoutEffect(() => {
+    if (previousContextKey.current === contextKey) return;
+    previousContextKey.current = contextKey;
+    reviewVersion.current += 1;
+    reviewPending.current = false;
+    lastReview.current = null;
+    setReviewOpen(false);
+    setReview(null);
+    setReviewStatus("idle");
+    setReviewError("");
+    setReviewMessage("");
+  }, [contextKey]);
   useLayoutEffect(() => {
     // A different configuration page starts at its heading; evidence stays cached.
     if (tool) page.current?.closest("main")?.scrollTo({ top: 0 });
@@ -315,6 +365,166 @@ export function ConfigurationWorkspace({
   const section = (id: string) =>
     snapshot?.sections.find((item) => item.id === id);
   const setup = tool === "quick-setup";
+  const canReview = Boolean(
+    selected.length &&
+      snapshot?.snapshotId &&
+      connectionId &&
+      connected &&
+      !stale &&
+      !busy &&
+      reviewStatus === "idle",
+  );
+  async function createReview() {
+    if (
+      reviewPending.current ||
+      !snapshot?.snapshotId ||
+      !connectionId ||
+      !connected ||
+      stale ||
+      busy ||
+      !selected.length
+    )
+      return;
+    const version = ++reviewVersion.current;
+    const requestKey = contextKey;
+    const context = {
+      profileId: profile.id,
+      connectionId,
+      profileRevision: profile.revision,
+      snapshotId: snapshot.snapshotId,
+      selected: [...selected],
+    };
+    reviewPending.current = true;
+    setReviewOpen(true);
+    setReview(null);
+    setReviewError("");
+    setReviewMessage("");
+    setReviewStatus("creating");
+    try {
+      const result = await invoke<ConfigurationReview>(
+        "ssh_configuration_review",
+        {
+          profileId: context.profileId,
+          connectionId: context.connectionId,
+          snapshotId: context.snapshotId,
+          selected: context.selected,
+        },
+      );
+      if (
+        reviewVersion.current !== version ||
+        latestContextKey.current !== requestKey
+      )
+        return;
+      const match = reviewMatchesContext(result, context);
+      if (!match.ok) throw Error(match.reason);
+      lastReview.current = result;
+      setReview(result);
+      setReviewStatus("idle");
+      reviewPending.current = false;
+    } catch (failure) {
+      if (
+        reviewVersion.current !== version ||
+        latestContextKey.current !== requestKey
+      )
+        return;
+      lastReview.current = null;
+      setReview(null);
+      setReviewError(reviewErrorText(failure));
+      setReviewStatus("idle");
+      reviewPending.current = false;
+    }
+  }
+  async function recheckReview(target = lastReview.current) {
+    if (
+      !target ||
+      reviewPending.current ||
+      !snapshot?.snapshotId ||
+      target.snapshotId !== snapshot.snapshotId ||
+      !connectionId ||
+      !connected ||
+      stale ||
+      busy
+    )
+      return;
+    const version = ++reviewVersion.current;
+    const requestKey = contextKey;
+    const context = {
+      profileId: target.profileId,
+      connectionId: target.connectionId,
+      profileRevision: profile.revision,
+      snapshotId: snapshot.snapshotId,
+      selected: [...selected],
+    };
+    reviewPending.current = true;
+    setReviewError("");
+    setReviewMessage("");
+    setReviewStatus("rechecking");
+    try {
+      const result = await invoke<ConfigurationReview>(
+        "ssh_configuration_review_validate",
+        {
+          profileId: target.profileId,
+          connectionId: target.connectionId,
+          reviewId: target.id,
+        },
+      );
+      if (
+        reviewVersion.current !== version ||
+        latestContextKey.current !== requestKey
+      )
+        return;
+      if (result.id !== target.id || result.expiresAt !== target.expiresAt)
+        throw Error("Review response did not match the rechecked review.");
+      const match = reviewMatchesContext(result, context);
+      if (!match.ok) throw Error(match.reason);
+      lastReview.current = result;
+      setReview(result);
+      setReviewMessage(
+        "Review still matches the current connection and snapshot. This is cached evidence, not a fresh remote inspection.",
+      );
+      setReviewStatus("idle");
+      reviewPending.current = false;
+    } catch (failure) {
+      if (
+        reviewVersion.current !== version ||
+        latestContextKey.current !== requestKey
+      )
+        return;
+      setReview(null);
+      setReviewError(reviewErrorText(failure));
+      setReviewStatus("idle");
+      reviewPending.current = false;
+    }
+  }
+  function closeReview() {
+    reviewVersion.current += 1;
+    reviewPending.current = false;
+    setReviewOpen(false);
+    setReview(null);
+    setReviewStatus("idle");
+    setReviewError("");
+    setReviewMessage("");
+  }
+  // Retry always creates a new review from the current native cache and
+  // identity. It never reuses or extends an expired review.
+  function retryReview() {
+    void createReview();
+  }
+  const currentContext = {
+    profileId: profile.id,
+    connectionId: connectionId ?? null,
+    profileRevision: profile.revision,
+    snapshotId: snapshot?.snapshotId ?? "",
+    selected,
+  };
+  const visibleReview =
+    review && reviewMatchesContext(review, currentContext).ok ? review : null;
+  const sharedBlockers = visibleReview
+    ? [...new Set(visibleReview.items.flatMap((item) => item.blockers))].filter(
+        (blocker) =>
+          visibleReview.items.every((item) => item.blockers.includes(blocker)),
+      )
+    : [];
   const title = setup
     ? "Quick Setup"
     : tool === "ssh-access"
@@ -446,14 +656,20 @@ export function ConfigurationWorkspace({
               );
             })}
           </div>
+          {snapshot && !snapshot.snapshotId && (
+            <p role="status" className="text-sm text-warning">
+              This cached evidence predates native review. Refresh configuration
+              to inspect this server again.
+            </p>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-muted-foreground">
               {selected.length} selected for review
             </span>
             <Button
               variant="outline"
-              disabled={!selected.length || stale || busy}
-              onClick={() => setReview(true)}
+              disabled={!canReview}
+              onClick={() => void createReview()}
             >
               Review selection
             </Button>
@@ -532,35 +748,117 @@ export function ConfigurationWorkspace({
           </section>
         </>
       )}
-      <Dialog open={review} onOpenChange={setReview}>
-        <DialogContent>
+      <Dialog
+        open={reviewOpen}
+        onOpenChange={(open) => {
+          if (!open) closeReview();
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Review setup selection</DialogTitle>
             <DialogDescription>
-              {profile.name} · {profile.host}:{profile.port}. This reviews
-              inspection evidence; no commands will be applied.
+              {profile.name} · {profile.username}@{profile.host}:{profile.port}.
+              Readiness review using cached inspection evidence.
             </DialogDescription>
           </DialogHeader>
-          <ul className="space-y-3 text-sm">
-            {categories
-              .filter((item) => selected.includes(item.id))
-              .map((item) => (
-                <li key={item.id}>
-                  <strong>{item.title}</strong>
-                  <p className="mt-1 text-muted-foreground">
-                    {section(item.id)?.message ??
-                      "Review the current evidence before choosing future changes."}
+          {reviewStatus === "creating" && !visibleReview && (
+            <p role="status" className="text-sm text-muted-foreground">
+              Creating review…
+            </p>
+          )}
+          {reviewError && (
+            <div className="space-y-3">
+              <p role="alert" className="text-sm text-destructive">
+                {reviewError}
+              </p>
+              <Button
+                variant="outline"
+                disabled={reviewStatus !== "idle"}
+                onClick={retryReview}
+              >
+                Retry review
+              </Button>
+            </div>
+          )}
+          {visibleReview && (
+            <div className="space-y-4 text-sm">
+              <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2">
+                <dt className="text-muted-foreground">Server</dt>
+                <dd className="break-words">
+                  {profile.name} · {profile.username}@{profile.host}:
+                  {profile.port}
+                </dd>
+                <dt className="text-muted-foreground">Source observed</dt>
+                <dd>{new Date(visibleReview.observedAt).toLocaleString()}</dd>
+                <dt className="text-muted-foreground">Review expires</dt>
+                <dd>{new Date(visibleReview.expiresAt).toLocaleString()}</dd>
+              </dl>
+              <p className="text-sm text-warning">
+                Preview only. Cached inspection evidence observed{" "}
+                {new Date(visibleReview.observedAt).toLocaleString()}; this is
+                not a fresh live check.
+              </p>
+              <p className="text-sm text-warning">
+                Execution is unavailable. No commands are generated or applied.
+              </p>
+              {sharedBlockers.length > 0 && (
+                <div className="space-y-1">
+                  <p className="font-medium">
+                    Applies to every selected category
                   </p>
-                </li>
-              ))}
-          </ul>
-          <p className="text-sm text-warning">
-            Execution is unavailable until action-specific backups,
-            preconditions, approvals and disposable-VM recovery validation are
-            complete.
-          </p>
+                  <ul className="space-y-1 text-muted-foreground">
+                    {sharedBlockers.map((blocker) => (
+                      <li key={blocker}>{blocker}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <ol className="space-y-4">
+                {visibleReview.items.map((item) => {
+                  const itemBlockers = item.blockers.filter(
+                    (blocker) => !sharedBlockers.includes(blocker),
+                  );
+                  return (
+                    <li key={item.id}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <strong>{item.title}</strong>
+                        <span className="text-xs text-muted-foreground">
+                          {reviewStateLabels[item.evidenceState]}
+                        </span>
+                      </div>
+                      {itemBlockers.length > 0 && (
+                        <ul className="mt-2 space-y-1 text-muted-foreground">
+                          {itemBlockers.map((blocker) => (
+                            <li key={blocker}>{blocker}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="mt-2 text-muted-foreground">
+                        {item.nextStep}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ol>
+              {reviewMessage && (
+                <p role="status" className="text-sm text-info">
+                  {reviewMessage}
+                </p>
+              )}
+              <Button
+                variant="outline"
+                disabled={reviewStatus !== "idle"}
+                onClick={() => void recheckReview()}
+              >
+                {reviewStatus === "rechecking"
+                  ? "Rechecking review…"
+                  : "Recheck review"}
+              </Button>
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setReview(false)}>
+            <Button variant="outline" onClick={closeReview}>
               Close review
             </Button>
           </DialogFooter>

@@ -66,6 +66,15 @@ has no native SSH bridge; automated browser scenarios supply their own fixtures.
    Running shells stay open, and a new inspection requires an explicit click.
    Fast inspections may finish before you can click Cancel; automated browser
    fixtures hold requests open to exercise these cases reproducibly.
+7. After a successful inspection, select **Users and SSH** and **Essential
+   software**, then **Review selection**. The readiness review should show the
+   source observation time, review expiry, evidence blockers and next steps.
+   Even ready evidence cannot enable applying changes. **Recheck review** checks
+   the existing review against the current connection and cached snapshot; it
+   does not inspect the server again. Reviews expire after two minutes;
+   **Retry review** explicitly creates a new review. Source evidence older than
+   five minutes requires closing the dialog and refreshing the inspection.
+   Refreshing, reconnecting or changing the selection invalidates older reviews.
 
 Do not test SSH/firewall changes or installations against an important VPS.
 Those new workflows remain disabled pending recovery validation. Existing Files

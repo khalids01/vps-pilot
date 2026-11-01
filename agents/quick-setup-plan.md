@@ -938,3 +938,69 @@ four-scenario cancellation run including failure/retry, retained evidence,
 early cancellation and late-success discard. Check/build and the real disposable
 OpenSSH/probe/PTY/monitor integration also passed. No important-VPS contact or
 mutation gate changes.
+
+## Native readiness review foundation — 2026-11-02
+
+User requested a Command Code first implementation workflow. Updated and
+committed `agents/codex-use-cmd.md` as `8af868f`: Codex specifies/reviews/verifies;
+Command Code writes the main backend, UI and tests, with bounded same-chat fixes
+and candid fallback reporting. No promise of a particular cost reduction.
+
+Implemented the first read-only slice toward Phase 3; this is not an executable
+desired-state ChangePlan or recovery transaction:
+
+- Every accepted inspection receives a native snapshot UUID and a bounded
+  memory-only native cache entry, tied to profile revision and connection.
+  Source evidence expires after five minutes. Publication checks cancellation
+  under the same mutex as cancellation, so a canceled read cannot replace the
+  previous cached snapshot. Failed reads leave previous evidence intact.
+- Review accepts only snapshot/server/connection IDs and one to six unique
+  allowlisted category IDs. It takes evidence from native memory, never from
+  renderer-provided values. Live connection, current profile revision, source
+  identity, age and in-flight inspections are checked natively.
+- Native reviews expire after 120 seconds, are bounded to 100 memory entries,
+  and never authorize execution. Rechecking preserves ID/expiry and rejects
+  refreshed, expired or mismatched sources. Review/recheck opens no SSH channel
+  and runs no command. Per-item fixed blockers distinguish incomplete evidence;
+  even ready evidence remains blocked pending validated recovery prerequisites.
+- Quick Setup presents source time, expiry, blockers and category next steps.
+  Explicit retry creates a new review. Context/selection changes and closing a
+  pending dialog discard late responses. The frontend also rejects unexpected
+  executable or wrong-context replies. The dialog scrolls within the viewport
+  and supports six categories at an 800×600 window. No reviews enter SQLite,
+  localStorage or command output; existing shells and inspection cache survive.
+
+Command Code authored the Rust implementation, React UI, model guards, native
+tests and browser mocks/scenarios. Saved implementation chat:
+`vps-pilot-native-review-20261102`. Initial backend/frontend runs reached finite
+turn caps; their processes exited before explicit resumes. Codex independently
+reviewed and returned specific cache-publication, permissions, stale-response,
+expiry retry and dialog-size findings for Command Code to implement. A fresh
+bounded `vps-pilot-review-polish-20261102` chat handles final common-blocker/copy
+cleanup after the implementation chat became long. Codex wrote workflow/progress
+documentation and performed independent validation rather than taking over the
+feature implementation.
+
+Independent validation before final presentation cleanup: check/build, all 37
+frontend unit tests, strict all-target Rust Clippy and 72 native tests passed
+(five opt-in integrations excluded from that native run). The real disposable
+OpenSSH/probe/PTY/monitor integration also passed with native review/recheck,
+unchanged expiry and forged identity rejection. Twenty browser scenarios passed,
+including readiness reviews, expiry/retry/late responses, six-category keyboard/
+viewport checks, appearance persistence and relevant Files/Docker/cancellation
+regressions. Desktop and 800×600 screenshots were inspected. Browser tests use
+a mocked bridge; native WebKit accessibility is not certified. No important-VPS
+contact, new dependencies or mutation gate changes.
+
+Final presentation cleanup deduplicates blockers shared by all categories and
+keeps partial/unavailable-specific explanations beside their items. Product copy
+uses inspection/review terms rather than implementation details. Command Code
+authored these edits too; its finite polish run exited at its turn cap before
+running browser checks. Codex independently reran check/build and all five new
+readiness-review browser scenarios successfully, then inspected the updated
+screenshots. All task-owned Command Code processes exited.
+
+Remaining Phase 3 work: typed desired-state action plans, stronger action-specific
+fresh preflight, shared mutation conflict locks, protected backups, minimal
+journaling, independent rollback and disposable Debian/Ubuntu recovery tests.
+No privileged workflow is enabled by this readiness review increment.

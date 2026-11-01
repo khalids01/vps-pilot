@@ -16,6 +16,7 @@ import {
 
 interface ConfigurationContextValue {
   snapshot?: ConfigurationSnapshot;
+  connectionId?: string | null;
   busy: boolean;
   error: string;
   stale: boolean;
@@ -172,6 +173,7 @@ export function ConfigurationProvider({
     <Context.Provider
       value={{
         snapshot,
+        connectionId,
         busy: running || query.isFetching,
         canceling,
         notice,

@@ -39,6 +39,8 @@ pub fn run() {
             ssh::configuration::ssh_configuration_snapshot,
             ssh::configuration::ssh_configuration_describe,
             ssh::configuration::ssh_configuration_cancel,
+            ssh::configuration::ssh_configuration_review,
+            ssh::configuration::ssh_configuration_review_validate,
             ssh::ssh_profiles,
             ssh::ssh_config_hosts,
             ssh::ssh_parse_command,

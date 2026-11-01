@@ -1442,7 +1442,8 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         "Disposable configuration probe elapsed: {:?}",
         probe_started.elapsed()
     );
-    let projected = serde_json::to_value(snapshot).unwrap();
+    let projected = serde_json::to_value(&snapshot).unwrap();
+    let snapshot_id = projected["snapshotId"].as_str().unwrap().to_string();
     assert_eq!(projected["profileId"], profile.id);
     assert_eq!(projected["connectionId"], connection_id);
     let sections = projected["sections"].as_array().unwrap();
@@ -1474,6 +1475,57 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
     assert!(!ssh
         .to_string()
         .contains(public_text.split_whitespace().nth(1).unwrap()));
+    let review = service
+        .configuration_review(
+            &profile.id,
+            &connection_id,
+            &snapshot_id,
+            vec!["ssh".into(), "essentials".into()],
+        )
+        .await
+        .unwrap();
+    let review_json = serde_json::to_value(&review).unwrap();
+    let review_id = review_json["id"].as_str().unwrap().to_string();
+    let review_expires_at = review_json["expiresAt"].as_u64().unwrap();
+    assert_eq!(review_json["canExecute"], false);
+    assert_eq!(review_json["snapshotId"], snapshot_id);
+    assert_eq!(review_json["profileId"], profile.id);
+    assert_eq!(review_json["connectionId"], connection_id);
+    let review_items = review_json["items"].as_array().unwrap();
+    let ssh_item = review_items
+        .iter()
+        .find(|item| item["id"] == "ssh")
+        .unwrap();
+    assert_eq!(ssh_item["evidenceState"], "partial");
+    assert_eq!(ssh_item["blockers"].as_array().unwrap().len(), 2);
+    let recheck = service
+        .configuration_review_validate(&profile.id, &connection_id, &review_id)
+        .await
+        .unwrap();
+    let recheck_json = serde_json::to_value(&recheck).unwrap();
+    assert_eq!(recheck_json["id"], review_id);
+    assert_eq!(
+        recheck_json["expiresAt"].as_u64().unwrap(),
+        review_expires_at
+    );
+    assert!(service
+        .configuration_review(
+            &profile.id,
+            "forged-generation",
+            &snapshot_id,
+            vec!["system".into()],
+        )
+        .await
+        .is_err());
+    assert!(service
+        .configuration_review(
+            &profile.id,
+            &connection_id,
+            &uuid::Uuid::new_v4().to_string(),
+            vec!["system".into()],
+        )
+        .await
+        .is_err());
     let (sink, mut output) = stream_sink();
     let id = service
         .start_stream(&profile.id, Some((80, 24)), None, sink)
