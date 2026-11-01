@@ -1246,10 +1246,15 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         .configuration_snapshot(&profile.id, "stale-generation")
         .await
         .is_err());
+    let probe_started = Instant::now();
     let snapshot = service
         .configuration_snapshot(&profile.id, &connection_id)
         .await
         .unwrap();
+    eprintln!(
+        "Disposable configuration probe elapsed: {:?}",
+        probe_started.elapsed()
+    );
     let projected = serde_json::to_value(snapshot).unwrap();
     assert_eq!(projected["profileId"], profile.id);
     assert_eq!(projected["connectionId"], connection_id);
@@ -1266,6 +1271,22 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         ssh["values"]["Key authentication"],
         "Not independently verified"
     );
+    let public_text =
+        std::fs::read_to_string(format!("{}.pub", profile.identity_file.as_ref().unwrap()))
+            .unwrap();
+    let public = russh::keys::PublicKey::from_openssh(&public_text).unwrap();
+    let expected_fingerprint = public.fingerprint(HashAlg::Sha256).to_string();
+    assert!(ssh["values"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .any(|(name, value)| name.starts_with("Authorized key ")
+            && value
+                .as_str()
+                .is_some_and(|text| text.contains(&expected_fingerprint))));
+    assert!(!ssh
+        .to_string()
+        .contains(public_text.split_whitespace().nth(1).unwrap()));
     let (sink, mut output) = stream_sink();
     let id = service
         .start_stream(&profile.id, Some((80, 24)), None, sink)

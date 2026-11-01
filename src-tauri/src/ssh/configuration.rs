@@ -106,7 +106,7 @@ impl SshService {
         expected_connection: &str,
     ) -> Result<ConfigurationSnapshot, String> {
         let _lease = self.configuration.acquire(profile_id)?;
-        let (mut channel, connection_id) = {
+        let (mut channel, connection_id, authenticated_user) = {
             let runtime = self.runtime.lock().await;
             let connection_id = runtime
                 .connection_ids
@@ -124,11 +124,22 @@ impl SshService {
                 .await
                 .map_err(|_| "Configuration channel timed out.")?
                 .map_err(|_| "Cannot open configuration inspection.")?;
-            (channel, connection_id.clone())
+            (
+                channel,
+                connection_id.clone(),
+                self.profile(profile_id)
+                    .ok()
+                    .map(|profile| profile.username),
+            )
         };
         // Release the runtime lock while probes run: terminals and monitoring keep working.
         let result = timeout(Duration::from_secs(30), async {
             channel.exec(true, command()).await.map_err(|_| "Cannot start configuration inspection.")?;
+            // Identity comes from the verified connection's profile, never a caller-selected account.
+            let context = serde_json::to_vec(&serde_json::json!({"authenticatedUser": authenticated_user}))
+                .map_err(|_| "Cannot prepare configuration context.")?;
+            channel.data(context.as_slice()).await.map_err(|_| "Cannot send configuration context.")?;
+            channel.eof().await.map_err(|_| "Cannot finish configuration context.")?;
             let mut bytes = Vec::new();
             let mut exit = None;
             while let Some(message) = channel.wait().await {

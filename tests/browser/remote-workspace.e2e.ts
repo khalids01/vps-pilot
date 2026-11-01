@@ -150,12 +150,12 @@ test.beforeEach(async ({ page }) => {
             if((window as any).__holdConfiguration) await new Promise(resolve=>{(window as any).__releaseConfiguration=resolve;});
             const evidence=(id:string,title:string,values:Record<string,string>,state="ready",message:string|null=null)=>({id,title,values,state,message});
             return {profileId:args.profileId,connectionId:args.connectionId,observedAt:Date.now(),sections:[
-              evidence("system","System",{"Operating system":args.profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC"}),
-              evidence("essentials","Essential software",{git:"/usr/bin/git",curl:"Not found",attention:"true"}),
+              evidence("system","System",{"Operating system":args.profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC","Cached updates":"5 updates (cached; not a current update check)","Update cache timestamp":"2026-10-30 00:00:00 UTC"}),
+              evidence("essentials","Essential software",{git:"/usr/bin/git","git package":"git 2.39.5 (installed)","git ownership":"git: /usr/bin/git",curl:"Not found",attention:"true"}),
               evidence("resources","System resources",{"Memory total":"8388608 KiB","Swap total":"0 KiB"}),
-              evidence("security","Security",{"Fail2ban installed":"Not found"},"partial","Installation alone does not establish protection."),
+              evidence("security","Security",{"Fail2ban installed":"Installed","fail2ban.service ActiveState":"active","Fail2ban jail count":"2","apt-daily-upgrade.timer ActiveState":"active","Automatic update configuration":"1 (observed setting, not proof of execution)"},"partial","Installation alone does not establish protection."),
               evidence("docker","Docker",{CLI:"/usr/bin/docker","CLI version":"Docker fixture"}),
-              evidence("ssh","Users and SSH",{"Current user":"tester","Current server port":"22",passwordauthentication:"no",pubkeyauthentication:"yes","Key authentication":"Not independently verified"},"partial","Default invocation only; runtime flags may differ."),
+              evidence("ssh","Users and SSH",{"Current user":"tester","Current server port":"22",passwordauthentication:"no",pubkeyauthentication:"yes","Key authentication":"Not independently verified","ssh.socket ActiveState":"active","Local account 1":"tester · UID 1000 · sudo group (privileges not verified)","Local accounts coverage":"Local metadata only; network accounts not enumerated","Authorized key 1":"ssh-ed25519 · SHA256:fixturePublicFingerprint · Restricted options present (values hidden)","Authorized key source":"Authenticated account standard file; daemon source not verified"},"partial","Default invocation only; runtime flags may differ."),
               evidence("firewall","Firewall",{Status:"active","Default policies":"deny (incoming), allow (outgoing)","Rule 1":"22/tcp ALLOW IN Anywhere","Rule 2":"22/tcp (v6) ALLOW IN Anywhere (v6)","Cloud firewall":"Unknown"}),
               evidence("listeners","Listening sockets",{"Socket 1":"tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"},"ready","Listeners do not prove public reachability."),
             ]};
@@ -1438,4 +1438,42 @@ test("configuration failures do not retry and connection changes mark cached evi
   await page.clock.fastForward(2100);
   await expect(setup).toContainText("Server disconnected");
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeDisabled();
+});
+
+test("expanded read-only evidence separates package caches, local users and public-key metadata",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  const system=setup.getByRole("heading",{name:"System",exact:true}).locator("..");
+  await system.locator("summary").click();
+  await expect(setup).toContainText("5 updates (cached; not a current update check)");
+  const essentials=setup.getByRole("heading",{name:"Essential software",exact:true}).locator("..");
+  await essentials.locator("summary").click();
+  await expect(setup).toContainText("git 2.39.5 (installed)");
+  const security=setup.getByRole("heading",{name:"Security",exact:true}).locator("..");
+  await security.locator("summary").click();
+  await expect(setup).toContainText("fail2ban.service ActiveState");
+  await expect(setup).toContainText("apt-daily-upgrade.timer ActiveState");
+  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
+  await expect(ssh.getByRole("region",{name:"SSH server policy",exact:true})).toContainText("ssh.socket ActiveState");
+  const users=ssh.getByRole("region",{name:"Local users",exact:true});
+  await expect(users).toContainText("UID 1000");
+  await expect(users).toContainText("does not prove administrative privileges");
+  const keys=ssh.getByRole("region",{name:"Authorized public keys",exact:true});
+  await expect(keys).toContainText("SHA256:fixturePublicFingerprint");
+  await expect(keys).toContainText("Restricted options present (values hidden)");
+  await expect(keys).toContainText("not working login methods");
+  await expect(keys).not.toContainText("UID 1000");
+  await expect(users).not.toContainText("SHA256:fixturePublicFingerprint");
+  await expect(ssh.getByRole("region",{name:"SSH server policy",exact:true})).not.toContainText("SHA256:fixturePublicFingerprint");
+  await page.screenshot({path:testInfo.outputPath("ssh-users-and-keys.png")});
+  await page.setViewportSize({width:640,height:800});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("ssh-users-and-keys-narrow.png")});
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("fixturePublicFingerprint");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_action_execute"))).toHaveLength(0);
 });

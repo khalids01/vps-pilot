@@ -31,7 +31,7 @@ const categories: {
   {
     id: "system",
     title: "System",
-    description: "OS, hostname, timezone and update-check availability.",
+    description: "OS, hostname, timezone and cached package-update evidence.",
     tool: "overview",
   },
   {
@@ -44,13 +44,16 @@ const categories: {
   {
     id: "security",
     title: "Security",
-    description: "UFW, Fail2ban and automatic-update package presence.",
+    description:
+      "Installed security tools, service activity and automatic-update scheduling.",
     tool: "firewall",
   },
   {
     id: "essentials",
     title: "Essential software",
-    description: "Git, curl, certificates and common utilities.",
+    description:
+      "Git, curl, certificates, installed versions and package ownership.",
+    tool: "software",
   },
   {
     id: "docker",
@@ -142,6 +145,32 @@ function Evidence({
     </section>
   );
 }
+type SshEvidenceGroup = "policy" | "accounts" | "keys";
+function sshEvidenceGroup(
+  section: ConfigurationEvidence | undefined,
+  group: SshEvidenceGroup,
+): ConfigurationEvidence | undefined {
+  if (!section) return undefined;
+  const belongs = (key: string) => {
+    if (/^Local accounts?\b/i.test(key)) return "accounts";
+    if (/^Authorized keys?\b/i.test(key)) return "keys";
+    return "policy";
+  };
+  const values = Object.fromEntries(
+    Object.entries(section.values).filter(([key]) => belongs(key) === group),
+  );
+  return {
+    ...section,
+    values,
+    message:
+      group === "accounts"
+        ? "Bounded local account metadata only. Group membership does not prove administrative privileges; network directory accounts are not enumerated."
+        : group === "keys"
+          ? "Only the current account’s standard public-key file is inspected. Fingerprints identify file entries, not working login methods. The running daemon may use a different authorization source."
+          : section.message,
+  };
+}
+
 function readableValue(value: string) {
   const match = /^(\d+) (KiB|bytes)$/.exec(value);
   if (!match) return value;
@@ -393,7 +422,9 @@ export function ConfigurationWorkspace({
                           ? "Open Firewall"
                           : category.tool === "docker"
                             ? "Open Docker"
-                            : "Open Overview"}
+                            : category.tool === "software"
+                              ? "Open Software"
+                              : "Open Overview"}
                     </Button>
                   )}
                 </div>
@@ -433,7 +464,18 @@ export function ConfigurationWorkspace({
               </dd>
             </dl>
           </section>
-          <Evidence section={section("ssh")} title="SSH server policy" />
+          <Evidence
+            section={sshEvidenceGroup(section("ssh"), "policy")}
+            title="SSH server policy"
+          />
+          <Evidence
+            section={sshEvidenceGroup(section("ssh"), "accounts")}
+            title="Local users"
+          />
+          <Evidence
+            section={sshEvidenceGroup(section("ssh"), "keys")}
+            title="Authorized public keys"
+          />
           <Evidence section={section("listeners")} title="Listening sockets" />
           <p className="text-sm text-muted-foreground">
             Key generation, authorized-key changes and port/authentication

@@ -800,3 +800,54 @@ plus configuration caching/failure/stale-connection and sudo-review regressions,
 passed. Actual setup/firewall/narrow-layout screenshots were inspected. Rule
 rows now preserve numeric order and include family and plain-English explanation;
 resource values use readable units. There was no important-VPS contact.
+
+## Expanded read-only evidence — 2026-11-01
+
+Implemented the next detection slice using Command Code and independent Codex
+review. Command Code authored the probe expansion and regression cases; Codex
+reviewed its output, corrected identity binding, integrated the UI/native bridge
+and validated the result. Bounded runs hit their turn limits, so the same saved
+conversation was resumed rather than creating unrelated sessions. All Command
+Code processes exited; no background CLI was left running.
+
+Saved Command Code conversation: `vps-pilot-readonly-detection-20261101`, exact
+resume ID `4425f033-7206-44a0-9785-a7a7c72a7435`. Follow
+`agents/codex-use-cmd.md` for subsequent bounded work and independent review.
+
+- Fixed-list dpkg package status/version and executable ownership evidence;
+  other package managers remain unknown. Ownership queries reject wildcard
+  paths without hiding detected executable presence.
+- Cached update counts and cache timestamps only: no refresh or live candidate
+  resolution. Missing, malformed, truncated and future-dated caches are qualified.
+- Allowlisted systemd properties for SSH service/socket units, Fail2ban and
+  unattended-upgrade scheduling. Unit activity does not prove which daemon
+  accepted the current connection. No unit commands/environment are projected.
+- Bounded local passwd/group account summaries, without NSS enumeration or
+  password/GECOS/home projection. Group membership does not prove sudo access.
+- Current authenticated account's standard authorized_keys fingerprints and
+  restriction-presence metadata. Native profile identity is sent as bounded JSON
+  on stdin and must match the remote UID and local passwd entry before home
+  reads. Directory-descriptor traversal rejects symlinks in every home ancestor,
+  .ssh and final file; only bounded regular files are read. Raw public blobs,
+  comments and option values are omitted. Framing checks do not prove mathematical
+  key validity or successful login; alternate AuthorizedKeysFile/Command sources
+  are not inventoried. Default sshd policy evidence remains partial.
+- SSH Access separates server policy, local users and public-key metadata;
+  Quick Setup links to existing Software management. Inspection remains manual,
+  connection-bound, cached in memory and never periodically refreshed.
+
+Validation: 42 probe and four identity Python tests, 34 frontend unit tests,
+59 native tests (five opt-in fixtures excluded), check/build and strict all-target
+Clippy passed. Six targeted browser scenarios passed with installed Chrome,
+including cache/stale-connection behavior, layout, public metadata separation and
+sudo rejection. The initial browser launch failed because the expected bundled
+browser was absent; no application assertions ran in that attempt. The real
+loopback disposable OpenSSH/native integration passed, independently matching
+the fixture public-key fingerprint while excluding its raw public blob. Its
+configuration probe took about 303 ms in this fixture; this single measurement
+is not a resource-budget or distribution compatibility certification. The
+640px screenshot was inspected. No important-VPS contact or mutation gate change.
+
+Still outstanding: actual update candidate resolution, complete daemon/runtime
+policy discovery, detection cancellation UI, broader distro/overhead validation,
+native WebKit accessibility and all later privileged planning/recovery gates.
