@@ -29,6 +29,7 @@ commands.allow = [
   "ssh_inspection_describe",
   "ssh_configuration_describe",
   "ssh_configuration_snapshot",
+  "ssh_configuration_cancel",
   "ssh_action_review",
   "ssh_action_execute",
   "ssh_action_reject",

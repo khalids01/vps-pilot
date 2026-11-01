@@ -19,6 +19,10 @@ struct TestServer {
     allow_none: bool,
     sudo_channels: std::collections::HashSet<russh::ChannelId>,
     monitor_channels: std::collections::HashSet<russh::ChannelId>,
+    configuration_channels: std::collections::HashSet<russh::ChannelId>,
+    channels_closed: Arc<AtomicUsize>,
+    open_pause: Arc<Mutex<Option<Arc<Notify>>>>,
+    channel_opens: Arc<AtomicUsize>,
     monitor_requests: Arc<AtomicUsize>,
     commands: Arc<Mutex<Vec<String>>>,
     sizes: Arc<Mutex<Vec<(u32, u32)>>>,
@@ -39,6 +43,11 @@ impl server::Handler for TestServer {
         reply: server::ChannelOpenHandle,
         _: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        self.channel_opens.fetch_add(1, Ordering::SeqCst);
+        let pause = self.open_pause.lock().unwrap().clone();
+        if let Some(pause) = pause {
+            pause.notified().await;
+        }
         reply.accept().await;
         Ok(())
     }
@@ -72,6 +81,10 @@ impl server::Handler for TestServer {
         data: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if self.configuration_channels.contains(&channel) {
+            // Keep the read pending until the client cancels; never execute Python.
+            return Ok(());
+        }
         if self.monitor_channels.contains(&channel) {
             assert_eq!(data, b"sample\n");
             let index = self.monitor_requests.fetch_add(1, Ordering::SeqCst) as u64;
@@ -122,6 +135,10 @@ impl server::Handler for TestServer {
             .unwrap()
             .push(String::from_utf8_lossy(data).into_owned());
         session.channel_success(channel)?;
+        if data == configuration::command().as_bytes() {
+            self.configuration_channels.insert(channel);
+            return Ok(());
+        }
         if data == monitor::command().as_bytes() {
             self.monitor_channels.insert(channel);
             return Ok(());
@@ -149,6 +166,15 @@ impl server::Handler for TestServer {
         session.data(channel, b"second packet".to_vec())?;
         session.exit_status_request(channel, 0)?;
         session.close(channel)?;
+        Ok(())
+    }
+    async fn channel_close(
+        &mut self,
+        channel: russh::ChannelId,
+        _: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        self.configuration_channels.remove(&channel);
+        self.channels_closed.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
     async fn auth_none(&mut self, user: &str) -> Result<server::Auth, Self::Error> {
@@ -191,6 +217,9 @@ impl server::Handler for TestServer {
 struct Fixture {
     port: u16,
     monitor_requests: Arc<AtomicUsize>,
+    channels_closed: Arc<AtomicUsize>,
+    open_pause: Arc<Mutex<Option<Arc<Notify>>>>,
+    channel_opens: Arc<AtomicUsize>,
     auth_count: Arc<AtomicUsize>,
     shutdown: server::RunningServerHandle,
     task: Option<JoinHandle<()>>,
@@ -217,7 +246,14 @@ impl Fixture {
         let commands = Arc::new(Mutex::new(Vec::new()));
         let sizes = Arc::new(Mutex::new(Vec::new()));
         let monitor_requests = Arc::new(AtomicUsize::new(0));
+        let channels_closed = Arc::new(AtomicUsize::new(0));
+        let open_pause = Arc::new(Mutex::new(None));
+        let channel_opens = Arc::new(AtomicUsize::new(0));
         let mut server = TestServer {
+            configuration_channels: Default::default(),
+            channels_closed: channels_closed.clone(),
+            open_pause: open_pause.clone(),
+            channel_opens: channel_opens.clone(),
             monitor_channels: Default::default(),
             monitor_requests: monitor_requests.clone(),
             sudo_channels: Default::default(),
@@ -243,6 +279,9 @@ impl Fixture {
             let _ = running.await;
         });
         Self {
+            channels_closed,
+            open_pause,
+            channel_opens,
             port,
             monitor_requests,
             auth_count,
@@ -776,6 +815,154 @@ async fn event(
             return event;
         }
     }
+}
+
+#[tokio::test]
+async fn configuration_cancel_closes_only_its_channel_and_allows_manual_retry() {
+    let fixture = Fixture::start(0, None).await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service.statuses().await[0].connection_id.clone().unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { .. }
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    let early = uuid::Uuid::new_v4().to_string();
+    service
+        .configuration
+        .cancel(&profile.id, &connection, &early)
+        .unwrap();
+    assert!(service
+        .configuration_snapshot_request(&profile.id, &connection, &early)
+        .await
+        .err()
+        .unwrap()
+        .contains("canceled"));
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    for expected in 1..=2 {
+        let operation = uuid::Uuid::new_v4().to_string();
+        let reading = service.configuration_snapshot_request(&profile.id, &connection, &operation);
+        let cancel = async {
+            timeout(Duration::from_secs(3), async {
+                loop {
+                    if fixture.commands.lock().unwrap().len() >= expected {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(service
+                .configuration
+                .cancel(&profile.id, "old-generation", &operation)
+                .is_err());
+            service
+                .configuration
+                .cancel(&profile.id, &connection, &operation)
+                .unwrap();
+        };
+        let (result, ()) = timeout(Duration::from_secs(4), async {
+            tokio::join!(reading, cancel)
+        })
+        .await
+        .unwrap();
+        assert!(result.err().unwrap().contains("canceled"));
+        timeout(Duration::from_secs(2), async {
+            while fixture.channels_closed.load(Ordering::SeqCst) < expected {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"still alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(event(&mut output).await, streams::StreamEvent::Data { data, .. } if data == b"still alive")
+    );
+    service.close_stream(&profile.id, &shell).await.unwrap();
+}
+
+#[tokio::test]
+async fn configuration_cancel_during_channel_open_closes_late_confirmation_without_exec() {
+    let fixture = Fixture::start(0, None).await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service.statuses().await[0].connection_id.clone().unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { .. }
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    let pause = Arc::new(Notify::new());
+    *fixture.open_pause.lock().unwrap() = Some(pause.clone());
+    let before = fixture.channel_opens.load(Ordering::SeqCst);
+    let operation = uuid::Uuid::new_v4().to_string();
+    let reading = service.configuration_snapshot_request(&profile.id, &connection, &operation);
+    let cancel = async {
+        timeout(Duration::from_secs(3), async {
+            while fixture.channel_opens.load(Ordering::SeqCst) == before {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        service
+            .configuration
+            .cancel(&profile.id, &connection, &operation)
+            .unwrap();
+        pause.notify_one();
+    };
+    let (result, ()) = timeout(Duration::from_secs(4), async {
+        tokio::join!(reading, cancel)
+    })
+    .await
+    .unwrap();
+    assert!(result.err().unwrap().contains("canceled"));
+    timeout(Duration::from_secs(2), async {
+        while fixture.channels_closed.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"open race survived".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(event(&mut output).await, streams::StreamEvent::Data { data, .. } if data == b"open race survived")
+    );
+    service.close_stream(&profile.id, &shell).await.unwrap();
 }
 
 #[tokio::test]

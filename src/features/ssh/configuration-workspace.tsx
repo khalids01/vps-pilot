@@ -300,6 +300,9 @@ export function ConfigurationWorkspace({
     stale,
     canInspect,
     inspect,
+    cancel,
+    canceling,
+    notice,
     selected,
     select,
   } = useConfiguration();
@@ -338,14 +341,26 @@ export function ConfigurationWorkspace({
             </p>
           )}
         </div>
-        <Button disabled={!canInspect || busy} onClick={inspect}>
-          {busy
-            ? "Inspecting…"
-            : snapshot
-              ? "Refresh configuration"
-              : "Inspect server"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={!canInspect || busy} onClick={inspect}>
+            {busy
+              ? "Inspecting…"
+              : snapshot
+                ? "Refresh configuration"
+                : "Inspect server"}
+          </Button>
+          {busy && (
+            <Button variant="outline" disabled={canceling} onClick={cancel}>
+              {canceling ? "Canceling…" : "Cancel inspection"}
+            </Button>
+          )}
+        </div>
       </header>
+      {notice && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {notice}
+        </p>
+      )}
       {!connected && (
         <ConfigurationNotice title="Server disconnected">
           Connect using the workspace connection control. Cached evidence is

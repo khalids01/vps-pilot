@@ -895,3 +895,46 @@ evidence validation bound. No raw evidence is returned to the host.
 README now includes an Appearance/configuration discovery test walkthrough.
 Detection cancellation, broader daemon/distro coverage, native accessibility and
 privileged transaction/recovery work remain outstanding.
+
+## Inspection cancellation — 2026-11-02
+
+Committed the missing desktop configuration-command permissions and a cross-file
+IPC permission regression test as `007ad74`; the user confirmed inspection now
+works. Implemented the next read-only slice: Cancel inspection on Quick Setup,
+SSH Access and Firewall, plus cancellation through the existing Command console.
+
+Native cancellation binds to profile, connection generation and a per-request
+UUID. It prevents probe execution after canceled channel opening or interrupts
+collection, closes only that SSH channel,
+releases the per-server lease and checks cancellation again before publication.
+Bounded, 60-second early-cancel records handle IPC scheduling races. Wrong or
+delayed requests cannot cancel another active request/generation. This stops
+collection; SSH channel closure is not a guarantee that an arbitrary remote
+child immediately terminates. The fixed probe retains its existing deadlines.
+Channel confirmation uses its existing network timeout rather than dropping a
+pending russh open future, so a late-confirmed channel can be explicitly closed.
+
+The frontend waits for cancellation acknowledgement and the inspection to settle;
+it retains previous evidence, suppresses canceled errors in favor of an explicit
+notice and discards late successful responses after an accepted cancellation.
+Cancellation errors stay visible and permit retry; beginning another cancellation
+clears the prior error. No automatic retry, reconnect, inspection or mutation was
+introduced. Cached navigation and independent shells remain intact.
+
+Command Code's fresh saved chat `vps-pilot-inspection-cancel-20261102` authored
+the request-bound browser mocks and first two regression scenarios. It stopped
+at the 12-turn limit (exit 8); Codex reviewed its edits, ran the tests independently
+and added early-cancel/late-success cases and the cancellation-error reset fix.
+The CLI process exited and was not left running.
+
+Validation: 35 frontend unit tests, native check/strict Clippy and 63 native tests
+passed (five opt-in integrations excluded). Six focused native cancellation/
+parser/lease cases include a real in-process SSH transport with a held read,
+request/connection rejection, channel-close observation, manual retry and a
+shell that remains usable. The delayed-open transport regression confirms that
+canceling before channel confirmation closes the resulting channel without an
+exec request and leaves the shell usable. Seven browser scenarios passed, followed by a
+four-scenario cancellation run including failure/retry, retained evidence,
+early cancellation and late-success discard. Check/build and the real disposable
+OpenSSH/probe/PTY/monitor integration also passed. No important-VPS contact or
+mutation gate changes.

@@ -59,6 +59,13 @@ has no native SSH bridge; automated browser scenarios supply their own fixtures.
    explicitly requests another snapshot. Disconnect/reconnect: earlier evidence
    should be labeled stale until refreshed. The per-server Command console records
    completion/partial summaries without persisting snapshot values.
+6. During an inspection or refresh, **Cancel inspection** cancels collection for
+   that request. **Canceling…** stays disabled while it settles. An older snapshot
+   keeps its timestamp and values; canceling the first inspection leaves it
+   uninspected. A failed cancellation is shown explicitly and can be retried.
+   Running shells stay open, and a new inspection requires an explicit click.
+   Fast inspections may finish before you can click Cancel; automated browser
+   fixtures hold requests open to exercise these cases reproducibly.
 
 Do not test SSH/firewall changes or installations against an important VPS.
 Those new workflows remain disabled pending recovery validation. Existing Files

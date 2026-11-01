@@ -4,31 +4,107 @@ use russh::ChannelMsg;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
 
 const PROBE: &str = include_str!("configuration_probe.py");
 const MAX_OUTPUT: usize = 131_072;
+const CANCELED: &str = "Configuration inspection canceled. Previous evidence was retained.";
 #[derive(Default)]
-pub(super) struct State(Arc<Mutex<HashSet<String>>>);
-struct Lease(Arc<Mutex<HashSet<String>>>, String);
+struct Registry {
+    running: HashMap<String, Running>,
+    // Covers cancel arriving before the snapshot IPC task starts. Bounded and
+    // short-lived; a delayed cancel can never target a different request.
+    canceled: HashMap<(String, String, String), Instant>,
+}
+struct Running {
+    connection: String,
+    operation: String,
+    cancel: watch::Sender<bool>,
+}
+#[derive(Default)]
+pub(super) struct State(Arc<Mutex<Registry>>);
+struct Lease(Arc<Mutex<Registry>>, String, watch::Receiver<bool>);
 impl State {
-    fn acquire(&self, id: &str) -> Result<Lease, String> {
-        let mut running = self
+    fn acquire(&self, id: &str, connection: &str, operation: &str) -> Result<Lease, String> {
+        valid_identity(id, connection, operation)?;
+        let mut registry = self
             .0
             .lock()
             .map_err(|_| "Configuration inspection is unavailable.")?;
-        if running.contains(id) || running.len() >= 100 {
+        registry
+            .canceled
+            .retain(|_, time| time.elapsed() < Duration::from_secs(60));
+        if registry
+            .canceled
+            .remove(&(id.into(), connection.into(), operation.into()))
+            .is_some()
+        {
+            return Err(CANCELED.into());
+        }
+        if registry.running.contains_key(id) || registry.running.len() >= 100 {
             return Err(
                 "Configuration inspection is already running. Wait before refreshing.".into(),
             );
         }
-        running.insert(id.into());
-        Ok(Lease(self.0.clone(), id.into()))
+        let (cancel, receiver) = watch::channel(false);
+        registry.running.insert(
+            id.into(),
+            Running {
+                connection: connection.into(),
+                operation: operation.into(),
+                cancel,
+            },
+        );
+        Ok(Lease(self.0.clone(), id.into(), receiver))
+    }
+    pub(super) fn cancel(&self, id: &str, connection: &str, operation: &str) -> Result<(), String> {
+        valid_identity(id, connection, operation)?;
+        let mut registry = self
+            .0
+            .lock()
+            .map_err(|_| "Configuration cancellation is unavailable.")?;
+        if let Some(running) = registry.running.get(id) {
+            if running.connection != connection || running.operation != operation {
+                return Err("This inspection request is no longer active.".into());
+            }
+            running.cancel.send_replace(true);
+        } else {
+            registry
+                .canceled
+                .retain(|_, time| time.elapsed() < Duration::from_secs(60));
+            if registry.canceled.len() >= 100 {
+                return Err("Too many pending cancellation requests. Wait before retrying.".into());
+            }
+            registry.canceled.insert(
+                (id.into(), connection.into(), operation.into()),
+                Instant::now(),
+            );
+        }
+        Ok(())
+    }
+}
+fn valid_identity(id: &str, connection: &str, operation: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 128
+        || connection.is_empty()
+        || connection.len() > 128
+        || uuid::Uuid::parse_str(operation).is_err()
+    {
+        return Err("Invalid configuration inspection identity.".into());
+    }
+    Ok(())
+}
+impl Lease {
+    async fn canceled(&mut self) {
+        if !*self.2.borrow() {
+            let _ = self.2.changed().await;
+        }
     }
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        if let Ok(mut running) = self.0.lock() {
-            running.remove(&self.1);
+        if let Ok(mut registry) = self.0.lock() {
+            registry.running.remove(&self.1);
         }
     }
 }
@@ -100,14 +176,33 @@ fn parse(bytes: &[u8]) -> Result<Vec<ConfigurationEvidence>, String> {
     Ok(sections)
 }
 impl SshService {
+    #[cfg(test)]
     pub(super) async fn configuration_snapshot(
         &self,
         profile_id: &str,
         expected_connection: &str,
     ) -> Result<ConfigurationSnapshot, String> {
-        let _lease = self.configuration.acquire(profile_id)?;
-        let (mut channel, connection_id, authenticated_user) = {
+        self.configuration_snapshot_request(
+            profile_id,
+            expected_connection,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .await
+    }
+    pub(super) async fn configuration_snapshot_request(
+        &self,
+        profile_id: &str,
+        expected_connection: &str,
+        operation_id: &str,
+    ) -> Result<ConfigurationSnapshot, String> {
+        let mut lease =
+            self.configuration
+                .acquire(profile_id, expected_connection, operation_id)?;
+        let opening = async {
             let runtime = self.runtime.lock().await;
+            if *lease.2.borrow() {
+                return Err(CANCELED.into());
+            }
             let connection_id = runtime
                 .connection_ids
                 .get(profile_id)
@@ -124,16 +219,24 @@ impl SshService {
                 .await
                 .map_err(|_| "Configuration channel timed out.")?
                 .map_err(|_| "Cannot open configuration inspection.")?;
-            (
+            Ok::<_, String>((
                 channel,
                 connection_id.clone(),
                 self.profile(profile_id)
                     .ok()
                     .map(|profile| profile.username),
-            )
+            ))
         };
+        // Do not drop channel_open_session after its open request was sent:
+        // russh would lose the receiver needed to close a late-confirmed channel.
+        // Let the existing network timeout bound confirmation, then close below
+        // without executing the probe when cancellation arrived during opening.
+        let (mut channel, connection_id, authenticated_user) = opening.await?;
         // Release the runtime lock while probes run: terminals and monitoring keep working.
-        let result = timeout(Duration::from_secs(30), async {
+        let result = tokio::select! {
+            biased;
+            _ = lease.canceled() => Err(CANCELED.into()),
+            result = timeout(Duration::from_secs(30), async {
             channel.exec(true, command()).await.map_err(|_| "Cannot start configuration inspection.")?;
             // Identity comes from the verified connection's profile, never a caller-selected account.
             let context = serde_json::to_vec(&serde_json::json!({"authenticatedUser": authenticated_user}))
@@ -156,11 +259,14 @@ impl SshService {
             }
             if exit != Some(0) { return Err("Configuration probe did not finish successfully. No changes were made.".into()); }
             parse(&bytes)
-        }).await;
+            }) => result.map_err(|_| "Configuration inspection timed out. No changes were requested.".to_string()).and_then(|result| result),
+        };
         let _ = timeout(Duration::from_secs(2), channel.close()).await;
-        let sections = result
-            .map_err(|_| "Configuration inspection timed out. No changes were requested.")??;
+        let sections = result?;
         let runtime = self.runtime.lock().await;
+        if *lease.2.borrow() {
+            return Err(CANCELED.into());
+        }
         if runtime.connection_ids.get(profile_id) != Some(&connection_id)
             || !runtime
                 .connections
@@ -185,10 +291,22 @@ pub async fn ssh_configuration_snapshot(
     service: tauri::State<'_, SshService>,
     profile_id: String,
     connection_id: String,
+    operation_id: String,
 ) -> Result<ConfigurationSnapshot, String> {
     service
-        .configuration_snapshot(&profile_id, &connection_id)
+        .configuration_snapshot_request(&profile_id, &connection_id, &operation_id)
         .await
+}
+#[tauri::command]
+pub fn ssh_configuration_cancel(
+    service: tauri::State<'_, SshService>,
+    profile_id: String,
+    connection_id: String,
+    operation_id: String,
+) -> Result<(), String> {
+    service
+        .configuration
+        .cancel(&profile_id, &connection_id, &operation_id)
 }
 #[tauri::command]
 pub fn ssh_configuration_describe() -> String {
@@ -214,10 +332,58 @@ mod tests {
     #[test]
     fn per_server_leases_are_released_even_on_failure() {
         let state = State::default();
-        let lease = state.acquire("alpha").unwrap();
-        assert!(state.acquire("alpha").is_err());
-        assert!(state.acquire("beta").is_ok());
+        let op = uuid::Uuid::new_v4().to_string();
+        let lease = state.acquire("alpha", "generation", &op).unwrap();
+        assert!(state.acquire("alpha", "generation", &op).is_err());
+        assert!(state.acquire("beta", "generation", &op).is_ok());
         drop(lease);
-        assert!(state.acquire("alpha").is_ok());
+        assert!(state.acquire("alpha", "generation", &op).is_ok());
+    }
+    #[tokio::test]
+    async fn cancellation_is_request_bound_and_wakes_only_its_lease() {
+        let state = State::default();
+        let op = uuid::Uuid::new_v4().to_string();
+        let wrong = uuid::Uuid::new_v4().to_string();
+        let mut lease = state.acquire("alpha", "generation", &op).unwrap();
+        let other = state.acquire("beta", "generation", &op).unwrap();
+        assert!(state.cancel("alpha", "old-generation", &op).is_err());
+        assert!(state.cancel("alpha", "generation", &wrong).is_err());
+        assert!(!*lease.2.borrow());
+        state.cancel("alpha", "generation", &op).unwrap();
+        timeout(Duration::from_millis(50), lease.canceled())
+            .await
+            .unwrap();
+        assert!(*lease.2.borrow());
+        assert!(!*other.2.borrow());
+        drop(lease);
+        let newer = state.acquire("alpha", "generation", &wrong).unwrap();
+        assert!(state.cancel("alpha", "generation", &op).is_err());
+        assert!(!*newer.2.borrow());
+    }
+    #[test]
+    fn early_cancels_are_bounded_expire_and_do_not_poison_other_generations() {
+        let state = State::default();
+        let op = uuid::Uuid::new_v4().to_string();
+        state.cancel("alpha", "generation", &op).unwrap();
+        assert!(state.acquire("alpha", "generation", &op).is_err());
+        state.cancel("alpha", "generation", &op).unwrap();
+        assert!(state.acquire("alpha", "new-generation", &op).is_ok());
+        state
+            .0
+            .lock()
+            .unwrap()
+            .canceled
+            .values_mut()
+            .for_each(|time| {
+                *time = Instant::now() - Duration::from_secs(61);
+            });
+        assert!(state.acquire("alpha", "generation", &op).is_ok());
+        for _ in 0..100 {
+            state
+                .cancel("alpha", "generation", &uuid::Uuid::new_v4().to_string())
+                .unwrap();
+        }
+        assert!(state.cancel("alpha", "generation", &op).is_err());
+        assert!(state.cancel("alpha", "generation", "invalid").is_err());
     }
 }

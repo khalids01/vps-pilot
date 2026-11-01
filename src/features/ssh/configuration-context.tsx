@@ -21,9 +21,20 @@ interface ConfigurationContextValue {
   stale: boolean;
   canInspect: boolean;
   inspect: () => void;
+  cancel: () => void;
+  canceling: boolean;
+  notice: string;
   selected: string[];
   select: (id: string, checked: boolean) => void;
 }
+interface InspectionRequest {
+  profileId: string;
+  connectionId: string;
+  operationId: string;
+  canceled: boolean;
+  cancellation?: Promise<void>;
+}
+class InspectionCanceled extends Error {}
 const Context = createContext<ConfigurationContextValue | null>(null);
 export function useConfiguration() {
   const context = useContext(Context);
@@ -43,7 +54,30 @@ export function ConfigurationProvider({
 }) {
   const log = useCommandActivity();
   const previous = useRef<ConfigurationSnapshot | undefined>(undefined);
+  const active = useRef<InspectionRequest | undefined>(undefined);
+  const [running, setRunning] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [cancelError, setCancelError] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
+  function cancelRequest(request = active.current) {
+    if (!request || active.current !== request || request.cancellation) return;
+    setCanceling(true);
+    setCancelError("");
+    request.cancellation = invoke<void>("ssh_configuration_cancel", {
+      profileId: request.profileId,
+      connectionId: request.connectionId,
+      operationId: request.operationId,
+    })
+      .then(() => {
+        request.canceled = true;
+      })
+      .catch((error) => {
+        setCancelError(`Could not cancel inspection: ${safeError(error)}`);
+        request.cancellation = undefined;
+        setCanceling(false);
+      });
+  }
   const query = useQuery({
     queryKey: configurationQueryKey(profile.id, connectionId ?? "disconnected"),
     enabled: false,
@@ -56,14 +90,35 @@ export function ConfigurationProvider({
     queryFn: async () => {
       if (!connected || !connectionId)
         throw Error("Connect and refresh connection status before inspecting.");
+      if (active.current) throw Error("An inspection is already running.");
+      const request: InspectionRequest = {
+        profileId: profile.id,
+        connectionId,
+        operationId: crypto.randomUUID(),
+        canceled: false,
+      };
+      active.current = request;
+      setRunning(true);
+      setNotice("");
+      setCancelError("");
       let activity: string | undefined;
       try {
         const command = await invoke<string>("ssh_configuration_describe");
-        activity = log.begin("Configuration inspection", command);
+        activity = log.begin("Configuration inspection", command, {
+          cancel: () => cancelRequest(request),
+        });
+        if (request.cancellation) await request.cancellation;
+        if (request.canceled) throw new InspectionCanceled();
         const result = await invoke<ConfigurationSnapshot>(
           "ssh_configuration_snapshot",
-          { profileId: profile.id, connectionId },
+          {
+            profileId: profile.id,
+            connectionId,
+            operationId: request.operationId,
+          },
         );
+        if (request.cancellation) await request.cancellation;
+        if (request.canceled) throw new InspectionCanceled();
         if (
           result.profileId !== profile.id ||
           result.connectionId !== connectionId
@@ -81,6 +136,21 @@ export function ConfigurationProvider({
         });
         return result;
       } catch (error) {
+        if (request.cancellation) await request.cancellation;
+        if (request.canceled) {
+          const message = previous.current
+            ? "Inspection canceled. Previous evidence was retained."
+            : "Inspection canceled. No snapshot was collected.";
+          setNotice(message);
+          if (activity)
+            log.update(activity, {
+              status: "cancelled",
+              ended: Date.now(),
+              message,
+              code: null,
+            });
+          throw new InspectionCanceled(message);
+        }
         if (activity)
           log.update(activity, {
             status: "failed",
@@ -89,6 +159,10 @@ export function ConfigurationProvider({
             code: null,
           });
         throw error;
+      } finally {
+        if (active.current === request) active.current = undefined;
+        setRunning(false);
+        setCanceling(false);
       }
     },
   });
@@ -98,14 +172,21 @@ export function ConfigurationProvider({
     <Context.Provider
       value={{
         snapshot,
-        busy: query.isFetching,
-        error: query.error ? safeError(query.error) : "",
+        busy: running || query.isFetching,
+        canceling,
+        notice,
+        cancel: () => cancelRequest(),
+        error:
+          cancelError ||
+          (query.error && !(query.error instanceof InspectionCanceled)
+            ? safeError(query.error)
+            : ""),
         stale: Boolean(
           snapshot && (!connected || snapshot.connectionId !== connectionId),
         ),
         canInspect: connected && Boolean(connectionId),
         inspect: () => {
-          if (connected && connectionId && !query.isFetching)
+          if (connected && connectionId && !query.isFetching && !active.current)
             void query.refetch({ cancelRefetch: false });
         },
         selected,

@@ -38,6 +38,7 @@ pub fn run() {
             ssh::files::ssh_file_download,
             ssh::configuration::ssh_configuration_snapshot,
             ssh::configuration::ssh_configuration_describe,
+            ssh::configuration::ssh_configuration_cancel,
             ssh::ssh_profiles,
             ssh::ssh_config_hosts,
             ssh::ssh_parse_command,

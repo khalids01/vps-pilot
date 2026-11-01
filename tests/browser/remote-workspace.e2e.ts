@@ -48,16 +48,56 @@ test.beforeEach(async ({ page }) => {
       {kind:"volume",id:"database-data",name:"database-data",bytes:null,references:["db"],reason:"Persistent data is always protected",eligible:false,fingerprint:"volume1"}]
     });
     let next = 0;
+    const configurationKey = (args: {profileId?: string; connectionId?: string; operationId?: string}) => `${args.operationId}|${args.profileId}|${args.connectionId}`;
+    const heldConfiguration = new Map<string, {resolve:(value:any)=>void; reject:(reason:any)=>void}>();
+    const heldConfigurationCancels = new Map<string, {resolve:()=>void}>();
+    const configurationEvidence = (profileId: string, connectionId: string) => {
+      const evidence=(id:string,title:string,values:Record<string,string>,state="ready",message:string|null=null)=>({id,title,values,state,message});
+      return {profileId,connectionId,observedAt:Date.now(),sections:[
+        evidence("system","System",{"Operating system":profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC","Cached updates":"5 updates (cached; not a current update check)","Update cache timestamp":"2026-10-30 00:00:00 UTC"}),
+        evidence("essentials","Essential software",{git:"/usr/bin/git","git package":"git 2.39.5 (installed)","git ownership":"git: /usr/bin/git",curl:"Not found",attention:"true"}),
+        evidence("resources","System resources",{"Memory total":"8388608 KiB","Swap total":"0 KiB"}),
+        evidence("security","Security",{"Fail2ban installed":"Installed","fail2ban.service ActiveState":"active","Fail2ban jail count":"2","apt-daily-upgrade.timer ActiveState":"active","Automatic update configuration":"1 (observed setting, not proof of execution)"},"partial","Installation alone does not establish protection."),
+        evidence("docker","Docker",{CLI:"/usr/bin/docker","CLI version":"Docker fixture"}),
+        evidence("ssh","Users and SSH",{"Current user":"tester","Current server port":"22",passwordauthentication:"no",pubkeyauthentication:"yes","Key authentication":"Not independently verified","ssh.socket ActiveState":"active","Local account 1":"tester · UID 1000 · sudo group (privileges not verified)","Local accounts coverage":"Local metadata only; network accounts not enumerated","Authorized key 1":"ssh-ed25519 · SHA256:fixturePublicFingerprint · Restricted options present (values hidden)","Authorized key source":"Authenticated account standard file; daemon source not verified"},"partial","Default invocation only; runtime flags may differ."),
+        evidence("firewall","Firewall",{Status:"active","Default policies":"deny (incoming), allow (outgoing)","Rule 1":"22/tcp ALLOW IN Anywhere","Rule 2":"22/tcp (v6) ALLOW IN Anywhere (v6)","Cloud firewall":"Unknown"}),
+        evidence("listeners","Listening sockets",{"Socket 1":"tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"},"ready","Listeners do not prove public reachability."),
+      ]};
+    };
     Object.assign(window, {
       isTauri: true,
       __calls: calls,
       __fixtureRemoteFiles:remoteFiles,
+      __configurationHeld: {
+        keys: () => [...heldConfiguration.keys()],
+        release: (profileId: string, connectionId: string, operationId: string) => {
+          const key = `${operationId}|${profileId}|${connectionId}`;
+          const held = heldConfiguration.get(key);
+          if (!held) return false;
+          heldConfiguration.delete(key);
+          held.resolve(configurationEvidence(profileId, connectionId));
+          return true;
+        },
+        releaseCancel: (profileId: string, connectionId: string, operationId: string) => {
+          const key = `${operationId}|${profileId}|${connectionId}`;
+          const cancel = heldConfigurationCancels.get(key);
+          if (!cancel) return false;
+          heldConfigurationCancels.delete(key);
+          const held = heldConfiguration.get(key);
+          if (held) {
+            heldConfiguration.delete(key);
+            held.reject("Inspection canceled.");
+          }
+          cancel.resolve();
+          return true;
+        },
+      },
       __TAURI_INTERNALS__: {
         transformCallback: () => ++next,
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           // No credentials or user terminal input are retained by the mock.
-          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}) });
+          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId} : {}) });
           if (cmd === "app_bootstrap") {
             if ((window as any).__databaseUnavailable) throw new Error("Fixture database unavailable");
             return {
@@ -144,21 +184,32 @@ test.beforeEach(async ({ page }) => {
           if(cmd==="ssh_file_download")return true;
           if (cmd === "ssh_profiles") return profiles;
           if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, connectionId: (window as any).__configurationDisconnected && profile.id===first ? null : `connection-${profile.id}-${(window as any).__connectionGeneration??1}`, status: (window as any).__configurationDisconnected && profile.id===first ? "disconnected" : "connected", error: null }));
-          if(cmd === "ssh_configuration_describe") return "python3 [fixed read-only configuration probe]";
+          if(cmd === "ssh_configuration_describe") {
+            if((window as any).__holdConfigurationDescribe) await new Promise(resolve=>{(window as any).__releaseConfigurationDescribe=resolve;});
+            return "python3 [fixed read-only configuration probe]";
+          }
           if(cmd === "ssh_configuration_snapshot") {
             if((window as any).__configurationFailure) throw "Fixture configuration unavailable";
-            if((window as any).__holdConfiguration) await new Promise(resolve=>{(window as any).__releaseConfiguration=resolve;});
-            const evidence=(id:string,title:string,values:Record<string,string>,state="ready",message:string|null=null)=>({id,title,values,state,message});
-            return {profileId:args.profileId,connectionId:args.connectionId,observedAt:Date.now(),sections:[
-              evidence("system","System",{"Operating system":args.profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC","Cached updates":"5 updates (cached; not a current update check)","Update cache timestamp":"2026-10-30 00:00:00 UTC"}),
-              evidence("essentials","Essential software",{git:"/usr/bin/git","git package":"git 2.39.5 (installed)","git ownership":"git: /usr/bin/git",curl:"Not found",attention:"true"}),
-              evidence("resources","System resources",{"Memory total":"8388608 KiB","Swap total":"0 KiB"}),
-              evidence("security","Security",{"Fail2ban installed":"Installed","fail2ban.service ActiveState":"active","Fail2ban jail count":"2","apt-daily-upgrade.timer ActiveState":"active","Automatic update configuration":"1 (observed setting, not proof of execution)"},"partial","Installation alone does not establish protection."),
-              evidence("docker","Docker",{CLI:"/usr/bin/docker","CLI version":"Docker fixture"}),
-              evidence("ssh","Users and SSH",{"Current user":"tester","Current server port":"22",passwordauthentication:"no",pubkeyauthentication:"yes","Key authentication":"Not independently verified","ssh.socket ActiveState":"active","Local account 1":"tester · UID 1000 · sudo group (privileges not verified)","Local accounts coverage":"Local metadata only; network accounts not enumerated","Authorized key 1":"ssh-ed25519 · SHA256:fixturePublicFingerprint · Restricted options present (values hidden)","Authorized key source":"Authenticated account standard file; daemon source not verified"},"partial","Default invocation only; runtime flags may differ."),
-              evidence("firewall","Firewall",{Status:"active","Default policies":"deny (incoming), allow (outgoing)","Rule 1":"22/tcp ALLOW IN Anywhere","Rule 2":"22/tcp (v6) ALLOW IN Anywhere (v6)","Cloud firewall":"Unknown"}),
-              evidence("listeners","Listening sockets",{"Socket 1":"tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"},"ready","Listeners do not prove public reachability."),
-            ]};
+            const key = configurationKey(args);
+            if((window as any).__holdConfiguration) {
+              if(typeof args.operationId !== "string" || !args.operationId) throw "Fixture configuration snapshot requires a client operationId.";
+              if(heldConfiguration.has(key)) throw "Fixture configuration snapshot is already pending for this operation.";
+              return new Promise((resolve,reject)=>{heldConfiguration.set(key,{resolve,reject});});
+            }
+            return configurationEvidence(args.profileId,args.connectionId);
+          }
+          if(cmd === "ssh_configuration_cancel") {
+            if((window as any).__configurationCancelFailure) throw "Fixture cancellation unavailable";
+            const key = configurationKey(args);
+            if(!heldConfiguration.has(key)) return;
+            if((window as any).__holdConfigurationCancel) {
+              if(heldConfigurationCancels.has(key)) throw "Fixture configuration cancellation is already pending.";
+              return new Promise(resolve=>{heldConfigurationCancels.set(key,{resolve});});
+            }
+            if((window as any).__configurationLateSuccess) return;
+            const held=heldConfiguration.get(key)!;
+            heldConfiguration.delete(key);
+            held.reject("Inspection canceled.");
           }
           if (cmd === "ssh_config_hosts") return [];
           if(cmd==="ssh_docker_snapshot" && (window as any).__failDockerResources)throw "Resource inventory unavailable.";
@@ -1476,4 +1527,164 @@ test("expanded read-only evidence separates package caches, local users and publ
   expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
   expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("fixturePublicFingerprint");
   expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_action_execute"))).toHaveLength(0);
+});
+
+test("canceling a first configuration inspection keeps no evidence and permits an explicit retry",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await page.evaluate(()=>{(window as any).__holdConfiguration=true;});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
+
+  const keys=await page.evaluate(()=>(window as any).__configurationHeld.keys() as string[]);
+  expect(keys).toHaveLength(1);
+  const [operationId,profileId,connectionId]=keys[0]!.split("|");
+  expect(profileId).toBe(first);
+  expect(connectionId).toBe(`connection-${first}-1`);
+  expect(operationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  const snapshots=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"));
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]).toMatchObject({profileId:first,connectionId,operationId});
+
+  // A failed native cancellation is visible and leaves the same inspection pending.
+  await page.evaluate(()=>{(window as any).__configurationCancelFailure=true;});
+  await setup.getByRole("button",{name:"Cancel inspection",exact:true}).click();
+  await expect(setup.getByRole("alert")).toContainText("Fixture cancellation unavailable");
+  await expect(setup.getByText(/Inspection canceled\./)).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__configurationHeld.keys())).toEqual(keys);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+
+  // A successful cancellation is acknowledged while the snapshot settles.
+  await page.evaluate(()=>{(window as any).__configurationCancelFailure=false;(window as any).__holdConfigurationCancel=true;});
+  await setup.getByRole("button",{name:"Cancel inspection",exact:true}).click();
+  const canceling=setup.getByRole("button",{name:"Canceling…",exact:true});
+  await expect(canceling).toBeDisabled();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_cancel"))).toHaveLength(2);
+  await page.evaluate(args=>(window as any).__configurationHeld.releaseCancel(args.profileId,args.connectionId,args.operationId),{profileId,connectionId,operationId});
+  await expect(setup.getByText(/Inspection canceled\. No snapshot was collected\./)).toBeVisible();
+  await expect(setup.getByRole("alert")).toHaveCount(0);
+  await expect(setup.getByText("Not inspected",{exact:true})).toHaveCount(6);
+  await expect(setup.getByRole("button",{name:"Inspect server",exact:true})).toBeEnabled();
+
+  // Retrying is explicit, allocates a new operation and delivers evidence.
+  await page.evaluate(()=>{(window as any).__holdConfigurationCancel=false;});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
+  const retryKeys=await page.evaluate(()=>(window as any).__configurationHeld.keys() as string[]);
+  expect(retryKeys).toHaveLength(1);
+  const [retryOperationId,retryProfileId,retryConnectionId]=retryKeys[0]!.split("|");
+  expect(retryOperationId).not.toBe(operationId);
+  expect(retryProfileId).toBe(first);
+  expect(retryConnectionId).toBe(connectionId);
+  await page.evaluate(args=>(window as any).__configurationHeld.release(args.profileId,args.connectionId,args.operationId),{profileId:retryProfileId!,connectionId:retryConnectionId!,operationId:retryOperationId!});
+  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
+
+  // Activity records cancellation without echoing evidence values.
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  const consolePanel=page.getByRole("region",{name:"Fixture Alpha command console"});
+  await expect(consolePanel).toContainText(/cancell?ed/i);
+  await expect(consolePanel).not.toContainText("fixturePublicFingerprint");
+  await expect(consolePanel).not.toContainText("fixture-host");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_action_execute"))).toHaveLength(0);
+});
+
+test("cancel before configuration collection starts never submits a snapshot",async({page})=>{
+  await page.evaluate(()=>{(window as any).__holdConfigurationDescribe=true;});
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof (window as any).__releaseConfigurationDescribe)).toBe("function");
+  await setup.getByRole("button",{name:"Cancel inspection",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Canceling…",exact:true})).toBeDisabled();
+  await page.evaluate(()=>(window as any).__releaseConfigurationDescribe());
+  await expect(setup.getByRole("status")).toHaveText("Inspection canceled. No snapshot was collected.");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(0);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_cancel"))).toHaveLength(1);
+  await expect(setup.getByRole("button",{name:"Inspect server",exact:true})).toBeEnabled();
+});
+
+test("successful late configuration response is discarded after cancel",async({page})=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  const before=await setup.getByText(/^Observed /).textContent();
+  await page.clock.fastForward(2000);
+  await page.evaluate(()=>{(window as any).__holdConfiguration=true;(window as any).__configurationLateSuccess=true;});
+  await setup.getByRole("button",{name:"Refresh configuration",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__configurationHeld.keys().length)).toBe(1);
+  await setup.getByRole("button",{name:"Cancel inspection",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Canceling…",exact:true})).toBeDisabled();
+  await page.evaluate(()=>{
+    const [op,profile,connection]=(window as any).__configurationHeld.keys()[0].split("|");
+    (window as any).__configurationHeld.release(profile,connection,op);
+  });
+  await expect(setup.getByRole("status")).toHaveText("Inspection canceled. Previous evidence was retained.");
+  await expect(setup.getByText(/^Observed /)).toHaveText(before!);
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+});
+
+test("canceling a configuration refresh retains prior evidence and leaves open sessions untouched",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  const observedBefore=await setup.getByText(/^Observed /).textContent();
+  expect(observedBefore).toContain("Snapshot, not live polling");
+
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await page.getByRole("button",{name:"New shell",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  const streamsBefore=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_stream_close"));
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  await page.evaluate(()=>{(window as any).__holdConfiguration=true;});
+  await setup.getByRole("button",{name:"Refresh configuration",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
+  const keys=await page.evaluate(()=>(window as any).__configurationHeld.keys() as string[]);
+  expect(keys).toHaveLength(1);
+  const [operationId,profileId,connectionId]=keys[0]!.split("|");
+  expect(profileId).toBe(first);
+  const refreshes=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"));
+  expect(refreshes).toHaveLength(2);
+  expect(refreshes[1]).toMatchObject({profileId:first,connectionId,operationId});
+
+  // Navigation keeps the pending refresh bound to the original snapshot request.
+  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
+  await expect(ssh.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
+  await expect(ssh).toContainText("SHA256:fixturePublicFingerprint");
+  await expect(ssh.getByText(/^Observed /)).toHaveText(observedBefore!);
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
+  await expect(setup.getByText(/^Observed /)).toHaveText(observedBefore!);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
+
+  // Canceling keeps the previous timestamp and values, and says so.
+  await page.evaluate(()=>{(window as any).__holdConfigurationCancel=true;});
+  await setup.getByRole("button",{name:"Cancel inspection",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Canceling…",exact:true})).toBeDisabled();
+  await page.evaluate(args=>(window as any).__configurationHeld.releaseCancel(args.profileId,args.connectionId,args.operationId),{profileId,connectionId,operationId});
+  await expect(setup.getByText(/Inspection canceled\. Previous evidence was retained\./)).toBeVisible();
+  await expect(setup.getByText(/^Observed /)).toHaveText(observedBefore!);
+  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await page.evaluate(()=>{(window as any).__holdConfigurationCancel=false;(window as any).__holdConfiguration=false;});
+
+  // One cancel for the same operation; no probes, mutations or unrelated stream closes.
+  const cancels=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_cancel"));
+  expect(cancels).toHaveLength(1);
+  expect(cancels[0]).toMatchObject({profileId:first,connectionId,operationId});
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_inspection_run","ssh_action_execute","ssh_connect","ssh_disconnect"].includes(call.cmd)))).toHaveLength(0);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_stream_close"))).toHaveLength(streamsBefore.length);
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  await page.clock.fastForward(10500);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
 });
