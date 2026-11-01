@@ -30,6 +30,41 @@ Run either desktop development or browser preview at a time. `bun run tauri dev`
 starts Vite itself; stop an existing browser preview with Ctrl+C before launching
 it. Both use port 1430.
 
+## Test Appearance and configuration discovery
+
+Run `bun run tauri dev` from this repository for real SSH testing. Browser preview
+has no native SSH bridge; automated browser scenarios supply their own fixtures.
+
+1. Open **Settings → Appearance**, choose Tokyo Night, One Dark Pro or GitHub
+   Dark, then check menus, inputs, an open terminal and an editor. Fully quit and
+   relaunch: the selected theme should return. Profiles and preferences should
+   remain; saved tabs do not reconnect automatically.
+2. Open a direct Linux SSH connection you control and verify its host fingerprint.
+   For the widest current detection coverage, use Debian/Ubuntu with Python 3
+   already installed. Missing tools or permissions should produce qualified
+   evidence, without installing anything.
+3. Open **Quick Setup**. Before pressing **Inspect server**, it should show no
+   inspection. Click once, then expand the categories. Check the observation time,
+   package versions/ownership, cached update information and security units.
+   Missing update metadata means unknown, rather than zero updates. Selection
+   review summarizes evidence; it does not apply configuration changes.
+4. Visit **SSH Access** and **Firewall**. They should reuse that snapshot. SSH
+   separates saved settings, server policy, local users and authorized public-key
+   fingerprints. Only the authenticated account's standard authorized_keys file
+   is inspected; comments, raw key blobs and restriction values are hidden.
+   Fingerprint presence does not prove a working login. Firewall evidence must
+   distinguish UFW/listeners from unknown cloud rules and Docker effects.
+5. Switch to Home, another VPS and back. The observation time should stay the
+   same, and existing shells should survive navigation. **Refresh configuration**
+   explicitly requests another snapshot. Disconnect/reconnect: earlier evidence
+   should be labeled stale until refreshed. The per-server Command console records
+   completion/partial summaries without persisting snapshot values.
+
+Do not test SSH/firewall changes or installations against an important VPS.
+Those new workflows remain disabled pending recovery validation. Existing Files
+and Docker management have separate write policies; they are not needed for
+this walkthrough.
+
 Manrope is bundled locally for consistent typography without a network connection.
 
 ## Review real SSH connections

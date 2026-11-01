@@ -851,3 +851,47 @@ is not a resource-budget or distribution compatibility certification. The
 Still outstanding: actual update candidate resolution, complete daemon/runtime
 policy discovery, detection cancellation UI, broader distro/overhead validation,
 native WebKit accessibility and all later privileged planning/recovery gates.
+
+## Disposable discovery benchmark — 2026-11-02
+
+Committed the expanded detection increment and Command Code usage guide as
+`698158a`. Implemented the next Phase 2 validation requirement: a reproducible
+one-shot discovery overhead driver and checked-in scalar-only result. The
+driver uses local rootless Podman, an existing immutable Debian fixture image,
+no network/host mounts, a read-only root and bounded CPU/memory/processes. It
+validates all eight evidence sections, never logs evidence values, and verifies
+its unique ownership nonce before removing its guest. No package installs,
+image pulls, important-VPS access or production gate changes.
+
+Five warm-cache measured trials after one warmup took 82.60–82.95 ms each,
+using 79.95–80.57 ms CPU per trial and up to 20,160 KiB maximum individual-process
+RSS. Each projected response was 6,687 bytes, with three ready and five partial
+sections. See `tests/fixtures/configuration-benchmark-results.json` for source
+SHA256, image ID and per-trial measurements. RSS is not summed process-tree
+peak; this guest lacks systemd PID 1 and an active SSH daemon. Transport,
+desktop rendering, cold caches, broad distributions and representative service
+loads remain unmeasured. No manual-discovery CPU budget was invented and the
+existing lightweight monitoring budget is unchanged.
+
+The real disposable benchmark completed and removed its guest. Additional checks
+verified invalid trial rejection, existing report preservation and SIGTERM
+cleanup after observing the owned container alive. Check/build, 34 frontend unit
+tests, 46 probe/identity Python tests, Rust check/strict Clippy and 59 native
+tests passed (five opt-in tests excluded). This increment changes fixture tools
+and documentation; application probe/UI/native behavior is unchanged.
+
+The resumed Command Code chat stalled without edits and was interrupted; exit
+130 was confirmed before replacement. Codex implemented the driver. A fresh
+bounded review named `vps-pilot-configuration-benchmark-review-20261102` completed
+with exit 0 and identified cleanup/error-path concerns. Codex added ownership
+type checks, bounded cleanup retries, distinct cleanup errors, streaming output
+limits and child-reaping race handling. Eight local-only failure-path tests pass.
+Actual reruns exposed Podman's default stop grace exceeding the cleanup timeout;
+the owned guests were removed after nonce verification and cleanup now explicitly
+uses zero stop grace. The final five-trial run and SIGTERM cleanup check passed;
+no benchmark guests or Command Code processes remain. The host's 64 KiB capture
+bound applies to scalar wrapper reports, separate from the guest's 128 KiB raw
+evidence validation bound. No raw evidence is returned to the host.
+README now includes an Appearance/configuration discovery test walkthrough.
+Detection cancellation, broader daemon/distro coverage, native accessibility and
+privileged transaction/recovery work remain outstanding.

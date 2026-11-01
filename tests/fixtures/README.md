@@ -162,3 +162,40 @@ checks server/connection identity, wrong-generation rejection, Debian detection
 and partial SSH policy evidence, then exercises the preexisting PTY/monitor flow.
 The disposable OpenSSH container is destroyed afterward. This is not UFW/SSH
 mutation or rollback certification, and is not an overhead benchmark.
+
+### Configuration discovery overhead
+
+With local rootless Podman and the Debian fixture image already built above:
+
+```sh
+python3 -B tests/fixtures/benchmark-configuration.py
+# Optionally preserve a report at a new path:
+python3 -B tests/fixtures/benchmark-configuration.py --trials 5 --output /tmp/vps-pilot-configuration-results.json
+```
+
+The driver requires local rootless Podman, never pulls an image and creates only
+its own uniquely named, nonce-labeled guest. It has no networking or host mounts,
+a read-only root, temporary /tmp and /run, and limits of 128 MiB, one CPU and 32
+processes. Cleanup verifies the nonce before removing the guest with zero stop
+grace, retries transient failures and explicitly reports uncertain cleanup rather
+than claiming success. Missing image,
+unsupported resource controls, timeout and invalid evidence fail the run without
+printing raw probe output. Existing report files are preserved.
+
+One warmup precedes 1–10 sequential measured invocations (five by default). Each
+uses the actual probe with native-style JSON identity on stdin. The guest measures
+probe elapsed time and Linux wait4 CPU usage, including reaped descendants. RSS
+is the largest individual process, **not total process-tree peak memory**. Output
+records only byte counts and section-state totals. No evidence values, keys or
+hostname are recorded. Reports include source SHA256 and immutable image ID.
+
+See `configuration-benchmark-results.json` for the checked-in Debian 12 result.
+These are warm-cache one-shot measurements; the guest has no running SSH daemon
+or systemd PID 1 and few installed packages. SSH transport, Podman exec startup,
+desktop rendering, active-systemd and broader distribution/load measurements
+remain outside this benchmark. It does not change or certify the live monitoring
+budget, and does not enable any configuration mutation.
+
+`python3 -B tests/fixtures/configuration-benchmark.test.py` checks bounded output,
+bidirectional pipe backpressure, timeout/reaping and cleanup failure/ownership
+cases locally, without launching Podman or contacting any server.

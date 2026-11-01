@@ -1,0 +1,92 @@
+{
+  "scope": "One-shot probe in disposable Debian guest; excludes SSH, Podman exec startup and desktop rendering.",
+  "sourceSha256": "5aad7583fad0e9fc9c8cf9de6253f5ae4250c8fd647d9d4fa9c45e869af8ef31",
+  "image": "localhost/vps-pilot-fixture:debian12",
+  "imageId": "6c5b7325ba295478041a9191c7b6428047629245d2c8e568491c70d461bb9bb5",
+  "limits": {
+    "memoryMiB": 128,
+    "cpus": 1,
+    "pids": 32,
+    "network": "none",
+    "readOnlyRoot": true
+  },
+  "warmupTrials": 1,
+  "measuredTrials": 5,
+  "environment": {
+    "python": "3.11.2",
+    "kernel": "7.0.0-38-generic",
+    "distro": {
+      "VERSION_ID": "12",
+      "ID": "debian"
+    }
+  },
+  "limitations": [
+    "Warm-cache sequential trials, not cold-start or fleet-load certification.",
+    "Guest has no systemd PID 1, active SSH daemon or representative installed security packages.",
+    "CPU includes waited descendants; RSS is the largest individual process, not summed tree peak.",
+    "Guest measurement-wrapper CPU is excluded; writable tmpfs is shared across trials.",
+    "No automatic pass/fail resource budget is asserted for manual discovery."
+  ],
+  "results": [
+    {
+      "wallSeconds": 0.08295367500249995,
+      "userCpuSeconds": 0.05615,
+      "systemCpuSeconds": 0.023795999999999998,
+      "maxProcessRssKiB": 20160,
+      "outputBytes": 6687,
+      "sectionStates": {
+        "ready": 3,
+        "partial": 5,
+        "unavailable": 0
+      }
+    },
+    {
+      "wallSeconds": 0.08274016300129006,
+      "userCpuSeconds": 0.054061,
+      "systemCpuSeconds": 0.026447,
+      "maxProcessRssKiB": 20016,
+      "outputBytes": 6687,
+      "sectionStates": {
+        "ready": 3,
+        "partial": 5,
+        "unavailable": 0
+      }
+    },
+    {
+      "wallSeconds": 0.08290494899847545,
+      "userCpuSeconds": 0.058351999999999994,
+      "systemCpuSeconds": 0.022217999999999998,
+      "maxProcessRssKiB": 20092,
+      "outputBytes": 6687,
+      "sectionStates": {
+        "ready": 3,
+        "partial": 5,
+        "unavailable": 0
+      }
+    },
+    {
+      "wallSeconds": 0.08271674100251403,
+      "userCpuSeconds": 0.050596999999999996,
+      "systemCpuSeconds": 0.029404,
+      "maxProcessRssKiB": 20012,
+      "outputBytes": 6687,
+      "sectionStates": {
+        "ready": 3,
+        "partial": 5,
+        "unavailable": 0
+      }
+    },
+    {
+      "wallSeconds": 0.08260185799736064,
+      "userCpuSeconds": 0.056158,
+      "systemCpuSeconds": 0.024131999999999997,
+      "maxProcessRssKiB": 20160,
+      "outputBytes": 6687,
+      "sectionStates": {
+        "ready": 3,
+        "partial": 5,
+        "unavailable": 0
+      }
+    }
+  ]
+}
