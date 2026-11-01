@@ -42,6 +42,7 @@ export interface Inspection {
   previous: HostKey | null;
 }
 export interface ConnectionStatus {
+  connectionId?: string | null;
   profileId: string;
   status: "connecting" | "connected" | "disconnected" | "failed";
   error: string | null;

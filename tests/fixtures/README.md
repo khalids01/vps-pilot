@@ -149,3 +149,16 @@ for TLS downloads. Rerun with a fresh VM if a failed run left protected fixture
 objects. The native ignored disposable_docker_vm_bound_approvals test also
 checks native typed confirmation, batch cancellation, exact removals, stale
 targets and replay. Stop the VM launcher after all tests.
+
+### Configuration discovery
+
+`python3 -B tests/fixtures/configuration-probe.test.py` runs mocked local policy
+cases for metadata parsing, permission failures, rule families/comment suppression,
+output limits and SSH policy uncertainty. It never contacts a VPS.
+
+`bash tests/fixtures/run-ssh.sh disposable_openssh_runs_real_pty_and_reports_partial_inspections`
+now also executes the real fixed configuration probe through the native API,
+checks server/connection identity, wrong-generation rejection, Debian detection
+and partial SSH policy evidence, then exercises the preexisting PTY/monitor flow.
+The disposable OpenSSH container is destroyed afterward. This is not UFW/SSH
+mutation or rollback certification, and is not an overhead benchmark.

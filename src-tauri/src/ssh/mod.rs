@@ -3,6 +3,7 @@ mod auth;
 mod catalog;
 mod command;
 mod config;
+pub mod configuration;
 pub mod discovery;
 pub mod docker;
 pub mod files;
@@ -81,6 +82,7 @@ struct Runtime {
 pub struct SshService {
     // Service mutations stay gated; reviewed SFTP application-file writes have a separate policy.
     changes_enabled: bool,
+    configuration: configuration::State,
     files: files::State,
     docker_manager: docker::manager::State,
     store: Mutex<Store>,
@@ -98,6 +100,7 @@ pub struct Inspection {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionStatus {
+    pub connection_id: Option<String>,
     pub profile_id: String,
     pub status: &'static str,
     pub error: Option<String>,
@@ -106,6 +109,7 @@ impl SshService {
     pub fn new(path: PathBuf) -> Self {
         Self {
             changes_enabled: false,
+            configuration: configuration::State::default(),
             files: files::State::default(),
             docker_manager: docker::manager::State::default(),
             store: Mutex::new(Store::open(path)),
@@ -538,6 +542,11 @@ impl SshService {
                     "disconnected"
                 };
                 ConnectionStatus {
+                    connection_id: if status == "connected" {
+                        runtime.connection_ids.get(&id).cloned()
+                    } else {
+                        None
+                    },
                     error: runtime.errors.get(&id).cloned(),
                     profile_id: id,
                     status,

@@ -59,3 +59,14 @@ leave manual inspections and interactive terminals available.
 
 See [monitoring-validation.md](monitoring-validation.md) for the sampler budget,
 benchmark method, and transport/performance limitations.
+
+## Explicit configuration snapshot — 2026-11-01
+
+Quick Setup, SSH Access and Firewall share an explicit one-shot Python 3 probe
+on the existing verified SSH transport. No new supported mutation combination
+is established by this probe. Missing utilities/permissions remain partial or
+unavailable, not empty success. Default daemon policy output does not certify
+runtime invocation or recovery safety. Current-user PATH evidence does not
+establish software package ownership. UFW/listener evidence does not establish
+Internet reachability or Docker/cloud firewall coverage. See quick-setup-plan.md
+for bounds, remaining detection scope and validation evidence.

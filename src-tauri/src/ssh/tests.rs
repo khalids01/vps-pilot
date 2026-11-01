@@ -1234,6 +1234,38 @@ async fn disposable_openssh_runs_real_pty_and_reports_partial_inspections() {
         .connect(&profile.id, &inspection.challenge_id, "".into())
         .await
         .unwrap();
+    let connection_id = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    assert!(service
+        .configuration_snapshot(&profile.id, "stale-generation")
+        .await
+        .is_err());
+    let snapshot = service
+        .configuration_snapshot(&profile.id, &connection_id)
+        .await
+        .unwrap();
+    let projected = serde_json::to_value(snapshot).unwrap();
+    assert_eq!(projected["profileId"], profile.id);
+    assert_eq!(projected["connectionId"], connection_id);
+    let sections = projected["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 8);
+    let system = sections.iter().find(|item| item["id"] == "system").unwrap();
+    assert!(system["values"]["Operating system"]
+        .as_str()
+        .unwrap()
+        .contains("Debian"));
+    let ssh = sections.iter().find(|item| item["id"] == "ssh").unwrap();
+    assert_eq!(ssh["state"], "partial");
+    assert_eq!(
+        ssh["values"]["Key authentication"],
+        "Not independently verified"
+    );
     let (sink, mut output) = stream_sink();
     let id = service
         .start_stream(&profile.id, Some((80, 24)), None, sink)

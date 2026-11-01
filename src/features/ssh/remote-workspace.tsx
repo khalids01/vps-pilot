@@ -18,11 +18,18 @@ import { SidebarFooter } from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
 import { CommandActivityProvider } from "./command-activity";
-import { ConfigurationScaffold } from "./configuration-scaffold";
+import { ConfigurationProvider } from "./configuration-context";
+
 import { LiveMetricsProvider } from "./live-metrics";
 import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
+
+const ConfigurationWorkspace = lazy(() =>
+  import("./configuration-workspace").then((module) => ({
+    default: module.ConfigurationWorkspace,
+  })),
+);
 
 const RemoteDocker = lazy(() =>
   import("./remote-docker").then((m) => ({ default: m.RemoteDocker })),
@@ -78,7 +85,13 @@ export function RemoteWorkspace(props: RemoteWorkspaceProps) {
         profile={props.profile}
         connected={props.status?.status === "connected"}
       >
-        <RemoteWorkspaceContent {...props} />
+        <ConfigurationProvider
+          profile={props.profile}
+          connected={props.status?.status === "connected"}
+          connectionId={props.status?.connectionId}
+        >
+          <RemoteWorkspaceContent {...props} />
+        </ConfigurationProvider>
       </LiveMetricsProvider>
     </CommandActivityProvider>
   );
@@ -323,18 +336,28 @@ function RemoteWorkspaceContent({
                 </div>
               )}
               {(selectedTool === "quick-setup" ||
-                selectedTool === "ssh-access") && (
-                <ConfigurationScaffold
-                  tool={selectedTool}
-                  profile={profile}
-                  connected={connected}
-                  onNavigate={onSelectTool}
-                />
+                selectedTool === "ssh-access" ||
+                selectedTool === "firewall") && (
+                <Suspense
+                  fallback={
+                    <p className="text-sm text-muted-foreground">
+                      Loading configuration workspace…
+                    </p>
+                  }
+                >
+                  <ConfigurationWorkspace
+                    tool={selectedTool}
+                    profile={profile}
+                    connected={connected}
+                    onNavigate={onSelectTool}
+                  />
+                </Suspense>
               )}
               <div
                 className={
                   tool === "Quick Setup" ||
                   tool === "SSH Access" ||
+                  tool === "Firewall" ||
                   tool === "Terminal" ||
                   tool === "Files" ||
                   tool === "Docker" ||

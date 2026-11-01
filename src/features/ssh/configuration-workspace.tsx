@@ -1,0 +1,514 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import {
+  ConfigurationNotice,
+  ConfigurationStatus,
+} from "@/components/configuration-status";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type { ToolId } from "@/features/workspace/fixtures";
+import type { ServerProfile } from "./api";
+import { useConfiguration } from "./configuration-context";
+import {
+  type ConfigurationEvidence,
+  evidenceStatus,
+} from "./configuration-model";
+import { RemoteActions } from "./remote-actions";
+
+const categories: {
+  id: string;
+  title: string;
+  description: string;
+  tool?: ToolId;
+}[] = [
+  {
+    id: "system",
+    title: "System",
+    description: "OS, hostname, timezone and update-check availability.",
+    tool: "overview",
+  },
+  {
+    id: "ssh",
+    title: "Users and SSH",
+    description:
+      "Current account, authentication policy evidence and administrative access.",
+    tool: "ssh-access",
+  },
+  {
+    id: "security",
+    title: "Security",
+    description: "UFW, Fail2ban and automatic-update package presence.",
+    tool: "firewall",
+  },
+  {
+    id: "essentials",
+    title: "Essential software",
+    description: "Git, curl, certificates and common utilities.",
+  },
+  {
+    id: "docker",
+    title: "Docker",
+    description:
+      "Docker CLI presence; existing workloads remain in the Docker workspace.",
+    tool: "docker",
+  },
+  {
+    id: "resources",
+    title: "Resources",
+    description: "Memory, swap and root filesystem capacity.",
+    tool: "overview",
+  },
+];
+const sshLabels: Record<string, string> = {
+  passwordauthentication: "Password authentication",
+  pubkeyauthentication: "Public-key authentication",
+  permitrootlogin: "Root login policy",
+  kbdinteractiveauthentication: "Keyboard-interactive authentication",
+  authenticationmethods: "Required authentication methods",
+  usepam: "PAM authentication",
+  port: "Default configured ports",
+  listenaddress: "Default configured listeners",
+};
+function Evidence({
+  section,
+  title,
+  showStatus = true,
+  hideRules = false,
+}: {
+  section?: ConfigurationEvidence;
+  title: string;
+  showStatus?: boolean;
+  hideRules?: boolean;
+}) {
+  return (
+    <section className="space-y-3 border-t pt-4" aria-label={title}>
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-sm font-medium">{title}</h2>
+        {showStatus && (
+          <ConfigurationStatus
+            state={
+              !section
+                ? "unknown"
+                : section.state === "ready"
+                  ? evidenceStatus(section)
+                  : section.state
+            }
+          />
+        )}
+      </div>
+      {section?.message && (
+        <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+          {section.message}
+        </p>
+      )}
+      {section ? (
+        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)]">
+          {Object.entries(section.values)
+            .filter(
+              ([key]) =>
+                key !== "attention" && (!hideRules || !/^Rule \d+$/.test(key)),
+            )
+            .sort(([left], [right]) =>
+              left.localeCompare(right, undefined, { numeric: true }),
+            )
+            .map(([key, value]) => (
+              <div key={key} className="contents">
+                <dt className="text-muted-foreground">
+                  {sshLabels[key] ?? key}
+                </dt>
+                <dd className="min-w-0 whitespace-pre-wrap break-words">
+                  {value === "yes"
+                    ? "Enabled"
+                    : value === "no"
+                      ? "Disabled"
+                      : readableValue(value)}
+                </dd>
+              </div>
+            ))}
+        </dl>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          No inspection yet. Choose Inspect server to collect read-only
+          evidence.
+        </p>
+      )}
+    </section>
+  );
+}
+function readableValue(value: string) {
+  const match = /^(\d+) (KiB|bytes)$/.exec(value);
+  if (!match) return value;
+  const bytes = Number(match[1]) * (match[2] === "KiB" ? 1024 : 1);
+  if (!Number.isSafeInteger(bytes)) return value;
+  const power = bytes
+    ? Math.min(4, Math.floor(Math.log(bytes) / Math.log(1024)))
+    : 0;
+  return `${(bytes / 1024 ** power).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${["B", "KiB", "MiB", "GiB", "TiB"][power]}`;
+}
+function FirewallRules({ section }: { section?: ConfigurationEvidence }) {
+  const rules = Object.entries(section?.values ?? {})
+    .filter(([key]) => /^Rule \d+$/.test(key))
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  return (
+    <section
+      aria-label="Observed firewall rules"
+      className="space-y-3 border-t pt-4"
+    >
+      <h2 className="text-sm font-medium">Observed firewall rules</h2>
+      <p className="text-sm text-muted-foreground">
+        Rule order is preserved from this snapshot. These rows are for
+        inspection, not stable targets for editing or removal.
+      </p>
+      {rules.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b bg-table-header text-muted-foreground">
+              <tr>
+                {["Order", "Destination", "Policy", "Source", "Family"].map(
+                  (label) => (
+                    <th
+                      key={label}
+                      scope="col"
+                      className="px-3 py-2 font-medium"
+                    >
+                      {label}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rules.map(([id, raw]) => {
+                const match =
+                  /^(.*?)\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+(IN|OUT|FWD))?\s+(.*)$/.exec(
+                    raw,
+                  );
+                if (!match)
+                  return (
+                    <tr key={id}>
+                      <td className="px-3 py-3">{id.replace("Rule ", "")}</td>
+                      <td colSpan={4} className="px-3 py-3">
+                        {raw} · Unrecognized rule format; preserved as display
+                        only.
+                      </td>
+                    </tr>
+                  );
+                const [, destination, action, direction, source] = match;
+                const verbs: Record<string, string> = {
+                  ALLOW: "Allows",
+                  DENY: "Blocks",
+                  REJECT: "Rejects",
+                  LIMIT: "Rate limits",
+                };
+                const verb = verbs[action];
+                const flow =
+                  direction === "IN"
+                    ? "incoming "
+                    : direction === "OUT"
+                      ? "outgoing "
+                      : direction === "FWD"
+                        ? "forwarded "
+                        : "";
+                return (
+                  <tr key={id} className="hover:bg-row-hover">
+                    <td className="px-3 py-3 align-top">
+                      {id.replace("Rule ", "")}
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      {destination}
+                      <p className="mt-1 min-w-48 text-xs leading-relaxed text-muted-foreground">
+                        {verb} {flow}connections to {destination} from {source}.
+                      </p>
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      {action} {direction}
+                    </td>
+                    <td className="px-3 py-3 align-top">{source}</td>
+                    <td className="px-3 py-3 align-top">
+                      {raw.includes("(v6)") ? "IPv6" : "IPv4 / unspecified"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {!section
+            ? "No inspection yet."
+            : section.state !== "ready"
+              ? "No complete rule inventory is available. Absence of rows is not proof that traffic is allowed."
+              : "No explicit rules observed. Default policies still apply."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function ConfigurationWorkspace({
+  tool,
+  profile,
+  connected,
+  onNavigate,
+}: {
+  tool: "quick-setup" | "ssh-access" | "firewall";
+  profile: ServerProfile;
+  connected: boolean;
+  onNavigate: (tool: ToolId) => void;
+}) {
+  const {
+    snapshot,
+    busy,
+    error,
+    stale,
+    canInspect,
+    inspect,
+    selected,
+    select,
+  } = useConfiguration();
+  const [review, setReview] = useState(false);
+  const page = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    // A different configuration page starts at its heading; evidence stays cached.
+    if (tool) page.current?.closest("main")?.scrollTo({ top: 0 });
+  }, [tool]);
+  const section = (id: string) =>
+    snapshot?.sections.find((item) => item.id === id);
+  const setup = tool === "quick-setup";
+  const title = setup
+    ? "Quick Setup"
+    : tool === "ssh-access"
+      ? "SSH Access"
+      : "Firewall";
+  return (
+    <section ref={page} aria-label={title} className="space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-2xl">
+          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            {setup
+              ? "Inspect first, then review only the setup items you need. Existing applications and settings are preserved."
+              : tool === "ssh-access"
+                ? "Separate saved connection settings from server policy evidence. A saved key path does not prove key login works."
+                : "Review UFW status, rules and listeners separately from cloud firewalls and Docker networking."}
+          </p>
+          {snapshot && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Observed {new Date(snapshot.observedAt).toLocaleString()} ·{" "}
+              {stale
+                ? "Previous connection; stale evidence"
+                : "Snapshot, not live polling"}
+            </p>
+          )}
+        </div>
+        <Button disabled={!canInspect || busy} onClick={inspect}>
+          {busy
+            ? "Inspecting…"
+            : snapshot
+              ? "Refresh configuration"
+              : "Inspect server"}
+        </Button>
+      </header>
+      {!connected && (
+        <ConfigurationNotice title="Server disconnected">
+          Connect using the workspace connection control. Cached evidence is
+          read-only and may be stale.
+        </ConfigurationNotice>
+      )}
+      {connected && !canInspect && (
+        <ConfigurationNotice title="Connection status unavailable">
+          Refresh the connection before inspecting this server.
+        </ConfigurationNotice>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error} Refresh is explicit; no changes were requested.
+        </p>
+      )}
+      <ConfigurationNotice title="Read-only configuration">
+        Inspection never installs software, refreshes package indexes or changes
+        SSH/firewall settings. Applying changes requires validated recovery and
+        is not enabled yet.
+      </ConfigurationNotice>
+      {setup ? (
+        <>
+          <div className="divide-y border-y">
+            {categories.map((category) => {
+              const item = section(category.id);
+              return (
+                <div
+                  key={category.id}
+                  className="flex flex-wrap items-start gap-4 py-4"
+                >
+                  <Checkbox
+                    className="size-6"
+                    aria-label={`Select ${category.title}`}
+                    disabled={!item || stale || busy}
+                    checked={selected.includes(category.id)}
+                    onCheckedChange={(checked) =>
+                      select(category.id, checked === true)
+                    }
+                  />
+                  <div className="min-w-0 flex-1 basis-64">
+                    <h2 className="text-sm font-medium">{category.title}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {category.description}
+                    </p>
+                    <details className="mt-3 text-sm">
+                      <summary className="cursor-pointer text-muted-foreground">
+                        Current evidence
+                      </summary>
+                      <Evidence
+                        showStatus={false}
+                        section={item}
+                        title={`${category.title} details`}
+                      />
+                    </details>
+                  </div>
+                  <ConfigurationStatus
+                    state={
+                      !item
+                        ? "unknown"
+                        : item.state === "ready"
+                          ? evidenceStatus(item)
+                          : item.state
+                    }
+                  />
+                  {category.tool && (
+                    <Button
+                      variant="outline"
+                      onClick={() => onNavigate(category.tool as ToolId)}
+                    >
+                      {category.tool === "ssh-access"
+                        ? "Open SSH Access"
+                        : category.tool === "firewall"
+                          ? "Open Firewall"
+                          : category.tool === "docker"
+                            ? "Open Docker"
+                            : "Open Overview"}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">
+              {selected.length} selected for review
+            </span>
+            <Button
+              variant="outline"
+              disabled={!selected.length || stale || busy}
+              onClick={() => setReview(true)}
+            >
+              Review selection
+            </Button>
+          </div>
+        </>
+      ) : tool === "ssh-access" ? (
+        <>
+          <section aria-label="Saved connection" className="space-y-3">
+            <h2 className="text-sm font-medium">Saved connection</h2>
+            <p className="text-sm text-muted-foreground">
+              These are local profile settings, not effective server policy.
+            </p>
+            <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 text-sm">
+              <dt className="text-muted-foreground">Host</dt>
+              <dd className="break-all">{profile.host}</dd>
+              <dt className="text-muted-foreground">User</dt>
+              <dd>{profile.username}</dd>
+              <dt className="text-muted-foreground">Port</dt>
+              <dd>{profile.port}</dd>
+              <dt className="text-muted-foreground">Local key</dt>
+              <dd className="break-all">
+                {profile.identityFile || "Agent or default local keys"}
+              </dd>
+            </dl>
+          </section>
+          <Evidence section={section("ssh")} title="SSH server policy" />
+          <Evidence section={section("listeners")} title="Listening sockets" />
+          <p className="text-sm text-muted-foreground">
+            Key generation, authorized-key changes and port/authentication
+            migrations need their dedicated verified workflow. They are not
+            enabled by this inspection.
+          </p>
+        </>
+      ) : (
+        <>
+          <Evidence
+            section={section("firewall")}
+            hideRules
+            title="UFW status and rules"
+          />
+          <FirewallRules section={section("firewall")} />
+          <Evidence section={section("listeners")} title="Listening sockets" />
+          <ConfigurationNotice title="Public reachability is not established">
+            A listener is not an allow rule. Cloud/provider restrictions are
+            unknown, and Docker-published ports may bypass UFW filtering.
+            Existing SSH access has not been certified for firewall changes.
+          </ConfigurationNotice>
+          <section
+            className="border-t pt-4"
+            aria-label="Privileged UFW inspection"
+          >
+            <h2 className="mb-3 text-sm font-medium">
+              Read privileged UFW status
+            </h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              If the unprivileged snapshot is incomplete, the existing sudo
+              status reader can request a separate exact-command approval. Its
+              result does not authorize rule changes.
+            </p>
+            <RemoteActions
+              profile={profile}
+              connected={connected}
+              tool="Firewall"
+            />
+          </section>
+        </>
+      )}
+      <Dialog open={review} onOpenChange={setReview}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Review setup selection</DialogTitle>
+            <DialogDescription>
+              {profile.name} · {profile.host}:{profile.port}. This reviews
+              inspection evidence; no commands will be applied.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-3 text-sm">
+            {categories
+              .filter((item) => selected.includes(item.id))
+              .map((item) => (
+                <li key={item.id}>
+                  <strong>{item.title}</strong>
+                  <p className="mt-1 text-muted-foreground">
+                    {section(item.id)?.message ??
+                      "Review the current evidence before choosing future changes."}
+                  </p>
+                </li>
+              ))}
+          </ul>
+          <p className="text-sm text-warning">
+            Execution is unavailable until action-specific backups,
+            preconditions, approvals and disposable-VM recovery validation are
+            complete.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReview(false)}>
+              Close review
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}

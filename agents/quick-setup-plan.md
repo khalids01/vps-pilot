@@ -740,3 +740,63 @@ focus tokens; this is not a complete native/accessibility certification.
 No server was contacted and no Rust mutation capability changed. Phase 2 typed
 read-only configuration detection is next; native WebKit/OS accessibility review
 and the remaining legacy-style audit remain outstanding.
+
+## Read-only detection increment — 2026-11-01
+
+The user requested committing the current work and implementing as much of this
+plan as practical. Commit `4d6bae4` contains the planning, shared theme improvements,
+persistent original-source themes and initial setup/SSH scaffolds.
+
+Implemented the next read-only slice:
+
+- One fixed native Python 3 probe over the current verified SSH connection,
+  returning projected typed evidence for system, essentials, resources, security,
+  Docker CLI, default SSH policy, UFW and listeners. No package index refresh,
+  installation, configuration writes, sudo, helper or public listener.
+- Native 30-second collection limit, 128 KiB response limit, strict section/field
+  validation, three-second subprocess limits, one inspection per server and a
+  current-connection check before accepting evidence. Runtime locking is released
+  during collection so existing terminals/metrics can proceed.
+- Connection generation IDs are now exposed with native statuses. A shared manual
+  query cache scopes results by server/generation and survives page/Home navigation.
+  No initial load, periodic probe or automatic retry. Reconnecting marks previous
+  evidence stale; disconnection disables inspection and selection review.
+- Quick Setup has per-category inspection states, expandable evidence, individual
+  review selection and a server-bound evidence review. The review never claims
+  to prepare or execute change commands; action planning remains later work.
+- SSH Access shows saved profile settings separately from policy evidence and
+  independent-key/privilege verification. Default `sshd -T -C` output is always
+  partial: runtime flags, custom daemon configuration and Match Host are not
+  certified. No private keys/authorized-key contents or authentication secrets
+  are collected. No privilege escalation is attempted.
+- Firewall has UFW status/defaults/rules, IPv4/IPv6 display, listening sockets and
+  cloud/Docker limitations. Existing approved sudo UFW status reading remains
+  available separately. Displayed rules are not deletion identities; firewall
+  management stays gated.
+
+This is a substantial Phase 2 read-only foundation, not completion of all Phase 2
+or later acceptance criteria. Package ownership/update candidates, full daemon/
+socket activation evidence, configured Fail2ban/update timers, account/key
+inventory, detection-specific cancel UI, benchmarked overhead report and native
+WebKit accessibility remain follow-ups. Docker workload detection continues to
+use its existing workspace instead of duplicating engine queries here. No
+change execution or recovery gate was enabled.
+
+Command Code v1.84.0 was present. A bounded `cmd --yolo -p` code-writing attempt
+with no session persistence failed before edits with authentication failure and
+an instruction to run `cmd login`. No code in this increment was authored by
+that CLI; implementation continued in Codex. Existing `.commandcode/` content
+was left untouched and excluded from commits.
+
+Validation for the read-only slice: check/build and strict all-target Rust Clippy
+passed; all 34 frontend unit tests and 59 native tests passed (five opt-in
+integration tests skipped in the ordinary native run). Seven local probe policy
+cases cover permission failure, inactive defaults, bounded output, comments and
+partial SSH evidence. The real disposable OpenSSH/native probe + existing PTY/
+monitor integration passed; it is not a destructive VM or overhead certification.
+The full 58-scenario browser run passed 57; one older assertion needed scoping
+now that SSH Access has both policy and listener sections. Its targeted rerun,
+plus configuration caching/failure/stale-connection and sudo-review regressions,
+passed. Actual setup/firewall/narrow-layout screenshots were inspected. Rule
+rows now preserve numeric order and include family and plain-English explanation;
+resource values use readable units. There was no important-VPS contact.

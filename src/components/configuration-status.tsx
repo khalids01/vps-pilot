@@ -3,7 +3,13 @@ import type { ReactNode } from "react";
 
 const states = {
   unknown: { label: "Not inspected", icon: CircleDashed, style: "text-info" },
-  configured: { label: "Configured", icon: CircleCheck, style: "text-success" },
+  configured: { label: "Inspected", icon: CircleCheck, style: "text-success" },
+  partial: {
+    label: "Partial evidence",
+    icon: TriangleAlert,
+    style: "text-warning",
+  },
+  unavailable: { label: "Unavailable", icon: CircleDashed, style: "text-info" },
   attention: {
     label: "Needs attention",
     icon: TriangleAlert,

@@ -143,7 +143,23 @@ test.beforeEach(async ({ page }) => {
           if(cmd==="ssh_file_reject"){fileReviews.delete(args.token);return;}
           if(cmd==="ssh_file_download")return true;
           if (cmd === "ssh_profiles") return profiles;
-          if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, status: "connected", error: null }));
+          if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, connectionId: (window as any).__configurationDisconnected && profile.id===first ? null : `connection-${profile.id}-${(window as any).__connectionGeneration??1}`, status: (window as any).__configurationDisconnected && profile.id===first ? "disconnected" : "connected", error: null }));
+          if(cmd === "ssh_configuration_describe") return "python3 [fixed read-only configuration probe]";
+          if(cmd === "ssh_configuration_snapshot") {
+            if((window as any).__configurationFailure) throw "Fixture configuration unavailable";
+            if((window as any).__holdConfiguration) await new Promise(resolve=>{(window as any).__releaseConfiguration=resolve;});
+            const evidence=(id:string,title:string,values:Record<string,string>,state="ready",message:string|null=null)=>({id,title,values,state,message});
+            return {profileId:args.profileId,connectionId:args.connectionId,observedAt:Date.now(),sections:[
+              evidence("system","System",{"Operating system":args.profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC"}),
+              evidence("essentials","Essential software",{git:"/usr/bin/git",curl:"Not found",attention:"true"}),
+              evidence("resources","System resources",{"Memory total":"8388608 KiB","Swap total":"0 KiB"}),
+              evidence("security","Security",{"Fail2ban installed":"Not found"},"partial","Installation alone does not establish protection."),
+              evidence("docker","Docker",{CLI:"/usr/bin/docker","CLI version":"Docker fixture"}),
+              evidence("ssh","Users and SSH",{"Current user":"tester","Current server port":"22",passwordauthentication:"no",pubkeyauthentication:"yes","Key authentication":"Not independently verified"},"partial","Default invocation only; runtime flags may differ."),
+              evidence("firewall","Firewall",{Status:"active","Default policies":"deny (incoming), allow (outgoing)","Rule 1":"22/tcp ALLOW IN Anywhere","Rule 2":"22/tcp (v6) ALLOW IN Anywhere (v6)","Cloud firewall":"Unknown"}),
+              evidence("listeners","Listening sockets",{"Socket 1":"tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"},"ready","Listeners do not prove public reachability."),
+            ]};
+          }
           if (cmd === "ssh_config_hosts") return [];
           if(cmd==="ssh_docker_snapshot" && (window as any).__failDockerResources)throw "Resource inventory unavailable.";
           if(cmd==="ssh_docker_snapshot")return {snapshot:managementSnapshot(),enabled:true};
@@ -425,7 +441,7 @@ test("Docker diagnostics and other inspections render application tables", async
   await expect(containers.getByRole("row")).toHaveCount(2);
   await expect(containers).toContainText("web-07");
   await page.screenshot({ path: testInfo.outputPath("docker-content.png") });
-  for (const tool of ["Services", "Proxy", "Network", "Firewall"]) {
+  for (const tool of ["Services", "Proxy", "Network"]) {
     await nav.getByRole("button", { name: tool, exact: true }).click();
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
     await expect(page.getByRole("main").getByRole("table").first()).toBeVisible();
@@ -1227,7 +1243,7 @@ test("canceling cleanup preserves completed results and skips remaining selectio
  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_docker_cancel").length)).toBe(1);
 });
 
-test("configuration scaffolds preserve shells and never inspect or mutate on navigation", async ({page}, testInfo) => {
+test("configuration pages preserve shells and never inspect or mutate on navigation", async ({page}, testInfo) => {
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Terminal",exact:true}).click();
   await page.getByRole("button",{name:"New shell",exact:true}).click();
@@ -1236,12 +1252,12 @@ test("configuration scaffolds preserve shells and never inspect or mutate on nav
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   await expect(setup.getByText("Not inspected",{exact:true})).toHaveCount(6);
-  await expect(setup.getByText("Detection is coming next",{exact:true})).toBeVisible();
+  await expect(setup.getByRole("button",{name:"Inspect server",exact:true})).toBeEnabled();
   await page.screenshot({path:testInfo.outputPath("quick-setup.png")});
   await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
   const access=page.getByRole("region",{name:"SSH Access",exact:true});
   await expect(access.getByText("SSH server policy",{exact:true})).toBeVisible();
-  await expect(access.getByText("Not inspected",{exact:true})).toBeVisible();
+  await expect(access.getByRole("region",{name:"SSH server policy",exact:true}).getByText("Not inspected",{exact:true})).toBeVisible();
   await expect(access.getByText("tester",{exact:true})).toBeVisible();
   await page.setViewportSize({width:700,height:800});
   await page.screenshot({path:testInfo.outputPath("ssh-access-narrow.png")});
@@ -1360,4 +1376,66 @@ test("Tokyo Night and One Dark Pro use original workbench fills without changing
     await expect(page.getByRole("button",{name:"Inspect",exact:true})).toHaveCSS("background-color",button);
     await page.screenshot({path:testInfo.outputPath(`${id}-workspace.png`)});
   }
+});
+
+test("configuration inspection is explicit, shared across tools and retained across Home",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(0);
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByText("Needs attention",{exact:true})).toHaveCount(1);
+  await setup.getByRole("checkbox",{name:"Select Essential software",exact:true}).check();
+  await setup.getByRole("checkbox",{name:"Select Users and SSH",exact:true}).check();
+  await setup.getByRole("button",{name:"Review selection",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review setup selection",exact:true});
+  await expect(review).toContainText("Fixture Alpha");
+  await expect(review).toContainText("Execution is unavailable");
+  await review.getByRole("button",{name:"Close review",exact:true}).click();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-inspected.png")});
+  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
+  await expect(ssh).toContainText("Not independently verified");
+  await expect(ssh).toContainText("Default invocation only");
+  await nav.getByRole("button",{name:"Firewall",exact:true}).click();
+  const firewall=page.getByRole("region",{name:"Firewall",exact:true});
+  await expect(firewall.getByRole("table").getByRole("row")).toHaveCount(3);
+  await expect(firewall).toContainText("Allows incoming connections");
+  await expect(firewall).toContainText("22/tcp (v6)");
+  await expect(firewall).toContainText("Cloud/provider restrictions are unknown");
+  await page.screenshot({path:testInfo.outputPath("firewall-inspected.png")});
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"Select Essential software",exact:true})).toBeChecked();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  await setup.getByRole("button",{name:"Refresh configuration",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot").length)).toBe(2);
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("fixture-host");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_action_execute"))).toHaveLength(0);
+});
+
+test("configuration failures do not retry and connection changes mark cached evidence stale",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await page.evaluate(()=>{(window as any).__configurationFailure=true;});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("alert")).toContainText("Fixture configuration unavailable");
+  await page.clock.fastForward(10000);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+  await page.evaluate(()=>{(window as any).__configurationFailure=false;});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await page.evaluate(()=>{(window as any).__connectionGeneration=2;});
+  await page.clock.fastForward(2100);
+  await expect(setup).toContainText("Previous connection; stale evidence");
+  await expect(setup.getByRole("checkbox",{name:"Select System",exact:true})).toBeDisabled();
+  await setup.getByRole("button",{name:"Refresh configuration",exact:true}).click();
+  await expect(setup).not.toContainText("Previous connection; stale evidence");
+  await page.evaluate(()=>{(window as any).__configurationDisconnected=true;});
+  await page.clock.fastForward(2100);
+  await expect(setup).toContainText("Server disconnected");
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeDisabled();
 });
