@@ -52,12 +52,36 @@ export async function hydratePreferences(documents: Record<string, string>) {
       commandConsolePreferencePrefix,
       sanitizeCommandConsolePreference,
     },
+    {
+      quickSetupDraftKey,
+      quickSetupDraftMaxLength,
+      quickSetupDraftPrefix,
+      quickSetupInvalidDraftSentinel,
+      sanitizeQuickSetupDraft,
+    },
   ] = await Promise.all([
     import("../workspace/preferences"),
     import("../terminal/layout"),
     import("../ssh/command-console-preferences"),
+    import("../ssh/quick-setup-model"),
   ]);
+  const cleanQuickSetupDraft = (key: string, raw: string): string | null => {
+    const serverId = key.slice(quickSetupDraftPrefix.length);
+    if (quickSetupDraftKey(serverId) !== key) return null;
+    if (raw === quickSetupInvalidDraftSentinel)
+      return quickSetupInvalidDraftSentinel;
+    if (raw.length > quickSetupDraftMaxLength)
+      return quickSetupInvalidDraftSentinel;
+    try {
+      const value = sanitizeQuickSetupDraft(JSON.parse(raw));
+      return value ? JSON.stringify(value) : quickSetupInvalidDraftSentinel;
+    } catch {
+      return quickSetupInvalidDraftSentinel;
+    }
+  };
   const clean = (key: string, raw: string): string | null => {
+    if (key.startsWith(quickSetupDraftPrefix))
+      return cleanQuickSetupDraft(key, raw);
     if (raw.length > 128000) return null;
     try {
       if (key === fleetKey) {
@@ -112,9 +136,13 @@ export async function hydratePreferences(documents: Record<string, string>) {
     const key = localStorage.key(index);
     if (!key || cache.has(key)) continue;
     const raw = localStorage.getItem(key);
-    if (!raw) continue;
+    if (raw === null) continue;
     const value = clean(key, raw);
     if (value === null) continue;
+    if (value === quickSetupInvalidDraftSentinel) {
+      cache.set(key, value);
+      continue;
+    }
     const actual = await invoke<string>("app_save_document", {
       key,
       value,

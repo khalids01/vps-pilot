@@ -29,6 +29,7 @@ import {
   setupStatus,
   setupSummary,
 } from "./configuration-model";
+import { QuickSetupWorkspace } from "./quick-setup-workspace";
 import { RemoteActions } from "./remote-actions";
 
 const categories: {
@@ -162,6 +163,48 @@ export function ConfigurationWorkspace({
   profile: ServerProfile;
   connected: boolean;
   onNavigate: (tool: ToolId) => void;
+}) {
+  const [inspectionOpen, setInspectionOpen] = useState(false);
+  const previousTool = useRef(tool);
+  useLayoutEffect(() => {
+    if (previousTool.current === tool) return;
+    previousTool.current = tool;
+    setInspectionOpen(false);
+  }, [tool]);
+  if (tool === "quick-setup" && !inspectionOpen)
+    return (
+      <QuickSetupWorkspace
+        key={profile.id}
+        profile={profile}
+        connected={connected}
+        onOpenInspection={() => setInspectionOpen(true)}
+      />
+    );
+  return (
+    <ConfigurationWorkspaceBody
+      tool={tool}
+      profile={profile}
+      connected={connected}
+      onNavigate={onNavigate}
+      onBackToSetup={
+        tool === "quick-setup" ? () => setInspectionOpen(false) : undefined
+      }
+    />
+  );
+}
+
+function ConfigurationWorkspaceBody({
+  tool,
+  profile,
+  connected,
+  onNavigate,
+  onBackToSetup,
+}: {
+  tool: "quick-setup" | "ssh-access" | "firewall";
+  profile: ServerProfile;
+  connected: boolean;
+  onNavigate: (tool: ToolId) => void;
+  onBackToSetup?: () => void;
 }) {
   const {
     snapshot,
@@ -422,12 +465,21 @@ export function ConfigurationWorkspace({
         {setup ? (
           <>
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+              <h1 className="text-xl font-semibold tracking-tight">
+                {onBackToSetup ? "Server inspection" : title}
+              </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                Read-only evidence; select items only for a readiness review.
+                {onBackToSetup
+                  ? "Quick Setup · read-only evidence; select items only for a readiness review."
+                  : "Read-only evidence; select items only for a readiness review."}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
+              {onBackToSetup && (
+                <Button variant="outline" size="sm" onClick={onBackToSetup}>
+                  Back to setup
+                </Button>
+              )}
               <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>{profile.name}</span>
                 <span aria-hidden="true">·</span>

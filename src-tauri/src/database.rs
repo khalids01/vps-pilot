@@ -8,6 +8,9 @@ use std::{
 };
 
 const ERROR: &str = "Local database could not be read or saved. Existing data was preserved.";
+const QUICK_SETUP_DRAFT_PREFIX: &str = "vps-pilot:quick-setup-draft:v1:";
+const QUICK_SETUP_DRAFT_LIMIT: usize = 4_096;
+const QUICK_SETUP_INVALID_SENTINEL: &str = "vps-pilot:quick-setup-draft-invalid";
 pub struct LocalDatabase(Mutex<Connection>);
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -171,6 +174,112 @@ impl LocalDatabase {
         Ok(settings)
     }
 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupAdministrator {
+    mode: String,
+    username: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupSshKey {
+    strategy: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupAccess {
+    port: u16,
+    ufw: String,
+    #[serde(rename = "recoveryAcknowledged")]
+    _recovery_acknowledged: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupStack {
+    choice: String,
+    engine: serde_json::Value,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupTools {
+    editor: String,
+    utilities: Vec<String>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupDraft {
+    version: u8,
+    step: u8,
+    administrator: QuickSetupAdministrator,
+    ssh_key: QuickSetupSshKey,
+    access: QuickSetupAccess,
+    stack: QuickSetupStack,
+    tools: QuickSetupTools,
+    runtimes: Vec<String>,
+}
+fn quick_setup_key(key: &str) -> Option<&str> {
+    key.strip_prefix(QUICK_SETUP_DRAFT_PREFIX)
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+fn quick_setup_username_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 32
+        && value != "root"
+        && matches!(bytes[0], b'a'..=b'z' | b'_')
+        && bytes
+            .iter()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+}
+fn unique_allowed(values: &[String], allowed: &[&str], limit: usize) -> bool {
+    values.len() <= limit
+        && values.iter().enumerate().all(|(index, value)| {
+            allowed.contains(&value.as_str()) && !values[..index].contains(value)
+        })
+}
+fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
+    if value.len() > QUICK_SETUP_DRAFT_LIMIT {
+        return Err("Invalid Quick Setup draft.".into());
+    }
+    let draft: QuickSetupDraft =
+        serde_json::from_str(value).map_err(|_| "Invalid Quick Setup draft.".to_string())?;
+    let engine = match &draft.stack.engine {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(engine) => Some(engine.as_str()),
+        _ => return Err("Invalid Quick Setup draft.".into()),
+    };
+    let stack_valid = match draft.stack.choice.as_str() {
+        "dokploy" => engine == Some("docker"),
+        "skip" => engine.is_none(),
+        "javascript" | "containers" => {
+            engine.is_none() || matches!(engine, Some("docker" | "podman"))
+        }
+        _ => false,
+    };
+    if draft.version != 1
+        || !(1..=8).contains(&draft.step)
+        || !["new", "existing"].contains(&draft.administrator.mode.as_str())
+        || !quick_setup_username_valid(&draft.administrator.username)
+        || !["existing", "generate", "agent"].contains(&draft.ssh_key.strategy.as_str())
+        || draft.access.port == 0
+        || !["configure", "keep-current"].contains(&draft.access.ufw.as_str())
+        || !stack_valid
+        || !["none", "neovim", "lazyvim"].contains(&draft.tools.editor.as_str())
+        || !unique_allowed(
+            &draft.tools.utilities,
+            &[
+                "git", "curl", "ripgrep", "fd", "fzf", "jq", "btop", "unzip", "herdr",
+            ],
+            9,
+        )
+        || !unique_allowed(&draft.runtimes, &["bun", "nvm-node", "uv"], 3)
+        || (draft.stack.choice == "javascript"
+            && !draft.runtimes.iter().any(|runtime| runtime == "nvm-node"))
+    {
+        return Err("Invalid Quick Setup draft.".into());
+    }
+    Ok(())
+}
 fn ui_key(key: &str) -> bool {
     (key == "vps-pilot:sample-workspace:v1"
         || key == "vps-pilot-updates"
@@ -189,6 +298,7 @@ fn ui_key(key: &str) -> bool {
         || key
             .strip_prefix("vps-pilot:command-console:v1:")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || quick_setup_key(key).is_some()
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -249,6 +359,9 @@ fn validate_document(key: &str, value: &str) -> Result<(), String> {
     if key == "vps-pilot:fleet:v1" {
         validate_fleet(&parsed)?;
     }
+    if quick_setup_key(key).is_some() {
+        return validate_quick_setup_draft(value);
+    }
     if let Some(id) = key.strip_prefix("vps-pilot:command-console:v1:") {
         if uuid::Uuid::parse_str(id).is_err() || value.len() > 256 {
             return Err("Invalid command console preference.".into());
@@ -287,15 +400,27 @@ fn validate_document(key: &str, value: &str) -> Result<(), String> {
     }
     Ok(())
 }
-#[derive(Serialize)]
-pub struct Bootstrap {
-    settings: Settings,
-    documents: HashMap<String, String>,
+fn collect_bootstrap_document(
+    key: String,
+    value: String,
+    documents: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    if quick_setup_key(&key).is_some() {
+        let value = if validate_quick_setup_draft(&value).is_ok() {
+            value
+        } else {
+            QUICK_SETUP_INVALID_SENTINEL.to_string()
+        };
+        documents.insert(key, value);
+        return Ok(());
+    }
+    if ui_key(&key) {
+        validate_document(&key, &value)?;
+        documents.insert(key, value);
+    }
+    Ok(())
 }
-#[tauri::command(async)]
-pub fn app_bootstrap(db: tauri::State<'_, Arc<LocalDatabase>>) -> Result<Bootstrap, String> {
-    let settings = db.settings()?;
-    let connection = db.0.lock().map_err(|_| ERROR)?;
+fn bootstrap_documents(connection: &Connection) -> Result<HashMap<String, String>, String> {
     let mut statement = connection
         .prepare("SELECT key,value FROM documents WHERE key LIKE 'vps-pilot:%' OR key='vps-pilot-updates'")
         .map_err(|_| ERROR)?;
@@ -307,11 +432,20 @@ pub fn app_bootstrap(db: tauri::State<'_, Arc<LocalDatabase>>) -> Result<Bootstr
     let mut documents = HashMap::new();
     for row in rows {
         let (key, value) = row.map_err(|_| ERROR)?;
-        if ui_key(&key) {
-            validate_document(&key, &value)?;
-            documents.insert(key, value);
-        }
+        collect_bootstrap_document(key, value, &mut documents)?;
     }
+    Ok(documents)
+}
+#[derive(Serialize)]
+pub struct Bootstrap {
+    settings: Settings,
+    documents: HashMap<String, String>,
+}
+#[tauri::command(async)]
+pub fn app_bootstrap(db: tauri::State<'_, Arc<LocalDatabase>>) -> Result<Bootstrap, String> {
+    let settings = db.settings()?;
+    let connection = db.0.lock().map_err(|_| ERROR)?;
+    let documents = bootstrap_documents(&connection)?;
     Ok(Bootstrap {
         settings,
         documents,
@@ -510,6 +644,196 @@ mod tests {
         value["servers"][id]["tags"] = serde_json::json!(vec!["tag"; 13]);
         assert!(validate_document(key, &value.to_string()).is_err());
         assert!(validate_document(key, r#"{"version":1,"servers":{"invalid-id":{"project":"","tags":[],"environment":"none","favorite":false,"order":0}}}"#).is_err());
+    }
+    fn valid_quick_setup_draft() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "step": 4,
+            "administrator": { "mode": "new", "username": "deploy" },
+            "sshKey": { "strategy": "generate" },
+            "access": { "port": 2222, "ufw": "configure", "recoveryAcknowledged": true },
+            "stack": { "choice": "dokploy", "engine": "docker" },
+            "tools": {
+                "editor": "lazyvim",
+                "utilities": ["git", "curl", "ripgrep", "fd", "fzf", "herdr"]
+            },
+            "runtimes": ["bun", "nvm-node", "uv"]
+        })
+    }
+    #[test]
+    fn quick_setup_draft_is_strict_bounded_and_persists_per_server() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
+        let valid = valid_quick_setup_draft();
+        let serialized = valid.to_string();
+        validate_document(&key, &serialized).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite3");
+        let db = LocalDatabase::open(&path).unwrap();
+        db.write("ssh_profiles", "preserved profile and host pin")
+            .unwrap();
+        db.write(&key, &serialized).unwrap();
+        drop(db);
+        let db = LocalDatabase::open(&path).unwrap();
+        assert_eq!(db.read(&key).unwrap(), Some(serialized));
+        assert_eq!(
+            db.read("ssh_profiles").unwrap().as_deref(),
+            Some("preserved profile and host pin")
+        );
+    }
+    #[test]
+    fn quick_setup_draft_rejects_unexpected_secrets_freeform_fields_and_versions() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
+        let valid = valid_quick_setup_draft();
+        let rejected = [
+            ("version", serde_json::json!(2)),
+            ("step", serde_json::json!(9)),
+            ("step", serde_json::json!(0)),
+            ("password", serde_json::json!("never save this secret")),
+            ("command", serde_json::json!("rm -rf / --no-preserve-root")),
+        ];
+        for (field, value) in rejected {
+            let mut draft = valid.clone();
+            draft[field] = value;
+            assert!(
+                validate_document(&key, &draft.to_string()).is_err(),
+                "{field}"
+            );
+        }
+        for username in ["root", "Deploy", "-ops", "deploy user"] {
+            let mut draft = valid.clone();
+            draft["administrator"]["username"] = serde_json::json!(username);
+            assert!(validate_document(&key, &draft.to_string()).is_err());
+        }
+        let mut draft = valid.clone();
+        draft["administrator"]["secret"] = serde_json::json!("never save");
+        assert!(validate_document(&key, &draft.to_string()).is_err());
+        let mut draft = valid.clone();
+        draft["sshKey"]["passphrase"] = serde_json::json!("never save");
+        assert!(validate_document(&key, &draft.to_string()).is_err());
+        for port in [0, -1, 65536] {
+            let mut draft = valid.clone();
+            draft["access"]["port"] = serde_json::json!(port);
+            assert!(validate_document(&key, &draft.to_string()).is_err());
+        }
+        for (choice, engine) in [
+            ("kubernetes", serde_json::Value::Null),
+            ("dokploy", serde_json::json!("podman")),
+            ("dokploy", serde_json::Value::Null),
+            ("skip", serde_json::json!("docker")),
+            ("containers", serde_json::json!("lxc")),
+        ] {
+            let mut draft = valid.clone();
+            draft["stack"]["choice"] = serde_json::json!(choice);
+            draft["stack"]["engine"] = engine;
+            assert!(
+                validate_document(&key, &draft.to_string()).is_err(),
+                "{choice}"
+            );
+        }
+        for choice in ["dokploy", "javascript", "containers", "skip"] {
+            let mut draft = valid.clone();
+            draft["stack"] = serde_json::json!({ "choice": choice });
+            if choice == "javascript" {
+                draft["runtimes"] = serde_json::json!(["nvm-node"]);
+            }
+            assert!(
+                validate_document(&key, &draft.to_string()).is_err(),
+                "missing engine for {choice}"
+            );
+        }
+        for utilities in [
+            serde_json::json!(["git", "git"]),
+            serde_json::json!(["tmux"]),
+            serde_json::json!(["git", "curl", "ripgrep", "fd", "fzf", "jq", "btop", "unzip", "jq"]),
+        ] {
+            let mut draft = valid.clone();
+            draft["tools"]["utilities"] = utilities;
+            assert!(validate_document(&key, &draft.to_string()).is_err());
+        }
+        for runtimes in [
+            serde_json::json!(["bun", "bun"]),
+            serde_json::json!(["deno"]),
+            serde_json::json!(["bun", "nvm-node", "uv", "bun"]),
+        ] {
+            let mut draft = valid.clone();
+            draft["runtimes"] = runtimes;
+            assert!(validate_document(&key, &draft.to_string()).is_err());
+        }
+        let mut draft = valid.clone();
+        draft["stack"] = serde_json::json!({ "choice": "javascript", "engine": null });
+        draft["runtimes"] = serde_json::json!(["bun", "uv"]);
+        assert!(validate_document(&key, &draft.to_string()).is_err());
+        draft["runtimes"] = serde_json::json!(["bun", "nvm-node", "uv"]);
+        validate_document(&key, &draft.to_string()).unwrap();
+        let mut draft = valid.clone();
+        draft["tools"]["editor"] = serde_json::json!("vscode");
+        assert!(validate_document(&key, &draft.to_string()).is_err());
+        let oversized = format!("{}{}", valid, " ".repeat(5_000));
+        assert!(validate_document(&key, &oversized).is_err());
+        assert!(validate_document(
+            "vps-pilot:quick-setup-draft:v1:not-a-uuid",
+            &valid.to_string()
+        )
+        .is_err());
+    }
+    #[test]
+    fn bootstrap_replaces_every_invalid_quick_setup_draft_with_a_bounded_sentinel() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite3");
+        let first_id = "11111111-1111-4111-8111-111111111111";
+        let second_id = "22222222-2222-4222-8222-222222222222";
+        let third_id = "33333333-3333-4333-8333-333333333333";
+        let fourth_id = "44444444-4444-4444-8444-444444444444";
+        let fifth_id = "55555555-5555-4555-8555-555555555555";
+        let first_key = format!("{QUICK_SETUP_DRAFT_PREFIX}{first_id}");
+        let second_key = format!("{QUICK_SETUP_DRAFT_PREFIX}{second_id}");
+        let third_key = format!("{QUICK_SETUP_DRAFT_PREFIX}{third_id}");
+        let fourth_key = format!("{QUICK_SETUP_DRAFT_PREFIX}{fourth_id}");
+        let fifth_key = format!("{QUICK_SETUP_DRAFT_PREFIX}{fifth_id}");
+        let corrupt = r#"{"version":2,"step":9}"#.to_string();
+        let malformed = "{not-json".to_string();
+        let oversized = format!("{{\"version\":1}}{}", " ".repeat(130_000));
+        let valid = valid_quick_setup_draft().to_string();
+        {
+            let db = LocalDatabase::open(&path).unwrap();
+            db.write(&first_key, &corrupt).unwrap();
+            db.write(&second_key, &valid).unwrap();
+            db.write(&third_key, &oversized).unwrap();
+            db.write(&fourth_key, &malformed).unwrap();
+            db.write(&fifth_key, "").unwrap();
+        }
+        let db = LocalDatabase::open(&path).unwrap();
+        let connection = db.0.lock().unwrap();
+        let documents = bootstrap_documents(&connection).unwrap();
+        drop(connection);
+        assert_eq!(
+            documents.get(&first_key).map(String::as_str),
+            Some(QUICK_SETUP_INVALID_SENTINEL)
+        );
+        assert_eq!(documents.get(&second_key), Some(&valid));
+        assert_eq!(
+            documents.get(&third_key).map(String::as_str),
+            Some(QUICK_SETUP_INVALID_SENTINEL)
+        );
+        assert_eq!(
+            documents.get(&fourth_key).map(String::as_str),
+            Some(QUICK_SETUP_INVALID_SENTINEL)
+        );
+        assert_eq!(
+            documents.get(&fifth_key).map(String::as_str),
+            Some(QUICK_SETUP_INVALID_SENTINEL)
+        );
+        assert!(documents.values().all(|value| value != &corrupt));
+        assert!(documents.values().all(|value| value != &malformed));
+        assert_eq!(db.read(&first_key).unwrap(), Some(corrupt));
+        assert_eq!(
+            db.read(&third_key).unwrap().map(|value| value.len()),
+            Some(oversized.len())
+        );
+        assert_eq!(db.read(&fourth_key).unwrap(), Some(malformed));
+        assert_eq!(db.read(&fifth_key).unwrap().as_deref(), Some(""));
     }
     #[test]
     fn document_scope_blocks_credentials_profiles_and_sql_injection() {

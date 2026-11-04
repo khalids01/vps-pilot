@@ -346,3 +346,25 @@ separate and sudo approval previews explicit. Add accessible resizing and persis
 only per-server console height/collapsed preferences in the existing local
 document store; commands/output/evidence remain memory only. Navigation, panel
 changes and detail opening must preserve sessions and never trigger inspections.
+
+## Guided fresh VPS provisioning — authorized 2026-11-04
+
+The user approved `agents/quick-setup.md` and requested committing current work
+and implementing that plan. That document is the current Quick Setup product
+direction: root connection, administrator/sudo setup, local SSH keys, verified
+key-only access on a chosen port with coordinated UFW recovery, application
+stacks and optional tools. Replace the checklist as the default experience;
+retain useful manual inspection and dedicated management views.
+
+Use Command Code for primary implementation, with independent Codex review and
+verification. Work in dependency order. Draft wizard choices never constitute
+verification or permission to execute. Preserve existing per-command sudo
+approvals and keep narrow security/install adapters gated until their disposable
+fixture and full VM recovery requirements pass. No important-VPS testing.
+
+Installers must resolve supported stable artifacts from official project or
+supported distribution sources, preserve existing configuration and expose the
+reviewed version/source. Neovim uses official latest compatible stable releases,
+with optional LazyVim; privileged editing should preserve user configuration
+through a validated sudoedit workflow rather than broad environment inheritance.
+Persist only validated non-secret drafts/progress, never key material or secrets.

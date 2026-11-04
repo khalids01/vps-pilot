@@ -1,8 +1,9 @@
 # Quick Setup — guided fresh VPS provisioning
 
-Status: planning only, requested 2026-11-04. No provisioning implementation,
-server changes, installation commands, or newly enabled mutation gates are
-authorized by writing this document.
+Status: implementation authorized 2026-11-04 after the user reviewed this plan.
+Plan and preceding interface work committed as `4a7e3b3`. Implement in dependency
+order; production server changes remain subject to the capability-specific
+recovery/validation gates below. Never test provisioning on the important VPS.
 
 ## Purpose and relationship to existing work
 
@@ -18,7 +19,7 @@ Reuse that infrastructure and the existing SSH Access, Firewall, Software and
 Docker capabilities rather than building competing executors. Follow
 `agents/goal.md`; this plan does not override its approval or production gates.
 
-Implementation is subsequent work. Use the Command Code workflow in
+Use the Command Code workflow in
 `agents/codex-use-cmd.md` when implementation is requested: Codex specifies,
 reviews and verifies; bounded Command Code runs write coherent implementation
 slices. Preserve all existing uncommitted work.
@@ -184,8 +185,11 @@ Initial candidate catalog, subject to source/support validation before shipping:
   Validate editor invocation and dependencies; do not broadly preserve the
   entire environment through sudo, share root-owned plugin caches or install
   user plugins as root to make the editor appear to work.
-- Multiplexer: Herdr as requested, pending confirmation of the exact official
-  project/source and supported systems. Tmux can be an optional separate choice.
+- Multiplexer: Herdr as requested. Existing `agents/plan.md` already records the
+  user-confirmed source, https://herdr.dev/docs/install/ (now redirects to
+  https://herdr.dev/tui/docs/install/). Its official documentation describes
+  stable-channel Linux releases. Validate exact artifact integrity and supported
+  systems before enabling installation. Tmux can be an optional separate choice.
 - Utilities: Git, curl, ripgrep, fd, fzf, jq, btop and unzip as a small initial
   shortlist. Distinguish dependencies from user-selected optional tools.
 - Runtimes: Bun, NVM + Node, uv/Python tooling. Offer supported stable/LTS
@@ -240,7 +244,7 @@ This planning document does not certify current URLs, latest versions or command
    source manifests, dependencies, preflight, operation-specific approvals and
    post-install verification. Add Docker/Dokploy and Node/PM2 paths, then Podman
    where validated. Preserve existing dedicated Docker/SFTP safety boundaries.
-5. **Optional catalog.** Add official Neovim/LazyVim, confirmed Herdr, utilities,
+5. **Optional catalog.** Add official Neovim/LazyVim, Herdr, utilities,
    Bun, NVM/Node and uv with per-tool compatibility/verification tests. Unsupported
    combinations remain visibly unavailable rather than optimistic installs.
 6. **Resume, recovery and release validation.** Reconcile app crashes, transport
@@ -278,7 +282,8 @@ per-server serialization and secret redaction are mandatory throughout.
 
 ## Open decisions to settle during specification
 
-- Confirm the exact Herdr project intended by the user.
+- Herdr source identity is resolved from the prior user-confirmed project link;
+  exact stable artifact/version/integrity resolution still needs implementation.
 - Define the first supported provisioning OS/version/architecture matrix from
   actual VM coverage, not the older inspection matrix.
 - Choose generated-key storage/export UX and cross-platform credential support.
@@ -291,3 +296,38 @@ per-server serialization and secret redaction are mandatory throughout.
 
 These questions do not block this plan. Resolve them before dependent installers
 or access-changing capabilities are implemented or enabled.
+
+## Implementation record — 2026-11-04
+
+- Baseline commit `4a7e3b3` includes the preceding console/checklist refinement
+  and this provisioning plan. Local `.commandcode/` and Python cache directories
+  were excluded from the commit and remain untouched.
+- Primary implementation conversation: `vps-pilot-guided-setup-20261104`.
+  First bounded run stopped at its 45-turn limit with partial wizard/model and
+  native draft-validation work. It was resumed in the same conversation for
+  concrete review findings, browser integration and verification.
+- Codex found malformed/oversized draft preservation gaps, required-runtime
+  presentation issues and overly technical product copy during review; these
+  were returned to Command Code for correction before accepting the increment.
+- Herdr identity was already recorded in `agents/plan.md`; the official install
+  documentation was checked at https://herdr.dev/tui/docs/install/.
+  Source identity is resolved, not artifact integrity or installer certification.
+
+No production provisioning capability is enabled by an interface-only increment.
+Record actual verification results and remaining phase gates here as work lands.
+
+Phase 1 delivered the eight-step draft wizard as the default Quick Setup view,
+with explicit access to the existing server inspection. Choices persist per
+server in strictly validated non-secret documents. Invalid stored drafts stay
+untouched and display an explicit reset path, including malformed/empty/oversized
+and future-version legacy records. Dokploy requires Docker; JavaScript requires
+NVM/Node; LazyVim contributes deduplicated Git/ripgrep/fd dependencies. Herdr is
+selectable for planning but no installer is enabled. Invalid username/port fields
+block forward navigation. All step states remain planned/unverified.
+
+Independent verification: 53 frontend tests, build/check, Rust formatting and
+strict all-target Clippy passed. Native suite passed 76 tests with five opt-in
+fixtures excluded; the final stricter missing-engine contract regression also
+passed. Seventeen focused browser regressions passed, followed by both invalid
+draft and legacy hydration cases. Browser validation uses a mocked native bridge;
+it is not production provisioning or native WebKit certification.

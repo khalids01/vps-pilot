@@ -128,7 +128,7 @@ test.beforeEach(async ({ page }) => {
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           // No credentials or user terminal input are retained by the mock.
-          calls.push({ cmd, profileId: args.profileId, ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId, ...(args.snapshotId?{snapshotId:args.snapshotId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(Array.isArray(args.selected)?{selected:args.selected}:{})} : {}) });
+          calls.push({ cmd, profileId: args.profileId, ...(cmd==="app_save_document"?{key:args.key}:{}), ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId, ...(args.snapshotId?{snapshotId:args.snapshotId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(Array.isArray(args.selected)?{selected:args.selected}:{})} : {}) });
           if (cmd === "app_bootstrap") {
             if ((window as any).__databaseUnavailable) throw new Error("Fixture database unavailable");
             return {
@@ -594,6 +594,7 @@ test("command console summarizes inspections, reveals technical output on demand
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await page.getByRole("button",{name:"Show command console",exact:true}).click();
@@ -1525,6 +1526,7 @@ test("configuration pages preserve shells and never inspect or mutate on navigat
   const before=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>/ssh_(terminal_open|stream_close|inspection_run|action_execute|connect)/.test(c.cmd)));
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await expect(setup.getByText("Not checked",{exact:true})).toHaveCount(6);
   await expect(setup.getByRole("button",{name:"Inspect server",exact:true})).toBeEnabled();
   await page.screenshot({path:testInfo.outputPath("quick-setup.png")});
@@ -1659,6 +1661,7 @@ test("configuration inspection is explicit, shared across tools and retained acr
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(0);
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByText("Incomplete",{exact:true})).toHaveCount(2);
@@ -1688,6 +1691,7 @@ test("configuration inspection is explicit, shared across tools and retained acr
   await page.getByRole("button",{name:"Fleet home",exact:true}).click();
   await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await expect(setup.getByRole("checkbox",{name:"Select Essential software",exact:true})).toBeChecked();
   expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
   await setup.getByRole("button",{name:"Refresh configuration",exact:true}).click();
@@ -1700,6 +1704,7 @@ test("configuration failures do not retry and connection changes mark cached evi
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await page.evaluate(()=>{(window as any).__configurationFailure=true;});
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("alert")).toContainText("Fixture configuration unavailable");
@@ -1725,6 +1730,7 @@ test("Quick Setup details separate package caches, local users and public-key me
   await page.setViewportSize({width:1366,height:900});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await page.screenshot({path:testInfo.outputPath("quick-setup-checklist.png")});
@@ -1803,6 +1809,7 @@ test("canceling a first configuration inspection keeps no evidence and permits a
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await page.evaluate(()=>{(window as any).__holdConfiguration=true;});
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
@@ -1865,6 +1872,7 @@ test("cancel before configuration collection starts never submits a snapshot",as
   await page.evaluate(()=>{(window as any).__holdConfigurationDescribe=true;});
   await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>typeof (window as any).__releaseConfigurationDescribe)).toBe("function");
   await setup.getByRole("button",{name:"Cancel inspection",exact:true}).click();
@@ -1879,6 +1887,7 @@ test("cancel before configuration collection starts never submits a snapshot",as
 test("successful late configuration response is discarded after cancel",async({page})=>{
   await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   const before=await setup.getByText(/^Observed /).textContent();
@@ -1901,6 +1910,7 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByText("Incomplete",{exact:true})).toHaveCount(2);
   const observedBefore=await setup.getByText(/^Observed /).textContent();
@@ -1913,6 +1923,7 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
 
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await page.evaluate(()=>{(window as any).__holdConfiguration=true;});
   await setup.getByRole("button",{name:"Refresh configuration",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
@@ -1934,6 +1945,7 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   await expect(ssh).toContainText("SHA256:fixturePublicFingerprint");
   await expect(ssh.getByText(/^Observed /)).toHaveText(observedBefore!);
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
   await expect(setup.getByText(/^Observed /)).toHaveText(observedBefore!);
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
@@ -1966,6 +1978,7 @@ test("native readiness review blocks every category and rechecks cached evidence
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await setup.getByRole("checkbox",{name:"Select Essential software",exact:true}).check();
@@ -2004,6 +2017,7 @@ test("native review errors require explicit retry and never retry automatically"
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
@@ -2028,6 +2042,7 @@ test("closing a pending native review ignores late data and context changes inva
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
@@ -2065,6 +2080,7 @@ test("expired native review recheck fails explicitly and retry creates a new rev
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
@@ -2091,6 +2107,7 @@ test("native review keeps all six categories readable and keyboard reachable at 
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Open server inspection",exact:true}).click();
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   for(const name of ["System","Users and SSH","Security","Essential software","Docker","Resources"])
@@ -2109,4 +2126,155 @@ test("native review keeps all six categories readable and keyboard reachable at 
   await page.screenshot({path:testInfo.outputPath("native-review-six-categories-narrow.png")});
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_action_execute"))).toHaveLength(0);
+});
+
+test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps and never contacts SSH",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const saves=()=>page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,draftKey);
+  const remoteCalls=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_configuration_snapshot","ssh_connect","ssh_inspection_run","ssh_action_execute"].includes(call.cmd)));
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(setup.getByRole("complementary",{name:"Setup preview"})).toContainText("Applying changes is unavailable until access recovery is ready.");
+  await expect(setup.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
+  expect(await saves()).toBe(0);
+  expect(await remoteCalls()).toHaveLength(0);
+
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Step 2: Administrator",exact:true})).toHaveAttribute("aria-current","step");
+  await setup.getByLabel("Administrator username").fill("-bad");
+  await expect(setup.getByRole("alert")).toContainText("lowercase letters");
+  await expect(setup.getByRole("button",{name:"Next step",exact:true})).toBeDisabled();
+  await expect(setup.getByRole("button",{name:"Step 3: SSH key",exact:true})).toBeDisabled();
+  await setup.getByRole("button",{name:"Back",exact:true}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByLabel("Administrator username")).toHaveValue("deploy");
+  await setup.getByLabel("Administrator username").fill("ops-user");
+  await setup.getByRole("button",{name:/Use an existing administrator/}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+
+  await setup.getByRole("button",{name:/Generate a new key/}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByLabel("Target SSH port")).toHaveValue("52022");
+  await setup.getByLabel("Target SSH port").fill("70000");
+  await expect(setup.getByRole("alert")).toContainText("1 to 65535");
+  await expect(setup.getByRole("button",{name:"Next step",exact:true})).toBeDisabled();
+  await setup.getByRole("button",{name:"Back",exact:true}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByLabel("Target SSH port")).toHaveValue("52022");
+  await setup.getByRole("checkbox",{name:/I understand/}).check();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+
+  await setup.getByRole("button",{name:/JavaScript \/ PM2/}).click();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-stack-desktop.png")});
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await setup.getByRole("button",{name:/Neovim \+ LazyVim/}).click();
+  await setup.getByRole("checkbox",{name:"Herdr",exact:true}).check();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-editor-desktop.png")});
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+
+  const nodeRuntime=setup.getByRole("checkbox",{name:/NVM \+ Node\.js/});
+  await expect(nodeRuntime).toBeChecked();
+  await expect(nodeRuntime).toBeDisabled();
+  await expect(setup).toContainText("LazyVim adds Git, ripgrep and fd once.");
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(setup.getByRole("complementary",{name:"Applying changes unavailable"})).toBeVisible();
+  await expect(setup.getByRole("complementary",{name:"Security checkpoint not verified"})).toBeVisible();
+  await expect(setup).toContainText("Herdr");
+  await expect(page.getByRole("button",{name:/install/i})).toHaveCount(0);
+  expect(await remoteCalls()).toHaveLength(0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-review-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-review-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+
+  await page.clock.fastForward(300);
+  const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
+  expect(stored).toMatchObject({version:1,step:8,administrator:{mode:"existing",username:"ops-user"},access:{port:52022,recoveryAcknowledged:true},stack:{choice:"javascript"}});
+  expect(stored.runtimes).toContain("nvm-node");
+  expect(stored.tools.editor).toBe("lazyvim");
+  expect(stored.tools.utilities).toContain("herdr");
+  expect(JSON.stringify(stored)).not.toMatch(/password|verified|approval/i);
+
+  await page.reload();
+  const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(reloaded.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(reloaded).toContainText("ops-user");
+  expect(await remoteCalls()).toHaveLength(0);
+
+  await page.getByRole("tab",{name:/Fixture Beta/}).click();
+  await page.getByRole("navigation",{name:"Fixture Beta tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const beta=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(beta.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(beta).not.toContainText("ops-user");
+  expect(await page.evaluate(k=>JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k],`vps-pilot:quick-setup-draft:v1:${second}`)).toBeUndefined();
+
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await expect(beta.getByRole("button",{name:"Next step",exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-wizard.png")});
+});
+
+test("invalid saved Quick Setup drafts warn, are not imported or overwritten, and reset explicitly",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const writeDraft=(raw:string)=>page.evaluate(({key,raw})=>{
+    const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+    docs[key]=raw;
+    localStorage.setItem("__fixture_documents",JSON.stringify(docs));
+  },{key:draftKey,raw});
+  const stored=()=>page.evaluate(k=>JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k],draftKey);
+  const saves=()=>page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,draftKey);
+
+  await writeDraft("{not-json");
+  await page.reload();
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(setup.getByRole("complementary",{name:"Saved draft cannot be used"})).toBeVisible();
+  await expect(setup.getByRole("button",{name:"Reset draft",exact:true})).toBeVisible();
+  expect(await saves()).toBe(0);
+  expect(await stored()).toBe("{not-json");
+  await page.screenshot({path:testInfo.outputPath("quick-setup-invalid-draft.png")});
+
+  await setup.getByRole("button",{name:"Reset draft",exact:true}).click();
+  await page.clock.fastForward(300);
+  await expect(setup.getByRole("complementary",{name:"Saved draft cannot be used"})).toHaveCount(0);
+  await expect(setup.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
+  const reset=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
+  expect(reset).toMatchObject({version:1,step:1,access:{port:52022}});
+
+  await writeDraft(JSON.stringify({version:1,padding:"x".repeat(5000)}));
+  await page.reload();
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const oversized=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(oversized.getByRole("complementary",{name:"Saved draft cannot be used"})).toBeVisible();
+  expect(await saves()).toBe(0);
+  expect((await stored()) as string).toContain("\"padding\"");
+});
+
+test("legacy localStorage Quick Setup drafts hydrate as invalid without import or overwrite",async({page})=>{
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const variants=[
+    "",
+    "{not-json",
+    "x".repeat(5000),
+    JSON.stringify({version:2,step:1}),
+  ];
+  for(const raw of variants){
+    await page.evaluate(({key,raw})=>{
+      const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+      delete docs[key];
+      localStorage.setItem("__fixture_documents",JSON.stringify(docs));
+      localStorage.setItem(key,raw);
+    },{key:draftKey,raw});
+    await page.reload();
+    await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+    const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+    await expect(setup.getByRole("complementary",{name:"Saved draft cannot be used"})).toBeVisible();
+    expect(await page.evaluate(k=>localStorage.getItem(k),draftKey)).toBe(raw);
+    expect(await page.evaluate(k=>Object.hasOwn(JSON.parse(localStorage.getItem("__fixture_documents")??"{}"),k),draftKey)).toBe(false);
+    expect(await page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,draftKey)).toBe(0);
+  }
 });
