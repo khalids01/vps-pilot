@@ -73,6 +73,7 @@ export interface QuickSetupDraft {
   };
   sshKey: {
     strategy: QuickSetupKeyStrategy;
+    generatedKeyId?: string;
   };
   access: {
     port: number;
@@ -105,6 +106,8 @@ export function defaultQuickSetupDraft(): QuickSetupDraft {
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const generatedKeyIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const usernamePattern = /^[a-z_][a-z0-9_-]{0,31}$/;
 
 export function quickSetupDraftKey(serverId: string) {
@@ -200,8 +203,24 @@ export function sanitizeQuickSetupDraft(
   const sshKey = value.sshKey;
   if (
     !isRecord(sshKey) ||
-    !hasExactKeys(sshKey, ["strategy"]) ||
     !(quickSetupKeyStrategies as readonly unknown[]).includes(sshKey.strategy)
+  )
+    return null;
+  const generatedKeyId = sshKey.generatedKeyId;
+  if (
+    generatedKeyId !== undefined &&
+    (typeof generatedKeyId !== "string" ||
+      !generatedKeyIdPattern.test(generatedKeyId) ||
+      sshKey.strategy !== "generate")
+  )
+    return null;
+  if (
+    !hasExactKeys(
+      sshKey,
+      generatedKeyId === undefined
+        ? ["strategy"]
+        : ["strategy", "generatedKeyId"],
+    )
   )
     return null;
 
@@ -257,7 +276,13 @@ export function sanitizeQuickSetupDraft(
       mode: administrator.mode as QuickSetupAdminMode,
       username: administrator.username,
     },
-    sshKey: { strategy: sshKey.strategy as QuickSetupKeyStrategy },
+    sshKey:
+      generatedKeyId === undefined
+        ? { strategy: sshKey.strategy as QuickSetupKeyStrategy }
+        : {
+            strategy: sshKey.strategy as QuickSetupKeyStrategy,
+            generatedKeyId,
+          },
     access: {
       port: access.port,
       ufw: access.ufw as QuickSetupUfwChoice,

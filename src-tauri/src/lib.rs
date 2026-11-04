@@ -1,4 +1,5 @@
 mod database;
+mod setup_keys;
 mod ssh;
 use tauri::Manager;
 
@@ -16,6 +17,7 @@ pub fn run() {
                 db.clone(),
                 config.join("ssh-profiles.json"),
             ));
+            app.manage(setup_keys::KeyVault::new(config.join("setup-keys")));
             app.manage(db);
             Ok(())
         })
@@ -24,6 +26,9 @@ pub fn run() {
             database::app_bootstrap,
             database::app_save_settings,
             database::app_save_document,
+            setup_keys::app_setup_keys_list,
+            setup_keys::app_setup_key_generate,
+            setup_keys::app_setup_key_export,
             ssh::files::ssh_files_review_operation,
             ssh::files::ssh_files_execute_operation,
             ssh::files::ssh_files_reject_operation,

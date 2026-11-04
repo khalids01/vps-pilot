@@ -331,3 +331,47 @@ fixtures excluded; the final stricter missing-engine contract regression also
 passed. Seventeen focused browser regressions passed, followed by both invalid
 draft and legacy hydration cases. Browser validation uses a mocked native bridge;
 it is not production provisioning or native WebKit certification.
+
+Phase 2 local-key slice uses a separate bounded Command Code conversation,
+`vps-pilot-setup-local-keys-20261104`. It adds real Ed25519 generation and
+passphrase encryption through the existing SSH cryptography library, protected
+Unix app-owned key files, restart discovery and explicit native-dialog encrypted
+backup export. Only an optional opaque generated key ID enters a server draft;
+legacy drafts lacking it remain valid. There is no key deletion, overwrite,
+public-key installation, agent import or login verification in this slice.
+Windows generation is explicitly unavailable pending native ACL implementation.
+
+Codex returned worker-lifetime generation locking, atomic backup publication,
+directory-sync error handling, ownership/mode validation, React StrictMode and
+cross-operation UI races to Command Code for repair. The CLI authored these
+repairs and the meaningful native/browser regressions. Bounded runs reached
+their turn limits and exited before exact named resumes. Codex directly made
+two small integration repairs: matching native/frontend rejection of explicit
+null key IDs and clearer selected-choice indicators/header wording. No new
+package was introduced; existing rand moved from test-only to production
+dependencies, with the lockfile unchanged.
+
+Remaining implementation: administrator creation/adoption and sudo verification;
+existing-file/agent key selection and server-side public-key installation;
+independent candidate connections with strict key-auth proof; reviewed SSH/UFW
+transactions, backups, journals and autonomous remote rollback; resolved trusted
+installer manifests and stack/tool installation adapters; full disposable-VM
+recovery validation. The wizard and local key vault do not make a fresh VPS
+provisioning workflow complete. All server-changing setup gates remain closed.
+
+Final independent key-slice verification: check/build, Rust format/check/strict
+all-target Clippy, 54 frontend tests and 84 native tests passed (five opt-in
+server fixtures excluded). Native tests use actual temporary encrypted keys,
+correct/wrong passphrases, protected files, restart listing, backup no-overwrite
+and an aborted caller while the worker continues. Browser tests exercise
+StrictMode, transient secrets, selection persistence, busy operations, backup
+success/cancel/failure and discovery after leaving a pending generation.
+
+The full 64-scenario remote workspace browser run passed 63; the existing
+resource-tooltip case intermittently failed to show its CPU tooltip. Without
+changing that test or its implementation, it passed twice in isolation alongside
+both new key-flow scenarios (six successful reruns). This is not a claim of one
+clean 64/64 run. Desktop/narrow screenshots were inspected. Codex also disabled
+creation when the vault listing is unavailable, with a focused browser check.
+No important-VPS contact, server mutation or native WebKit certification occurred.
+All task-owned Command Code processes exited; saved chats do not need idle CLIs.

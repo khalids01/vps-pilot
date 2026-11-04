@@ -32,6 +32,8 @@ test.beforeEach(async ({ page }) => {
     const fileReviews=new Map<string,any>();
     const directories=new Set(profiles.flatMap(p=>["/home/tester/assets","/home/tester/.config"].map(path=>p.id+":"+path)));
     for(const p of profiles)remoteFiles.set(p.id+":/home/tester/.env",{content:"fixture-only",revision:"1"});
+    const storedSetupKeys=()=>{try{const value=JSON.parse(localStorage.getItem("__fixture_setup_keys")??"[]");return Array.isArray(value)?value:[];}catch{return [];}};
+    const saveSetupKeys=(keys:any[])=>localStorage.setItem("__fixture_setup_keys",JSON.stringify(keys));
     const operationReviews=new Map<string,any>();
     let pendingOperation:((value:any)=>void)|null=null;
     let webState="running";
@@ -150,6 +152,35 @@ test.beforeEach(async ({ page }) => {
           if (cmd === "app_apply_zoom") {
             (window as any).__appliedZoom = args.zoomPercent;
             return;
+          }
+          if (cmd === "app_setup_keys_list") {
+            if ((window as any).__keyListFailure) throw "Fixture local key vault is unavailable";
+            const fixture=()=>({keys:storedSetupKeys(),issues:(window as any).__keyIssues??[],storagePath:"/fixture/setup-keys",truncated:false});
+            if ((window as any).__holdKeyList) return new Promise(resolve=>{(window as any).__releaseKeyList=()=>resolve(fixture());});
+            return fixture();
+          }
+          if (cmd === "app_setup_key_generate") {
+            if ((window as any).__keyGenerateFailure) throw "Fixture local key generation failed";
+            const passphrase=typeof args.passphrase==="string"?args.passphrase:"";
+            const bytes=new TextEncoder().encode(passphrase).length;
+            if(bytes<12||bytes>4096)throw "Use a passphrase between 12 and 4096 bytes.";
+            const build=()=>{
+              const keyId=crypto.randomUUID();
+              const key={keyId,fingerprint:`SHA256:fixture${keyId.slice(0,8)}`,algorithm:"ssh-ed25519",encrypted:true,path:`/fixture/setup-keys/${keyId}`};
+              const keys=storedSetupKeys();keys.push(key);saveSetupKeys(keys);
+              return key;
+            };
+            if((window as any).__holdKeyGenerate)return new Promise(resolve=>{(window as any).__releaseKeyGenerate=()=>resolve(build());});
+            return build();
+          }
+          if (cmd === "app_setup_key_export") {
+            if ((window as any).__keyExportFailure) throw "Fixture encrypted key backup failed";
+            if ((window as any).__keyExportCancel) return {status:"canceled",path:null};
+            const key=storedSetupKeys().find((item:any)=>item.keyId===args.keyId);
+            if(!key)throw "Selected local key is unavailable.";
+            const result={status:"exported",path:`/fixture/backups/${key.keyId}.key`};
+            if((window as any).__holdKeyExport)return new Promise(resolve=>{(window as any).__releaseKeyExport=()=>resolve(result);});
+            return result;
           }
           if(cmd==="ssh_files_list"){
             const path=args.path;
@@ -2135,7 +2166,7 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   const remoteCalls=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_configuration_snapshot","ssh_connect","ssh_inspection_run","ssh_action_execute"].includes(call.cmd)));
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await expect(setup.getByRole("complementary",{name:"Setup preview"})).toContainText("Applying changes is unavailable until access recovery is ready.");
+  await expect(setup.getByRole("complementary",{name:"Setup preview"})).toContainText("server changes remain unavailable until access recovery is ready.");
   await expect(setup.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
   expect(await saves()).toBe(0);
   expect(await remoteCalls()).toHaveLength(0);
@@ -2277,4 +2308,177 @@ test("legacy localStorage Quick Setup drafts hydrate as invalid without import o
     expect(await page.evaluate(k=>Object.hasOwn(JSON.parse(localStorage.getItem("__fixture_documents")??"{}"),k),draftKey)).toBe(false);
     expect(await page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,draftKey)).toBe(0);
   }
+});
+
+test("Quick Setup creates and selects a local encrypted key without SSH actions",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const passphrase="fixture passphrase only";
+  const remoteCalls=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_configuration_snapshot","ssh_connect","ssh_inspection_run","ssh_action_execute","ssh_terminal_open"].includes(call.cmd)));
+  const openStep3=async()=>{
+    await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+    const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+    await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+    await expect(setup.getByRole("button",{name:"Step 3: SSH key",exact:true})).toHaveAttribute("aria-current","step");
+    return setup;
+  };
+  const setup=await openStep3();
+  expect((await remoteCalls())).toHaveLength(0);
+  await setup.getByRole("button",{name:/Generate a new key/}).click();
+  await expect(setup.getByText("No generated keys are stored in this app yet.")).toBeVisible();
+  const passfield=setup.getByLabel("Passphrase",{exact:true});
+  const confirm=setup.getByLabel("Confirm passphrase",{exact:true});
+  await expect(passfield).toHaveAttribute("type","password");
+  await expect(passfield).toHaveAttribute("autocomplete","new-password");
+  await expect(confirm).toHaveAttribute("type","password");
+  await passfield.fill("short");
+  await expect(setup.getByRole("alert")).toContainText("at least 12 bytes");
+  await expect(setup.getByRole("button",{name:"Create encrypted key",exact:true})).toBeDisabled();
+  await passfield.fill(passphrase);
+  await confirm.fill("mismatch phrase");
+  await expect(setup.getByRole("alert")).toContainText("do not match");
+  await expect(setup.getByRole("button",{name:"Create encrypted key",exact:true})).toBeDisabled();
+  await confirm.fill(passphrase);
+  await setup.getByRole("button",{name:"Create encrypted key",exact:true}).click();
+  const selectedCard=setup.getByRole("group",{name:"Selected local key"});
+  await expect(selectedCard).toBeVisible();
+  await expect(selectedCard.getByText(/SHA256:fixture/)).toBeVisible();
+  await expect(passfield).toHaveValue("");
+  await expect(confirm).toHaveValue("");
+  await expect(selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true})).toBeVisible();
+  await page.clock.fastForward(300);
+  const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
+  expect(stored.sshKey.strategy).toBe("generate");
+  expect(stored.sshKey.generatedKeyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  expect(JSON.stringify(stored)).not.toMatch(/passphrase|password|fixture passphrase only/i);
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(passphrase);
+  expect(await page.evaluate(()=>JSON.stringify((window as any).__calls))).not.toContain(passphrase);
+  expect(await remoteCalls()).toHaveLength(0);
+  await expect(selectedCard.getByText(/not installed on a server/i)).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-keys-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-keys-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+
+  await page.reload();
+  const reloaded=await openStep3();
+  const reloadedSelected=reloaded.getByRole("group",{name:"Selected local key"});
+  await expect(reloadedSelected).toBeVisible();
+  await expect(reloadedSelected.getByText(/SHA256:fixture/)).toBeVisible();
+  const listCallsAfterReload=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="app_setup_keys_list").length);
+  expect(listCallsAfterReload).toBeGreaterThan(0);
+  expect(await remoteCalls()).toHaveLength(0);
+
+  await page.evaluate(k=>{
+    const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+    docs[k]="{not-json";
+    localStorage.setItem("__fixture_documents",JSON.stringify(docs));
+  },draftKey);
+  await page.reload();
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const invalid=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(invalid.getByRole("complementary",{name:"Saved draft cannot be used"})).toBeVisible();
+  await invalid.getByRole("button",{name:"Reset draft",exact:true}).click();
+  const afterReset=await openStep3();
+  await afterReset.getByRole("button",{name:/Generate a new key/}).click();
+  await expect(afterReset.getByText(/SHA256:fixture/).first()).toBeVisible();
+  expect(await remoteCalls()).toHaveLength(0);
+  await expect(afterReset.getByRole("button",{name:"Create encrypted key",exact:true})).toBeVisible();
+});
+
+test("Quick Setup key failures and backup outcomes preserve selection without leaking secrets",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const passphrase="another fixture passphrase";
+  const activity=()=>setup.getByRole("status",{name:"Key activity"});
+  const operationError=()=>setup.getByRole("alert",{name:"Key operation error"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await setup.getByRole("button",{name:/Generate a new key/}).click();
+  const create=setup.getByRole("button",{name:"Create encrypted key",exact:true});
+  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await create.click();
+  const selectedCard=setup.getByRole("group",{name:"Selected local key"});
+  await expect(selectedCard).toBeVisible();
+  const selectedFingerprint=await selectedCard.getByText(/SHA256:fixture/).textContent();
+  await page.clock.fastForward(300);
+  const selectedKeyId=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]).sshKey.generatedKeyId,draftKey);
+  expect(selectedKeyId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+  const exportCalls=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="app_setup_key_export").length);
+  const callsBeforeHold=await exportCalls();
+  await page.evaluate(()=>{(window as any).__holdKeyExport=true;});
+  await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Saving backup…",exact:true})).toBeVisible();
+  await expect(setup.getByRole("button",{name:"Create encrypted key",exact:true})).toBeDisabled();
+  await expect(setup.getByRole("button",{name:"Reload keys",exact:true})).toBeDisabled();
+  await expect(setup.getByRole("button",{name:/Select key SHA256/}).first()).toBeDisabled();
+  expect(await exportCalls()).toBe(callsBeforeHold+1);
+  await page.evaluate(()=>{(window as any).__releaseKeyExport?.();(window as any).__holdKeyExport=false;});
+  await expect(activity()).toContainText("/fixture/backups/");
+
+  await page.evaluate(()=>{(window as any).__keyExportCancel=true;});
+  await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
+  await expect(activity()).toContainText("Backup canceled");
+  await page.evaluate(()=>{(window as any).__keyExportCancel=false;(window as any).__keyExportFailure=true;});
+  await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
+  await expect(operationError()).toContainText("backup failed");
+  await expect(selectedCard.getByText(selectedFingerprint??"")).toBeVisible();
+  await page.evaluate(()=>{(window as any).__keyExportFailure=false;});
+  await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
+  await expect(activity()).toContainText("/fixture/backups/");
+
+  await page.evaluate(()=>{(window as any).__keyGenerateFailure=true;});
+  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await create.click();
+  await expect(operationError()).toContainText("existing key selection was preserved");
+  await expect(setup.getByLabel("Passphrase",{exact:true})).toHaveValue("");
+  await expect(selectedCard).toBeVisible();
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(passphrase);
+
+  await page.evaluate(()=>{(window as any).__keyGenerateFailure=false;(window as any).__holdKeyGenerate=true;});
+  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await create.click();
+  await expect(setup.getByRole("button",{name:"Creating encrypted key…",exact:true})).toBeVisible();
+  await expect(setup.getByLabel("Passphrase",{exact:true})).toHaveValue("");
+  await expect(setup.getByLabel("Confirm passphrase",{exact:true})).toHaveValue("");
+  await expect(selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true})).toBeDisabled();
+  await expect(setup.getByRole("button",{name:"Reload keys",exact:true})).toBeDisabled();
+  await setup.getByRole("button",{name:"Back",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Step 2: Administrator",exact:true})).toHaveAttribute("aria-current","step");
+  await page.evaluate(()=>{(window as any).__releaseKeyGenerate?.();(window as any).__holdKeyGenerate=false;});
+  await page.clock.fastForward(300);
+  const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
+  expect(stored.step).toBe(2);
+  expect(stored.sshKey.generatedKeyId).toBe(selectedKeyId);
+  expect(await setup.getByRole("alert")).toHaveCount(0);
+
+  await page.reload();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const afterReload=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await afterReload.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await afterReload.getByRole("button",{name:/Generate a new key/}).click();
+  const reloadedCard=afterReload.getByRole("group",{name:"Selected local key"});
+  await expect(reloadedCard).toBeVisible();
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem("__fixture_setup_keys")??"[]").length)).toBeGreaterThanOrEqual(2);
+
+  await page.evaluate(()=>{(window as any).__keyListFailure=true;});
+  await afterReload.getByRole("button",{name:"Reload keys",exact:true}).click();
+  await expect(afterReload.getByRole("alert",{name:"Local key list error"})).toContainText("local key vault is unavailable");
+  await afterReload.getByLabel("Passphrase",{exact:true}).fill(passphrase);
+  await afterReload.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await expect(afterReload.getByRole("button",{name:"Create encrypted key",exact:true})).toBeDisabled();
+  await expect(afterReload.getByText("No generated keys are stored in this app yet.")).toHaveCount(0);
+  await page.evaluate(()=>{(window as any).__keyListFailure=false;});
+  await afterReload.getByRole("button",{name:"Retry key list",exact:true}).click();
+  await expect(afterReload.getByRole("button",{name:"Create encrypted key",exact:true})).toBeEnabled();
+  await expect(reloadedCard).toBeVisible();
+  await expect(reloadedCard.getByText(/SHA256:fixture/)).toBeVisible();
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(passphrase);
 });

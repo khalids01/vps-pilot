@@ -1,3 +1,4 @@
+import { Check } from "lucide-react";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { ConfigurationNotice } from "@/components/configuration-status";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import {
   quickSetupHerdr,
   quickSetupSourcePolicy,
 } from "./quick-setup-catalog";
+import { QuickSetupKeyManager } from "./quick-setup-keys";
 import {
   defaultQuickSetupDraft,
   parseQuickSetupPort,
@@ -46,7 +48,7 @@ const keyStrategyLabels: Record<QuickSetupKeyStrategy, string> = {
 const keyStrategyDescriptions: Record<QuickSetupKeyStrategy, string> = {
   existing: "Reference a protected local key file; no key material is copied.",
   generate:
-    "Plan a future generated key. No key is created, stored or backed up here.",
+    "Create an encrypted Ed25519 key in this app's local key vault. Creating it does not install it on a server or verify login.",
   agent:
     "Use a key available through the local SSH agent. Agent keys may not be exportable.",
 };
@@ -81,6 +83,12 @@ const editorDescriptions: Record<QuickSetupEditorChoice, string> = {
     "Latest compatible stable official Neovim release plus the official LazyVim starter at a recorded revision.",
 };
 
+function keySelectionSummary(draft: QuickSetupDraft) {
+  if (draft.sshKey.strategy === "generate" && draft.sshKey.generatedKeyId)
+    return "Encrypted key selected locally · not installed or verified";
+  return keyStrategyLabels[draft.sshKey.strategy];
+}
+
 function QuickSetupHeader({
   profile,
   connected,
@@ -93,7 +101,7 @@ function QuickSetupHeader({
       <div className="min-w-0 max-w-3xl">
         <h1 className="text-xl font-semibold tracking-tight">Quick Setup</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Plan a fresh VPS without connecting, installing or changing anything.
+          Prepare secure access, application stacks and tools for this VPS.
         </p>
       </div>
       <div className="min-w-0 text-xs leading-relaxed text-muted-foreground sm:text-right">
@@ -154,7 +162,7 @@ function ChoiceButton({
       variant={selected ? "secondary" : "outline"}
       aria-pressed={selected}
       onClick={onClick}
-      className="h-auto min-h-12 w-full justify-start whitespace-normal text-left"
+      className="h-auto min-h-12 w-full justify-start whitespace-normal text-left aria-pressed:border-primary aria-pressed:ring-1 aria-pressed:ring-primary/40"
     >
       <span className="flex min-w-0 flex-col gap-1">
         <span className="font-medium">{children}</span>
@@ -164,6 +172,9 @@ function ChoiceButton({
           </span>
         )}
       </span>
+      {selected && (
+        <Check aria-hidden="true" className="ml-auto size-4 text-primary" />
+      )}
     </Button>
   );
 }
@@ -433,7 +444,9 @@ export function QuickSetupWorkspace({
     stepContent = (
       <StepSection step={3} title="SSH key">
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Choose a key strategy. No key is generated, entered or stored here.
+          Choose a key strategy. Generated keys are created and encrypted
+          locally; installing a public key and verifying login remain
+          unavailable.
         </p>
         <fieldset aria-label="SSH key strategy" className="grid min-w-0 gap-2">
           {(["existing", "generate", "agent"] as const).map((strategy) => (
@@ -443,7 +456,16 @@ export function QuickSetupWorkspace({
               onClick={() =>
                 update((current) => ({
                   ...current,
-                  sshKey: { strategy },
+                  sshKey:
+                    strategy === "generate"
+                      ? {
+                          strategy,
+                          ...(current.sshKey.strategy === "generate" &&
+                          current.sshKey.generatedKeyId
+                            ? { generatedKeyId: current.sshKey.generatedKeyId }
+                            : {}),
+                        }
+                      : { strategy },
                 }))
               }
               description={keyStrategyDescriptions[strategy]}
@@ -452,10 +474,22 @@ export function QuickSetupWorkspace({
             </ChoiceButton>
           ))}
         </fieldset>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Private-key contents, passwords and passphrases are never entered
-          here.
-        </p>
+        {draft.sshKey.strategy === "generate" ? (
+          <QuickSetupKeyManager
+            selectedKeyId={draft.sshKey.generatedKeyId}
+            onSelectKey={(keyId) =>
+              update((current) => ({
+                ...current,
+                sshKey: { strategy: "generate", generatedKeyId: keyId },
+              }))
+            }
+          />
+        ) : (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Private-key contents are never entered here. Passphrases are entered
+            only in the local key creation form and are never saved.
+          </p>
+        )}
       </StepSection>
     );
   } else if (draft.step === 4) {
@@ -764,7 +798,13 @@ export function QuickSetupWorkspace({
             {adminModeLabels[draft.administrator.mode]}
           </SummaryCard>
           <SummaryCard title="SSH key">
-            {keyStrategyLabels[draft.sshKey.strategy]}
+            {keySelectionSummary(draft)}
+            {draft.sshKey.generatedKeyId && (
+              <p className="mt-1 text-xs">
+                The selected key exists only in this app's local vault. No
+                public key has been installed and no login has been verified.
+              </p>
+            )}
           </SummaryCard>
           <SummaryCard title="SSH and firewall">
             Port {draft.access.port} · {ufwLabels[draft.access.ufw]}
@@ -828,8 +868,9 @@ export function QuickSetupWorkspace({
     <section ref={page} aria-label="Quick Setup" className="space-y-6">
       <QuickSetupHeader profile={profile} connected={connected} />
       <ConfigurationNotice title="Setup preview">
-        Choices are saved on this device. Applying changes is unavailable until
-        access recovery is ready.
+        Choices are saved on this device. Generated SSH keys are created
+        locally; server changes remain unavailable until access recovery is
+        ready.
       </ConfigurationNotice>
       {noDraftStorage && (
         <p role="status" className="text-xs text-warning">
@@ -920,7 +961,7 @@ export function QuickSetupWorkspace({
             </div>
             <div>
               <dt className="text-muted-foreground">SSH key</dt>
-              <dd>{keyStrategyLabels[draft.sshKey.strategy]}</dd>
+              <dd>{keySelectionSummary(draft)}</dd>
             </div>
             <div>
               <dt className="text-muted-foreground">Port / firewall</dt>

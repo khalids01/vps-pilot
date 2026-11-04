@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "setup-keys"
+description = "App-owned local encrypted SSH key vault. Bounded listing, strict Ed25519 generation with transient passphrases, and user-initiated backup export through a native save dialog. No arbitrary local paths, private-key contents, passphrase persistence, or SSH actions."
+commands.allow = ["app_setup_keys_list", "app_setup_key_generate", "app_setup_key_export"]

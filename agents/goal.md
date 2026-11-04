@@ -368,3 +368,12 @@ reviewed version/source. Neovim uses official latest compatible stable releases,
 with optional LazyVim; privileged editing should preserve user configuration
 through a validated sudoedit workflow rather than broad environment inheritance.
 Persist only validated non-secret drafts/progress, never key material or secrets.
+
+Local generated-key storage is the explicit exception to the general no-key-
+content persistence rule: the approved wizard may create passphrase-encrypted
+OpenSSH key files in its protected app-owned Unix key vault and export encrypted
+copies only through a user-chosen native save destination. Never put key bytes
+or passphrases in SQLite, preferences, logs, history or CLI prompts. Drafts store
+only opaque key IDs. No overwrite or deletion operation is authorized for keys.
+Key creation/selection is not public-key installation or verified server login.
+Windows vault generation stays unavailable until native ACL protections exist.

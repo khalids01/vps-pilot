@@ -28,6 +28,6 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 russh-sftp = "3"
 sha2 = "0.10"
 zip = { version = "9", default-features = false }
-[dev-dependencies]
 rand = "0.10"
+[dev-dependencies]
 tokio-stream = { version = "0.1.17", features = ["net"] }

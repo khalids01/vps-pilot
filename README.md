@@ -35,6 +35,27 @@ it. Both use port 1430.
 Run `bun run tauri dev` from this repository for real SSH testing. Browser preview
 has no native SSH bridge; automated browser scenarios supply their own fixtures.
 
+Quick Setup now opens an eight-step wizard. Choose an administrator, key strategy,
+SSH/firewall preferences, application stack, editor and runtimes, then inspect the
+final summary. Draft choices are saved per server across restarts; they do not
+verify access or authorize provisioning. Invalid username/port fields block
+forward navigation. A corrupt/newer saved draft requires an explicit reset.
+Dokploy requires Docker; JavaScript/PM2 requires NVM/Node; LazyVim adds its shared
+dependencies once. Server provisioning remains unavailable until its recovery
+and installation adapters are validated. See [the provisioning plan](agents/quick-setup.md).
+
+On Unix desktops, **SSH key → Generate a new key** creates an encrypted Ed25519
+key locally. Enter and confirm a passphrase, then choose **Create encrypted key**.
+The private key stays in the app's protected `setup-keys` directory; the setup
+draft stores only its ID. Use **Backup encrypted key** to choose a separate
+backup destination. Existing destination files are never overwritten. Keep your
+passphrase separately: the app does not save it and cannot recover it.
+**Reload keys** discovers stored keys after a restart, including a generation
+that finished after leaving the step. Resetting a draft does not delete keys.
+This vault is unavailable on Windows until native ACL support is implemented.
+Creating or selecting a local key does not install it on the server or prove
+SSH login works. Fully restart the desktop development app after native changes.
+
 1. Open **Settings → Appearance**, choose Tokyo Night, One Dark Pro or GitHub
    Dark, then check menus, inputs, an open terminal and an editor. Fully quit and
    relaunch: the selected theme should return. Profiles and preferences should
@@ -43,8 +64,9 @@ has no native SSH bridge; automated browser scenarios supply their own fixtures.
    For the widest current detection coverage, use Debian/Ubuntu with Python 3
    already installed. Missing tools or permissions should produce qualified
    evidence, without installing anything.
-3. Open **Quick Setup**. Before pressing **Inspect server**, it should show no
-   inspection. Click once, then use **View details** beside a category. Check
+3. Open **Quick Setup**, then **Open server inspection**. Before pressing
+   **Inspect server**, it should show no inspection. Click once, then use
+   **View details** beside a category. Check
    its observation time, grouped package versions/ownership, cached update
    information and security units in the side panel. Escape closes the panel;
    related tool links navigate without running another inspection.

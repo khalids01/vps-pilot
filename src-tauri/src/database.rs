@@ -184,6 +184,15 @@ struct QuickSetupAdministrator {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct QuickSetupSshKey {
     strategy: String,
+    #[serde(default, deserialize_with = "optional_generated_key_id")]
+    generated_key_id: Option<String>,
+}
+fn optional_generated_key_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Absent is valid for older drafts; a present reference must be a string.
+    String::deserialize(deserializer).map(Some)
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -256,11 +265,21 @@ fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
         }
         _ => false,
     };
+    let generated_key_id_valid = match &draft.ssh_key.generated_key_id {
+        None => true,
+        Some(id) => {
+            draft.ssh_key.strategy == "generate"
+                && uuid::Uuid::parse_str(id)
+                    .map(|parsed| parsed.to_string() == *id)
+                    .unwrap_or(false)
+        }
+    };
     if draft.version != 1
         || !(1..=8).contains(&draft.step)
         || !["new", "existing"].contains(&draft.administrator.mode.as_str())
         || !quick_setup_username_valid(&draft.administrator.username)
         || !["existing", "generate", "agent"].contains(&draft.ssh_key.strategy.as_str())
+        || !generated_key_id_valid
         || draft.access.port == 0
         || !["configure", "keep-current"].contains(&draft.access.ufw.as_str())
         || !stack_valid
@@ -681,6 +700,41 @@ mod tests {
             Some("preserved profile and host pin")
         );
     }
+    #[test]
+    fn quick_setup_generated_key_reference_is_optional_opaque_and_strategy_bound() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
+        let mut draft = valid_quick_setup_draft();
+        validate_document(&key, &draft.to_string()).unwrap();
+        let generated = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        draft["sshKey"] =
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": generated });
+        validate_document(&key, &draft.to_string()).unwrap();
+        let serialized = draft.to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let db = LocalDatabase::open(&dir.path().join("app.sqlite3")).unwrap();
+        db.write(&key, &serialized).unwrap();
+        assert_eq!(db.read(&key).unwrap(), Some(serialized));
+        for invalid in [
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": null }),
+            serde_json::json!({ "strategy": "existing", "generatedKeyId": null }),
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": "not-a-uuid" }),
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": generated.to_uppercase() }),
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": "../escape" }),
+            serde_json::json!({ "strategy": "existing", "generatedKeyId": generated }),
+            serde_json::json!({ "strategy": "agent", "generatedKeyId": generated }),
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": generated, "path": "/tmp/key" }),
+            serde_json::json!({ "strategy": "generate", "generatedKeyId": generated, "passphrase": "never save" }),
+        ] {
+            let mut rejected = valid_quick_setup_draft();
+            rejected["sshKey"] = invalid.clone();
+            assert!(
+                validate_document(&key, &rejected.to_string()).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
     #[test]
     fn quick_setup_draft_rejects_unexpected_secrets_freeform_fields_and_versions() {
         let id = "11111111-1111-4111-8111-111111111111";

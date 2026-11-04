@@ -64,6 +64,36 @@ test("quick setup sanitizer accepts only typed, validated draft choices", () => 
     expect(sanitizeQuickSetupDraft(value)).not.toBeNull();
 });
 
+test("generated key references are optional, opaque and strategy-bound", () => {
+  const generatedKeyId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const withKey = requireDraft({
+    ...clone(),
+    sshKey: { strategy: "generate", generatedKeyId },
+  });
+  expect(withKey.sshKey).toEqual({ strategy: "generate", generatedKeyId });
+  expect(sanitizeQuickSetupDraft(clone())?.sshKey).toEqual({
+    strategy: "existing",
+  });
+  const withoutKey = requireDraft({
+    ...clone(),
+    sshKey: { strategy: "generate" },
+  });
+  expect(withoutKey.sshKey).toEqual({ strategy: "generate" });
+
+  for (const value of [
+    { strategy: "generate", generatedKeyId: null },
+    { strategy: "existing", generatedKeyId: null },
+    { strategy: "generate", generatedKeyId: "not-a-uuid" },
+    { strategy: "generate", generatedKeyId: generatedKeyId.toUpperCase() },
+    { strategy: "generate", generatedKeyId: `${generatedKeyId}/../escape` },
+    { strategy: "existing", generatedKeyId },
+    { strategy: "agent", generatedKeyId },
+    { strategy: "generate", generatedKeyId, path: "/tmp/key" },
+    { strategy: "generate", generatedKeyId, passphrase: "never persist" },
+  ])
+    expect(sanitizeQuickSetupDraft({ ...clone(), sshKey: value })).toBeNull();
+});
+
 test("quick setup sanitizer rejects unknown versions, fields and secrets", () => {
   const rejected: unknown[] = [
     null,
