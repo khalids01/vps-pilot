@@ -330,3 +330,19 @@ drafts. Store the selection in the existing local SQLite settings and restore
 it before rendering the workspace on restart. Older settings lacking a theme
 retain Forest Mint and all prior preferences. Bundle palette license notices;
 no runtime theme download or VS Code extension execution is required.
+
+## Quick Setup and command console clarity — authorized 2026-11-02
+
+The user approved the proposed redesign and explicitly invoked command-code.
+Use compact Quick Setup category rows with honest detection summaries and
+Detected/Needs attention/Incomplete/Not checked labels; put detailed evidence
+and related navigation in a themed right-side panel. Show selection actions
+only when needed and keep readiness review concise, without changing native
+review/cancellation/connection guards or enabling execution.
+
+Make the command console default to readable action summaries, with exact
+commands and raw output accessible under technical details. Keep monitoring
+separate and sudo approval previews explicit. Add accessible resizing and persist
+only per-server console height/collapsed preferences in the existing local
+document store; commands/output/evidence remain memory only. Navigation, panel
+changes and detail opening must preserve sessions and never trigger inspections.

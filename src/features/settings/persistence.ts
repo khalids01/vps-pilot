@@ -44,11 +44,19 @@ export function writePreference(key: string, value: string) {
   else timer = setTimeout(() => void flushPreferences(), 150);
 }
 export async function hydratePreferences(documents: Record<string, string>) {
-  const [{ sanitizePreferences, workspacePreferenceKey }, { sanitizeLayout }] =
-    await Promise.all([
-      import("../workspace/preferences"),
-      import("../terminal/layout"),
-    ]);
+  const [
+    { sanitizePreferences, workspacePreferenceKey },
+    { sanitizeLayout },
+    {
+      commandConsolePreferenceKey,
+      commandConsolePreferencePrefix,
+      sanitizeCommandConsolePreference,
+    },
+  ] = await Promise.all([
+    import("../workspace/preferences"),
+    import("../terminal/layout"),
+    import("../ssh/command-console-preferences"),
+  ]);
   const clean = (key: string, raw: string): string | null => {
     if (raw.length > 128000) return null;
     try {
@@ -74,6 +82,14 @@ export async function hydratePreferences(documents: Record<string, string>) {
       if (key === workspacePreferenceKey) {
         const value = sanitizePreferences(JSON.parse(raw));
         return value ? JSON.stringify(value) : null;
+      }
+      if (key.startsWith(commandConsolePreferencePrefix)) {
+        const serverId = key.slice(commandConsolePreferencePrefix.length);
+        if (commandConsolePreferenceKey(serverId) !== key) return null;
+        const value = sanitizeCommandConsolePreference(JSON.parse(raw));
+        if (!value) return null;
+        const serialized = JSON.stringify(value);
+        return serialized.length <= 256 ? serialized : null;
       }
       const match = /^vps-pilot:(sample|remote)-terminal:v1:(.+)$/.exec(key);
       if (!match) return null;

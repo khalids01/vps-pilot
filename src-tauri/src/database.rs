@@ -186,6 +186,9 @@ fn ui_key(key: &str) -> bool {
         || key
             .strip_prefix("vps-pilot:remote-terminal:v1:")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || key
+            .strip_prefix("vps-pilot:command-console:v1:")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -229,6 +232,14 @@ fn validate_fleet(value: &serde_json::Value) -> Result<(), String> {
     }
     Ok(())
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConsolePreference {
+    version: u8,
+    #[serde(rename = "expanded")]
+    _expanded: bool,
+    height: u16,
+}
 fn validate_document(key: &str, value: &str) -> Result<(), String> {
     if !ui_key(key) || value.len() > 128_000 {
         return Err("Unsupported saved preference.".into());
@@ -237,6 +248,16 @@ fn validate_document(key: &str, value: &str) -> Result<(), String> {
         serde_json::from_str(value).map_err(|_| "Invalid saved preference.")?;
     if key == "vps-pilot:fleet:v1" {
         validate_fleet(&parsed)?;
+    }
+    if let Some(id) = key.strip_prefix("vps-pilot:command-console:v1:") {
+        if uuid::Uuid::parse_str(id).is_err() || value.len() > 256 {
+            return Err("Invalid command console preference.".into());
+        }
+        let preference: ConsolePreference = serde_json::from_value(parsed.clone())
+            .map_err(|_| "Invalid command console preference.")?;
+        if preference.version != 1 || !(144..=600).contains(&preference.height) {
+            return Err("Invalid command console preference.".into());
+        }
     }
     fn safe(value: &serde_json::Value, depth: usize) -> bool {
         if depth > 48 {
@@ -422,6 +443,41 @@ mod tests {
                 .unwrap(),
             "preserved"
         );
+    }
+    #[test]
+    fn command_console_preferences_are_strict_bounded_and_persist() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("vps-pilot:command-console:v1:{id}");
+        let value = r#"{"version":1,"expanded":true,"height":280}"#;
+        validate_document(&key, value).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite3");
+        let db = LocalDatabase::open(&path).unwrap();
+        db.write("ssh_profiles", "preserved profile").unwrap();
+        db.write(&key, value).unwrap();
+        drop(db);
+        let db = LocalDatabase::open(&path).unwrap();
+        assert_eq!(db.read(&key).unwrap().as_deref(), Some(value));
+        assert_eq!(
+            db.read("ssh_profiles").unwrap().as_deref(),
+            Some("preserved profile")
+        );
+        for rejected in [
+            r#"{"version":2,"expanded":true,"height":280}"#,
+            r#"{"version":1,"expanded":"yes","height":280}"#,
+            r#"{"version":1,"expanded":true,"height":143}"#,
+            r#"{"version":1,"expanded":true,"height":601}"#,
+            r#"{"version":1,"expanded":true,"height":280,"command":"not stored"}"#,
+            r#"{"version":1,"expanded":true,"height":280,"output":"not stored"}"#,
+        ] {
+            assert!(validate_document(&key, rejected).is_err(), "{rejected}");
+        }
+        let oversized = format!(
+            r#"{{ "version": 1, "expanded": true, "height": 280 }}{}"#,
+            " ".repeat(300)
+        );
+        assert!(validate_document(&key, &oversized).is_err());
+        assert!(validate_document("vps-pilot:command-console:v1:not-a-uuid", value).is_err());
     }
     #[test]
     fn fleet_metadata_is_bounded_strict_and_persists_without_touching_profiles() {

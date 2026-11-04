@@ -133,6 +133,10 @@ export function ConfigurationProvider({
           output: result.sections
             .map((section) => `${section.title}: ${section.state}`)
             .join("\n"),
+          summary: result.sections.slice(0, 8).map((section) => ({
+            title: section.title,
+            state: section.state,
+          })),
           code: 0,
         });
         return result;

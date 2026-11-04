@@ -15,6 +15,21 @@ const states = {
     icon: TriangleAlert,
     style: "text-warning",
   },
+  unchecked: {
+    label: "Not checked",
+    icon: CircleDashed,
+    style: "text-info",
+  },
+  incomplete: {
+    label: "Incomplete",
+    icon: TriangleAlert,
+    style: "text-warning",
+  },
+  detected: {
+    label: "Detected",
+    icon: CircleCheck,
+    style: "text-success",
+  },
 } as const;
 
 /** Status is supplied by typed evidence, never inferred from display text. */

@@ -44,8 +44,10 @@ has no native SSH bridge; automated browser scenarios supply their own fixtures.
    already installed. Missing tools or permissions should produce qualified
    evidence, without installing anything.
 3. Open **Quick Setup**. Before pressing **Inspect server**, it should show no
-   inspection. Click once, then expand the categories. Check the observation time,
-   package versions/ownership, cached update information and security units.
+   inspection. Click once, then use **View details** beside a category. Check
+   its observation time, grouped package versions/ownership, cached update
+   information and security units in the side panel. Escape closes the panel;
+   related tool links navigate without running another inspection.
    Missing update metadata means unknown, rather than zero updates. Selection
    review summarizes evidence; it does not apply configuration changes.
 4. Visit **SSH Access** and **Firewall**. They should reuse that snapshot. SSH
@@ -139,10 +141,15 @@ use resource cards, usage bars, and searchable/sortable tables with pagination.
 Permission failures and incomplete results are shown beside the affected section.
 
 A persistent **Command console** bar sits at the bottom of every real VPS
-workspace. Expand it for exact commands, streamed raw output, exit status,
-duration and cancellation. Its recent history follows the selected server across
-tools; background monitoring has a separate group. History and output remain in
-memory only and are cleared when the workspace closes or the app restarts.
+workspace. Expand it for action status, readable inspection summaries, duration
+and cancellation. **Technical details** reveals the exact command and raw
+output. Drag the top separator to resize, or focus it and use Arrow Up/Down,
+Home or End. Height and collapsed state are saved separately for each server;
+commands and output are never saved with those preferences. Its recent history
+follows the selected server across tools; background monitoring has a separate
+group. History and output remain in memory only and are cleared when the
+workspace closes or the app restarts. Privileged approval dialogs still show
+the exact proposed command before approval.
 
 - Open Terminal on a connected real VPS, then New shell. Add tabs or split
   right/down; drag panels to group them. Rename, previous/next, maximize/restore,

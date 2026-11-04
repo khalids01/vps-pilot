@@ -54,8 +54,8 @@ test.beforeEach(async ({ page }) => {
     const configurationEvidence = (profileId: string, connectionId: string) => {
       const evidence=(id:string,title:string,values:Record<string,string>,state="ready",message:string|null=null)=>({id,title,values,state,message});
       return {profileId,connectionId,observedAt:Date.now(),snapshotId:crypto.randomUUID(),sections:[
-        evidence("system","System",{"Operating system":profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC","Cached updates":"5 updates (cached; not a current update check)","Update cache timestamp":"2026-10-30 00:00:00 UTC"}),
-        evidence("essentials","Essential software",{git:"/usr/bin/git","git package":"git 2.39.5 (installed)","git ownership":"git: /usr/bin/git",curl:"Not found",attention:"true"}),
+        evidence("system","System",{"Operating system":profileId===first?"Debian GNU/Linux 12":"Ubuntu 24.04",Hostname:"fixture-host",Timezone:"UTC","Cached updates":"5 updates (cached; not a current update check)","Update cache timestamp":"2026-10-30 00:00:00 UTC","Runtime provenance":"Unknown"}),
+        evidence("essentials","Essential software",{git:"/usr/bin/git","git package":"git 2.39.5 (installed)","git ownership":"git: /usr/bin/git",curl:"Not found","Running status":"Installation does not prove a process is running or in use",attention:"true"},"ready","Executable presence does not establish package ownership, version or trust."),
         evidence("resources","System resources",{"Memory total":"8388608 KiB","Swap total":"0 KiB"}),
         evidence("security","Security",{"Fail2ban installed":"Installed","fail2ban.service ActiveState":"active","Fail2ban jail count":"2","apt-daily-upgrade.timer ActiveState":"active","Automatic update configuration":"1 (observed setting, not proof of execution)"},"partial","Installation alone does not establish protection."),
         evidence("docker","Docker",{CLI:"/usr/bin/docker","CLI version":"Docker fixture"}),
@@ -409,6 +409,9 @@ test("restoring VPS tabs does not connect or open terminals; inspection stays se
   expect(initial.some((call: any) => ["ssh_connect", "ssh_terminal_open", "ssh_inspection_run"].includes(call.cmd))).toBe(false);
   await page.getByRole("button", { name: "Inspect", exact: true }).click();
   await page.getByRole("button", { name: "Show command console", exact: true }).click();
+  await expect(page.getByText("Technical details", { exact: true })).toBeVisible();
+  await expect(page.getByText("Exact command", { exact: true })).toBeHidden();
+  await page.getByText("Technical details", { exact: true }).click();
   await expect(page.getByText("Exact command", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: /Fixture Beta/ }).click();
   await expect(page.getByRole("navigation", { name: "Fixture Beta tools", exact: true })).toBeVisible();
@@ -526,6 +529,10 @@ test("structured overview keeps raw output in the bottom drawer and connection d
   const consolePanel = page.getByRole("region", { name: "Fixture Alpha command console" });
   await expect(consolePanel).toContainText("Overview inspection");
   await page.getByRole("button", { name: "Show command console", exact: true }).click();
+  await expect(consolePanel.getByText("Technical details", { exact: true })).toBeVisible();
+  await expect(consolePanel.getByText("uname -m", { exact: true })).toBeHidden();
+  await consolePanel.getByText("Technical details", { exact: true }).click();
+  await expect(consolePanel.getByText("uname -m", { exact: true })).toBeVisible();
   await expect(consolePanel).toContainText("uname -m");
   await expect(consolePanel).toContainText("x86_64");
   await page.getByRole("navigation", { name: "Fixture Alpha tools" }).getByRole("button", { name: "Terminal", exact: true }).click();
@@ -575,10 +582,167 @@ test("drawer can cancel running commands and coalesces monitoring separately", a
   await expect(page.getByRole("button", {name: "Monitoring (1)", exact: true})).toBeVisible();
   await page.getByRole("button", {name: "Monitoring (1)", exact: true}).click();
   await expect(page.getByRole("group", {name: "Recent commands"}).getByRole("button")).toHaveCount(1);
-  await expect(page.getByRole("region", {name: "Fixture Alpha command console"})).toContainText("exec python3");
+  const monitorConsole=page.getByRole("region", {name: "Fixture Alpha command console"});
+  await monitorConsole.getByText("Technical details", {exact: true}).click();
+  await expect(monitorConsole).toContainText("exec python3");
   await page.getByRole("button", {name: "Cancel command", exact: true}).click();
   await page.getByRole("button", {name: "Settings", exact: true}).click();
   await expect(page.getByRole("checkbox", {name: "Enable live stats automatically"})).not.toBeChecked();
+});
+
+test("command console summarizes inspections, reveals technical output on demand, and persists size per server", async ({page}, testInfo) => {
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  const consolePanel=page.getByRole("region",{name:"Fixture Alpha command console"});
+  await expect(consolePanel).toContainText("Configuration inspection");
+  const evidence=consolePanel.getByRole("list",{name:"Inspection evidence",exact:true});
+  await expect(evidence.getByRole("listitem")).toHaveCount(8);
+  await expect(evidence).toContainText("System");
+  await expect(evidence).toContainText("Listening sockets");
+  await expect(evidence).toContainText("Collected");
+  await expect(evidence).toContainText("Incomplete");
+  await expect(consolePanel.getByText("Exact command",{exact:true})).toBeHidden();
+  await expect(consolePanel.getByText("Raw output",{exact:true})).toBeHidden();
+  await page.screenshot({path:testInfo.outputPath("command-console-summary.png")});
+  await consolePanel.getByText("Technical details",{exact:true}).click();
+  await expect(consolePanel.getByText("Exact command",{exact:true})).toBeVisible();
+  await expect(consolePanel).toContainText("python3 [fixed read-only configuration probe]");
+  await expect(consolePanel.getByText("Raw output",{exact:true})).toBeVisible();
+  await expect(consolePanel).toContainText("System: ready");
+  await expect(consolePanel).toContainText("Security: partial");
+  await page.screenshot({path:testInfo.outputPath("command-console-technical.png")});
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+
+  const content=page.locator(`#command-console-${first}`);
+  const separator=consolePanel.getByRole("separator",{name:"Resize command console",exact:true});
+  await expect(separator).toHaveAttribute("aria-valuemin","144");
+  await expect(separator).toHaveAttribute("aria-valuemax","540");
+  await expect(separator).toHaveAttribute("aria-valuenow","280");
+  await separator.focus();
+  await page.keyboard.press("Home");
+  await expect(separator).toHaveAttribute("aria-valuenow","144");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(separator).toHaveAttribute("aria-valuenow","192");
+  const box=await separator.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x+box!.width/2,box!.y-80,{steps:4});
+  await page.mouse.up();
+  const dragged=Number(await separator.getAttribute("aria-valuenow"));
+  expect(dragged).toBeGreaterThan(192);
+  await expect(separator).toHaveAttribute("aria-valuenow",String(dragged));
+  expect((await content.boundingBox())?.height).toBeCloseTo(dragged,0);
+  await page.screenshot({path:testInfo.outputPath("command-console-resized.png")});
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(1);
+
+  const key=`vps-pilot:command-console:v1:${first}`;
+  await page.getByRole("button",{name:"Hide command console",exact:true}).click();
+  await page.clock.fastForward(250);
+  await expect.poll(()=>page.evaluate(k=>JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k],key)).toBeTruthy();
+  const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),key);
+  expect(stored).toEqual({version:1,expanded:false,height:dragged});
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("python3 [fixed");
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("fixturePublicFingerprint");
+  await page.reload();
+  await expect(page.getByRole("button",{name:"Show command console",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  await page.clock.fastForward(250);
+  await expect(separator).toHaveAttribute("aria-valuenow",String(dragged));
+  expect((await content.boundingBox())?.height).toBeCloseTo(dragged,0);
+
+  await page.getByRole("tab",{name:/Fixture Beta/}).click();
+  await expect(page.getByRole("button",{name:"Show command console",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  const betaSeparator=page.getByRole("region",{name:"Fixture Beta command console"}).getByRole("separator",{name:"Resize command console",exact:true});
+  await expect(betaSeparator).toHaveAttribute("aria-valuenow","280");
+  await page.getByRole("tab",{name:/Fixture Alpha/}).click();
+  await expect(page.getByRole("button",{name:"Hide command console",exact:true})).toBeVisible();
+  await expect(separator).toHaveAttribute("aria-valuenow",String(dragged));
+
+  await page.setViewportSize({width:800,height:600});
+  const panel=await consolePanel.boundingBox();
+  expect(panel && panel.y+panel.height<=600).toBe(true);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.setViewportSize({width:400,height:400});
+  await expect(separator).toHaveAttribute("aria-valuenow","240");
+  expect((await content.boundingBox())?.height).toBeCloseTo(240,0);
+  await page.setViewportSize({width:640,height:800});
+  await expect(separator).toHaveAttribute("aria-valuenow",String(dragged));
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("command-console-640.png")});
+});
+
+test("command console resizing starts from visible height while window shrink keeps the stored preference", async ({page}) => {
+  const consolePanel=page.getByRole("region",{name:"Fixture Alpha command console"});
+  const separator=consolePanel.getByRole("separator",{name:"Resize command console",exact:true});
+  const content=page.locator(`#command-console-${first}`);
+  const alphaKey=`vps-pilot:command-console:v1:${first}`;
+  const betaKey=`vps-pilot:command-console:v1:${second}`;
+  const stored=async(key:string)=>page.evaluate(k=>{
+    const raw=JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k];
+    return raw?JSON.parse(raw):null;
+  },key);
+
+  await page.setViewportSize({width:1366,height:1200});
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  await expect(separator).toHaveAttribute("aria-valuemin","144");
+  await expect(separator).toHaveAttribute("aria-valuemax","600");
+  await expect(separator).toHaveAttribute("aria-valuenow","280");
+  await separator.focus();
+  await page.keyboard.press("End");
+  await expect(separator).toHaveAttribute("aria-valuenow","600");
+  expect((await content.boundingBox())?.height).toBeCloseTo(600,0);
+  await page.clock.fastForward(250);
+  await expect.poll(async()=>(await stored(alphaKey))?.height).toBe(600);
+
+  // Shrinking the window alone keeps the stored 600 but exposes the real 360.
+  await page.setViewportSize({width:800,height:600});
+  await expect(separator).toHaveAttribute("aria-valuemax","360");
+  await expect(separator).toHaveAttribute("aria-valuenow","360");
+  expect((await content.boundingBox())?.height).toBeCloseTo(360,0);
+  expect((await stored(alphaKey))?.height).toBe(600);
+
+  await separator.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(separator).toHaveAttribute("aria-valuenow","336");
+  expect((await content.boundingBox())?.height).toBeCloseTo(336,0);
+  await page.clock.fastForward(250);
+  await expect.poll(async()=>(await stored(alphaKey))?.height).toBe(336);
+
+  await page.setViewportSize({width:1366,height:1200});
+  await expect(separator).toHaveAttribute("aria-valuenow","336");
+  await separator.focus();
+  await page.keyboard.press("End");
+  await expect(separator).toHaveAttribute("aria-valuenow","600");
+  await page.clock.fastForward(250);
+  await expect.poll(async()=>(await stored(alphaKey))?.height).toBe(600);
+
+  // A pointer drag down also starts from the visible 360, without a dead zone.
+  await page.setViewportSize({width:800,height:600});
+  await expect(separator).toHaveAttribute("aria-valuenow","360");
+  const box=await separator.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x+box!.width/2,box!.y+box!.height/2+24,{steps:2});
+  await page.mouse.up();
+  await expect(separator).toHaveAttribute("aria-valuenow","336");
+  expect((await content.boundingBox())?.height).toBeCloseTo(336,0);
+  await page.clock.fastForward(250);
+  await expect.poll(async()=>(await stored(alphaKey))?.height).toBe(336);
+
+  await page.getByRole("tab",{name:/Fixture Beta/}).click();
+  expect(await page.evaluate(k=>JSON.stringify(localStorage.getItem("__fixture_documents")??"").includes(k),betaKey)).toBe(false);
+  await page.getByRole("button",{name:"Show command console",exact:true}).click();
+  const betaSeparator=page.getByRole("region",{name:"Fixture Beta command console"}).getByRole("separator",{name:"Resize command console",exact:true});
+  await expect(betaSeparator).toHaveAttribute("aria-valuenow","280");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>["ssh_connect","ssh_terminal_open","ssh_inspection_run","ssh_configuration_snapshot"].includes(c.cmd)))).toHaveLength(0);
 });
 
 test("compact resource badges show themed tooltips and cached floating details", async ({page}, testInfo) => {
@@ -1361,10 +1525,13 @@ test("configuration pages preserve shells and never inspect or mutate on navigat
   const before=await page.evaluate(()=>(window as any).__calls.filter((c:any)=>/ssh_(terminal_open|stream_close|inspection_run|action_execute|connect)/.test(c.cmd)));
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await expect(setup.getByText("Not inspected",{exact:true})).toHaveCount(6);
+  await expect(setup.getByText("Not checked",{exact:true})).toHaveCount(6);
   await expect(setup.getByRole("button",{name:"Inspect server",exact:true})).toBeEnabled();
   await page.screenshot({path:testInfo.outputPath("quick-setup.png")});
-  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await setup.getByRole("button",{name:"View Users and SSH details",exact:true}).click();
+  const details=page.getByRole("dialog",{name:"Users and SSH details",exact:true});
+  await details.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await expect(details).toHaveCount(0);
   const access=page.getByRole("region",{name:"SSH Access",exact:true});
   await expect(access.getByText("SSH server policy",{exact:true})).toBeVisible();
   await expect(access.getByRole("region",{name:"SSH server policy",exact:true}).getByText("Not inspected",{exact:true})).toBeVisible();
@@ -1494,7 +1661,7 @@ test("configuration inspection is explicit, shared across tools and retained acr
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_configuration_snapshot"))).toHaveLength(0);
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
-  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByText("Incomplete",{exact:true})).toHaveCount(2);
   await expect(setup.getByText("Needs attention",{exact:true})).toHaveCount(1);
   await setup.getByRole("checkbox",{name:"Select Essential software",exact:true}).check();
   await setup.getByRole("checkbox",{name:"Select Users and SSH",exact:true}).check();
@@ -1504,7 +1671,10 @@ test("configuration inspection is explicit, shared across tools and retained acr
   await expect(review).toContainText("Execution is unavailable");
   await review.getByRole("button",{name:"Close review",exact:true}).click();
   await page.screenshot({path:testInfo.outputPath("quick-setup-inspected.png")});
-  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await setup.getByRole("button",{name:"View Users and SSH details",exact:true}).click();
+  const details=page.getByRole("dialog",{name:"Users and SSH details",exact:true});
+  await details.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await expect(details).toHaveCount(0);
   const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
   await expect(ssh).toContainText("Not independently verified");
   await expect(ssh).toContainText("Default invocation only");
@@ -1550,23 +1720,64 @@ test("configuration failures do not retry and connection changes mark cached evi
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeDisabled();
 });
 
-test("expanded read-only evidence separates package caches, local users and public-key metadata",async({page},testInfo)=>{
+test("Quick Setup details separate package caches, local users and public-key metadata",async({page},testInfo)=>{
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await page.setViewportSize({width:1366,height:900});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
-  const system=setup.getByRole("heading",{name:"System",exact:true}).locator("..");
-  await system.locator("summary").click();
-  await expect(setup).toContainText("5 updates (cached; not a current update check)");
-  const essentials=setup.getByRole("heading",{name:"Essential software",exact:true}).locator("..");
-  await essentials.locator("summary").click();
-  await expect(setup).toContainText("git 2.39.5 (installed)");
-  const security=setup.getByRole("heading",{name:"Security",exact:true}).locator("..");
-  await security.locator("summary").click();
-  await expect(setup).toContainText("fail2ban.service ActiveState");
-  await expect(setup).toContainText("apt-daily-upgrade.timer ActiveState");
-  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-checklist.png")});
+  const openDetails=async(name:string)=>{
+    await setup.getByRole("button",{name:`View ${name} details`,exact:true}).click();
+    const drawer=page.getByRole("dialog",{name:`${name} details`,exact:true});
+    await expect(drawer).toBeVisible();
+    return drawer;
+  };
+  await expect(setup.getByRole("button",{name:"Review selection",exact:true})).toHaveCount(0);
+  await expect(setup.getByRole("button",{name:"Clear selection",exact:true})).toHaveCount(0);
+  await setup.getByRole("checkbox",{name:"Select System",exact:true}).check();
+  await expect(setup.getByText("1 selected",{exact:true})).toBeVisible();
+  await setup.getByRole("button",{name:"Clear selection",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Review selection",exact:true})).toHaveCount(0);
+  await expect(setup.getByRole("checkbox",{name:"Select System",exact:true})).not.toBeChecked();
+  const system=await openDetails("System");
+  await expect(system).toContainText("5 updates (cached; not a current update check)");
+  await expect(system).toContainText("fixture-host");
+  await expect(system).toContainText("Runtime provenance");
+  await expect(system).toContainText("Unknown");
+  await page.screenshot({path:testInfo.outputPath("quick-setup-details-desktop.png")});
+  await page.keyboard.press("Escape");
+  await expect(system).toHaveCount(0);
+  await expect(setup.getByRole("button",{name:"View System details",exact:true})).toBeFocused();
+  const essentials=await openDetails("Essential software");
+  await expect(essentials).toContainText("git 2.39.5 (installed)");
+  await expect(essentials).toContainText("Git package and ownership");
+  await expect(essentials).toContainText("Executable presence does not establish package ownership");
+  await expect(essentials).toContainText("Running status");
+  await expect(essentials.getByRole("region",{name:"Other details",exact:true})).toContainText("Installation does not prove a process is running or in use");
+  await essentials.getByRole("button",{name:"Close details",exact:true}).click();
+  const security=await openDetails("Security");
+  await expect(security).toContainText("fail2ban.service ActiveState");
+  await expect(security).toContainText("apt-daily-upgrade.timer ActiveState");
+  await expect(security).toContainText("Fail2ban jail count");
+  await expect(security).toContainText("Installation alone does not establish protection.");
+  await security.getByRole("button",{name:"Close details",exact:true}).click();
+  const sshDetails=await openDetails("Users and SSH");
+  await expect(sshDetails).toContainText("Default invocation only; runtime flags may differ.");
+  await expect(sshDetails).toContainText("ssh.socket ActiveState");
+  await expect(sshDetails).toContainText("UID 1000");
+  await expect(sshDetails).toContainText("SHA256:fixturePublicFingerprint");
+  await expect(sshDetails.getByRole("region",{name:"Local users",exact:true})).toContainText("does not prove administrative privileges");
+  await expect(sshDetails.getByRole("region",{name:"Authorized public keys",exact:true})).toContainText("not working login methods");
+  await expect(sshDetails.getByRole("region",{name:"Authorized public keys",exact:true})).not.toContainText("UID 1000");
+  await expect(sshDetails.getByRole("region",{name:"Local users",exact:true})).not.toContainText("SHA256:fixturePublicFingerprint");
+  await expect(sshDetails.getByRole("region",{name:"SSH policy",exact:true})).not.toContainText("SHA256:fixturePublicFingerprint");
+  await page.setViewportSize({width:640,height:800});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-details-640.png")});
+  await sshDetails.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await expect(sshDetails).toHaveCount(0);
   const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
   await expect(ssh.getByRole("region",{name:"SSH server policy",exact:true})).toContainText("ssh.socket ActiveState");
   const users=ssh.getByRole("region",{name:"Local users",exact:true});
@@ -1623,7 +1834,7 @@ test("canceling a first configuration inspection keeps no evidence and permits a
   await page.evaluate(args=>(window as any).__configurationHeld.releaseCancel(args.profileId,args.connectionId,args.operationId),{profileId,connectionId,operationId});
   await expect(setup.getByText(/Inspection canceled\. No snapshot was collected\./)).toBeVisible();
   await expect(setup.getByRole("alert")).toHaveCount(0);
-  await expect(setup.getByText("Not inspected",{exact:true})).toHaveCount(6);
+  await expect(setup.getByText("Not checked",{exact:true})).toHaveCount(6);
   await expect(setup.getByRole("button",{name:"Inspect server",exact:true})).toBeEnabled();
 
   // Retrying is explicit, allocates a new operation and delivers evidence.
@@ -1637,7 +1848,7 @@ test("canceling a first configuration inspection keeps no evidence and permits a
   expect(retryProfileId).toBe(first);
   expect(retryConnectionId).toBe(connectionId);
   await page.evaluate(args=>(window as any).__configurationHeld.release(args.profileId,args.connectionId,args.operationId),{profileId:retryProfileId!,connectionId:retryConnectionId!,operationId:retryOperationId!});
-  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByText("Incomplete",{exact:true})).toHaveCount(2);
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_configuration_snapshot"))).toHaveLength(2);
 
@@ -1691,7 +1902,7 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   await setup.getByRole("button",{name:"Inspect server",exact:true}).click();
-  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByText("Incomplete",{exact:true})).toHaveCount(2);
   const observedBefore=await setup.getByText(/^Observed /).textContent();
   expect(observedBefore).toContain("Snapshot, not live polling");
 
@@ -1714,7 +1925,10 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   expect(refreshes[1]).toMatchObject({profileId:first,connectionId,operationId});
 
   // Navigation keeps the pending refresh bound to the original snapshot request.
-  await setup.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await setup.getByRole("button",{name:"View Users and SSH details",exact:true}).click();
+  const details=page.getByRole("dialog",{name:"Users and SSH details",exact:true});
+  await details.getByRole("button",{name:"Open SSH Access",exact:true}).click();
+  await expect(details).toHaveCount(0);
   const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
   await expect(ssh.getByRole("button",{name:"Cancel inspection",exact:true})).toBeVisible();
   await expect(ssh).toContainText("SHA256:fixturePublicFingerprint");
@@ -1731,7 +1945,7 @@ test("canceling a configuration refresh retains prior evidence and leaves open s
   await page.evaluate(args=>(window as any).__configurationHeld.releaseCancel(args.profileId,args.connectionId,args.operationId),{profileId,connectionId,operationId});
   await expect(setup.getByText(/Inspection canceled\. Previous evidence was retained\./)).toBeVisible();
   await expect(setup.getByText(/^Observed /)).toHaveText(observedBefore!);
-  await expect(setup.getByText("Partial evidence",{exact:true})).toHaveCount(2);
+  await expect(setup.getByText("Incomplete",{exact:true})).toHaveCount(2);
   await expect(setup.getByRole("button",{name:"Refresh configuration",exact:true})).toBeEnabled();
   await page.evaluate(()=>{(window as any).__holdConfigurationCancel=false;(window as any).__holdConfiguration=false;});
 

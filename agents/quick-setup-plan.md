@@ -1004,3 +1004,62 @@ Remaining Phase 3 work: typed desired-state action plans, stronger action-specif
 fresh preflight, shared mutation conflict locks, protected backups, minimal
 journaling, independent rollback and disposable Debian/Ubuntu recovery tests.
 No privileged workflow is enabled by this readiness review increment.
+
+## Quick Setup and console redesign — authorized 2026-11-02
+
+User approved the proposed visual cleanup and explicitly invoked the
+`command-code` skill. The implementation scope is presentation and local console
+preferences, with existing read-only/review/cancel policies intact:
+
+- Compact category checklist with evidence summaries and honest detection labels;
+  grouped detail evidence and related navigation in a right-side panel.
+- One compact inspection header and read-only hint; selection actions appear
+  only when categories are selected. Preserve unknown/truncated evidence and
+  original source caveats in details.
+- Concise readiness review metadata and category blockers; no newly enabled
+  application/installation actions.
+- Action-oriented command console, structured inspection summaries and closed
+  technical details for exact commands/raw output. Keep monitoring separate and
+  privileged command approval previews explicit.
+- Pointer/keyboard panel resizing and per-server persistence of height/collapsed
+  state only through the existing local document store. No commands, output,
+  snapshots or credentials are persisted.
+
+Command Code implementation session: `vps-pilot-clean-setup-console-20261102`.
+Codex independently reviews real probe compatibility, disclosure/focus behavior,
+native preference whitelists and navigation/cancellation regressions. Existing
+server sessions and samplers must survive UI changes; opening details or changing
+panel layout must not run any remote inspection.
+
+Implemented and independently verified this redesign. Command Code wrote the
+checklist, native-field summary helpers, grouped details panel, concise review,
+readable/resizeable console, typed local preference adapter, SQLite validation
+and tests. Codex wrote documentation, reviewed the implementation and returned
+specific fixes for real probe field names, missing source caveats, package
+grouping, summary column spacing and clamped-height resize dead zones.
+
+Per-server console documents use `vps-pilot:command-console:v1:<UUID>` with only
+version, expanded and height fields. Native validation rejects unknown fields,
+invalid IDs, invalid types and heights outside 144–600; preference hydration
+projects only those safe fields. Window shrink clamps visible height without
+overwriting the preferred value; user pointer/keyboard resize starts at the
+visible value. Only technical details are collapsed, not discarded. All
+privileged approval previews and native execution gates remain unchanged.
+
+Validation: check/build, all 43 frontend unit tests, Rust check/strict all-target
+Clippy and 73 native tests passed (five opt-in integrations excluded). Native
+tests include an actual SQLite reopen and strict console-document validation.
+The full 59-scenario remote workspace browser run passed 58; one assertion
+incorrectly expected collapsed command text to be absent from the DOM. Codex
+made a trivial test integration correction to assert hidden-before/open-visible
+behavior while retaining the exact command/output checks. Its rerun, plus both
+new console scenarios, passed all three. Earlier focused layout/configuration
+and console runs also passed. Screenshots at desktop/narrow widths were
+inspected, including structured summary and six-category checklist. No native
+WebKit certification or important-VPS contact is claimed.
+
+Bounded Command Code runs stopped at turn caps where noted in their outputs;
+useful edits were reviewed and the same named session was resumed for concrete
+remaining work. Final resize fixes finished with exit 0. All task-owned CLI
+processes exited; no implementation process was left idle. Changes remain in
+the working tree for review; no commit was requested for this redesign.

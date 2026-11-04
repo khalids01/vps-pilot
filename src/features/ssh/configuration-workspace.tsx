@@ -18,70 +18,31 @@ import type { ToolId } from "@/features/workspace/fixtures";
 import { type ServerProfile, safeError } from "./api";
 import { useConfiguration } from "./configuration-context";
 import {
+  ConfigurationDetailsDrawer,
+  Evidence,
+  sshEvidenceGroup,
+} from "./configuration-details";
+import {
   type ConfigurationEvidence,
   type ConfigurationReview,
-  evidenceStatus,
   reviewMatchesContext,
+  setupStatus,
+  setupSummary,
 } from "./configuration-model";
 import { RemoteActions } from "./remote-actions";
 
 const categories: {
   id: string;
   title: string;
-  description: string;
   tool?: ToolId;
 }[] = [
-  {
-    id: "system",
-    title: "System",
-    description: "OS, hostname, timezone and cached package-update evidence.",
-    tool: "overview",
-  },
-  {
-    id: "ssh",
-    title: "Users and SSH",
-    description:
-      "Current account, authentication policy evidence and administrative access.",
-    tool: "ssh-access",
-  },
-  {
-    id: "security",
-    title: "Security",
-    description:
-      "Installed security tools, service activity and automatic-update scheduling.",
-    tool: "firewall",
-  },
-  {
-    id: "essentials",
-    title: "Essential software",
-    description:
-      "Git, curl, certificates, installed versions and package ownership.",
-    tool: "software",
-  },
-  {
-    id: "docker",
-    title: "Docker",
-    description:
-      "Docker CLI presence; existing workloads remain in the Docker workspace.",
-    tool: "docker",
-  },
-  {
-    id: "resources",
-    title: "Resources",
-    description: "Memory, swap and root filesystem capacity.",
-    tool: "overview",
-  },
+  { id: "system", title: "System", tool: "overview" },
+  { id: "ssh", title: "Users and SSH", tool: "ssh-access" },
+  { id: "security", title: "Security", tool: "firewall" },
+  { id: "essentials", title: "Essential software", tool: "software" },
+  { id: "docker", title: "Docker", tool: "docker" },
+  { id: "resources", title: "Resources", tool: "overview" },
 ];
-const sshLabels: Record<string, string> = {
-  passwordauthentication: "Password authentication",
-  pubkeyauthentication: "Public-key authentication",
-  permitrootlogin: "Root login policy",
-  kbdinteractiveauthentication: "Keyboard-interactive authentication",
-  authenticationmethods: "Required authentication methods",
-  usepam: "PAM authentication",
-  port: "Default configured ports",
-  listenaddress: "Default configured listeners",
-};
 const reviewStateLabels = {
   ready: "Evidence ready",
   partial: "Partial evidence",
@@ -89,108 +50,6 @@ const reviewStateLabels = {
 } as const;
 function reviewErrorText(error: unknown) {
   return safeError(error);
-}
-function Evidence({
-  section,
-  title,
-  showStatus = true,
-  hideRules = false,
-}: {
-  section?: ConfigurationEvidence;
-  title: string;
-  showStatus?: boolean;
-  hideRules?: boolean;
-}) {
-  return (
-    <section className="space-y-3 border-t pt-4" aria-label={title}>
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-sm font-medium">{title}</h2>
-        {showStatus && (
-          <ConfigurationStatus
-            state={
-              !section
-                ? "unknown"
-                : section.state === "ready"
-                  ? evidenceStatus(section)
-                  : section.state
-            }
-          />
-        )}
-      </div>
-      {section?.message && (
-        <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-          {section.message}
-        </p>
-      )}
-      {section ? (
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)]">
-          {Object.entries(section.values)
-            .filter(
-              ([key]) =>
-                key !== "attention" && (!hideRules || !/^Rule \d+$/.test(key)),
-            )
-            .sort(([left], [right]) =>
-              left.localeCompare(right, undefined, { numeric: true }),
-            )
-            .map(([key, value]) => (
-              <div key={key} className="contents">
-                <dt className="text-muted-foreground">
-                  {sshLabels[key] ?? key}
-                </dt>
-                <dd className="min-w-0 whitespace-pre-wrap break-words">
-                  {value === "yes"
-                    ? "Enabled"
-                    : value === "no"
-                      ? "Disabled"
-                      : readableValue(value)}
-                </dd>
-              </div>
-            ))}
-        </dl>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          No inspection yet. Choose Inspect server to collect read-only
-          evidence.
-        </p>
-      )}
-    </section>
-  );
-}
-type SshEvidenceGroup = "policy" | "accounts" | "keys";
-function sshEvidenceGroup(
-  section: ConfigurationEvidence | undefined,
-  group: SshEvidenceGroup,
-): ConfigurationEvidence | undefined {
-  if (!section) return undefined;
-  const belongs = (key: string) => {
-    if (/^Local accounts?\b/i.test(key)) return "accounts";
-    if (/^Authorized keys?\b/i.test(key)) return "keys";
-    return "policy";
-  };
-  const values = Object.fromEntries(
-    Object.entries(section.values).filter(([key]) => belongs(key) === group),
-  );
-  return {
-    ...section,
-    values,
-    message:
-      group === "accounts"
-        ? "Bounded local account metadata only. Group membership does not prove administrative privileges; network directory accounts are not enumerated."
-        : group === "keys"
-          ? "Only the current account’s standard public-key file is inspected. Fingerprints identify file entries, not working login methods. The running daemon may use a different authorization source."
-          : section.message,
-  };
-}
-
-function readableValue(value: string) {
-  const match = /^(\d+) (KiB|bytes)$/.exec(value);
-  if (!match) return value;
-  const bytes = Number(match[1]) * (match[2] === "KiB" ? 1024 : 1);
-  if (!Number.isSafeInteger(bytes)) return value;
-  const power = bytes
-    ? Math.min(4, Math.floor(Math.log(bytes) / Math.log(1024)))
-    : 0;
-  return `${(bytes / 1024 ** power).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${["B", "KiB", "MiB", "GiB", "TiB"][power]}`;
 }
 function FirewallRules({ section }: { section?: ConfigurationEvidence }) {
   const rules = Object.entries(section?.values ?? {})
@@ -325,6 +184,7 @@ export function ConfigurationWorkspace({
   >("idle");
   const [reviewError, setReviewError] = useState("");
   const [reviewMessage, setReviewMessage] = useState("");
+  const [detailsId, setDetailsId] = useState<string | null>(null);
   const reviewVersion = useRef(0);
   const reviewPending = useRef(false);
   const lastReview = useRef<ConfigurationReview | null>(null);
@@ -530,41 +390,70 @@ export function ConfigurationWorkspace({
     : tool === "ssh-access"
       ? "SSH Access"
       : "Firewall";
+  const observedLine = snapshot
+    ? `Observed ${new Date(snapshot.observedAt).toLocaleString()} · ${
+        stale
+          ? "Previous connection; stale evidence"
+          : "Snapshot, not live polling"
+      }`
+    : "Not inspected yet";
+  const detailCategory = categories.find(
+    (category) => category.id === detailsId,
+  );
+  const inspectActions = (
+    <div className="flex flex-wrap gap-2">
+      <Button disabled={!canInspect || busy} onClick={inspect}>
+        {busy
+          ? "Inspecting…"
+          : snapshot
+            ? "Refresh configuration"
+            : "Inspect server"}
+      </Button>
+      {busy && (
+        <Button variant="outline" disabled={canceling} onClick={cancel}>
+          {canceling ? "Canceling…" : "Cancel inspection"}
+        </Button>
+      )}
+    </div>
+  );
   return (
     <section ref={page} aria-label={title} className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-2xl">
-          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            {setup
-              ? "Inspect first, then review only the setup items you need. Existing applications and settings are preserved."
-              : tool === "ssh-access"
-                ? "Separate saved connection settings from server policy evidence. A saved key path does not prove key login works."
-                : "Review UFW status, rules and listeners separately from cloud firewalls and Docker networking."}
-          </p>
-          {snapshot && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Observed {new Date(snapshot.observedAt).toLocaleString()} ·{" "}
-              {stale
-                ? "Previous connection; stale evidence"
-                : "Snapshot, not live polling"}
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={!canInspect || busy} onClick={inspect}>
-            {busy
-              ? "Inspecting…"
-              : snapshot
-                ? "Refresh configuration"
-                : "Inspect server"}
-          </Button>
-          {busy && (
-            <Button variant="outline" disabled={canceling} onClick={cancel}>
-              {canceling ? "Canceling…" : "Cancel inspection"}
-            </Button>
-          )}
-        </div>
+        {setup ? (
+          <>
+            <div className="min-w-0">
+              <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Read-only evidence; select items only for a readiness review.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{profile.name}</span>
+                <span aria-hidden="true">·</span>
+                <span>{observedLine}</span>
+              </p>
+              {inspectActions}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="max-w-2xl">
+              <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                {tool === "ssh-access"
+                  ? "Separate saved connection settings from server policy evidence. A saved key path does not prove key login works."
+                  : "Review UFW status, rules and listeners separately from cloud firewalls and Docker networking."}
+              </p>
+              {snapshot && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {observedLine}
+                </p>
+              )}
+            </div>
+            {inspectActions}
+          </>
+        )}
       </header>
       {notice && (
         <p role="status" className="text-sm text-muted-foreground">
@@ -587,20 +476,27 @@ export function ConfigurationWorkspace({
           {error} Refresh is explicit; no changes were requested.
         </p>
       )}
-      <ConfigurationNotice title="Read-only configuration">
-        Inspection never installs software, refreshes package indexes or changes
-        SSH/firewall settings. Applying changes requires validated recovery and
-        is not enabled yet.
-      </ConfigurationNotice>
+      {setup ? (
+        <p className="text-xs text-muted-foreground">
+          Read-only inspection. Nothing is installed and no settings change.
+        </p>
+      ) : (
+        <ConfigurationNotice title="Read-only configuration">
+          Inspection never installs software, refreshes package indexes or
+          changes SSH/firewall settings. Applying changes requires validated
+          recovery and is not enabled yet.
+        </ConfigurationNotice>
+      )}
       {setup ? (
         <>
           <div className="divide-y border-y">
             {categories.map((category) => {
               const item = section(category.id);
+              const summary = setupSummary(category.id, item);
               return (
                 <div
                   key={category.id}
-                  className="flex flex-wrap items-start gap-4 py-4"
+                  className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 py-3"
                 >
                   <Checkbox
                     className="size-6"
@@ -611,47 +507,24 @@ export function ConfigurationWorkspace({
                       select(category.id, checked === true)
                     }
                   />
-                  <div className="min-w-0 flex-1 basis-64">
+                  <div className="min-w-0">
                     <h2 className="text-sm font-medium">{category.title}</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {category.description}
-                    </p>
-                    <details className="mt-3 text-sm">
-                      <summary className="cursor-pointer text-muted-foreground">
-                        Current evidence
-                      </summary>
-                      <Evidence
-                        showStatus={false}
-                        section={item}
-                        title={`${category.title} details`}
-                      />
-                    </details>
-                  </div>
-                  <ConfigurationStatus
-                    state={
-                      !item
-                        ? "unknown"
-                        : item.state === "ready"
-                          ? evidenceStatus(item)
-                          : item.state
-                    }
-                  />
-                  {category.tool && (
-                    <Button
-                      variant="outline"
-                      onClick={() => onNavigate(category.tool as ToolId)}
+                    <p
+                      className="truncate text-xs text-muted-foreground"
+                      title={summary}
                     >
-                      {category.tool === "ssh-access"
-                        ? "Open SSH Access"
-                        : category.tool === "firewall"
-                          ? "Open Firewall"
-                          : category.tool === "docker"
-                            ? "Open Docker"
-                            : category.tool === "software"
-                              ? "Open Software"
-                              : "Open Overview"}
-                    </Button>
-                  )}
+                      {summary}
+                    </p>
+                  </div>
+                  <ConfigurationStatus state={setupStatus(item)} />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`View ${category.title} details`}
+                    onClick={() => setDetailsId(category.id)}
+                  >
+                    View details
+                  </Button>
                 </div>
               );
             })}
@@ -662,18 +535,30 @@ export function ConfigurationWorkspace({
               to inspect this server again.
             </p>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-muted-foreground">
-              {selected.length} selected for review
-            </span>
-            <Button
-              variant="outline"
-              disabled={!canReview}
-              onClick={() => void createReview()}
-            >
-              Review selection
-            </Button>
-          </div>
+          {selected.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">
+                {selected.length} selected
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    for (const id of selected) select(id, false);
+                  }}
+                >
+                  Clear selection
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!canReview}
+                  onClick={() => void createReview()}
+                >
+                  Review selection
+                </Button>
+              </div>
+            </div>
+          )}
         </>
       ) : tool === "ssh-access" ? (
         <>
@@ -748,6 +633,20 @@ export function ConfigurationWorkspace({
           </section>
         </>
       )}
+      <ConfigurationDetailsDrawer
+        open={detailsId !== null}
+        category={detailCategory}
+        evidence={detailCategory ? section(detailCategory.id) : undefined}
+        observedAt={snapshot?.observedAt}
+        stale={stale}
+        onOpenChange={(open) => {
+          if (!open) setDetailsId(null);
+        }}
+        onNavigate={(next) => {
+          setDetailsId(null);
+          onNavigate(next);
+        }}
+      />
       <Dialog
         open={reviewOpen}
         onOpenChange={(open) => {
@@ -783,17 +682,17 @@ export function ConfigurationWorkspace({
           )}
           {visibleReview && (
             <div className="space-y-4 text-sm">
-              <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2">
-                <dt className="text-muted-foreground">Server</dt>
-                <dd className="break-words">
-                  {profile.name} · {profile.username}@{profile.host}:
-                  {profile.port}
-                </dd>
-                <dt className="text-muted-foreground">Source observed</dt>
-                <dd>{new Date(visibleReview.observedAt).toLocaleString()}</dd>
-                <dt className="text-muted-foreground">Review expires</dt>
-                <dd>{new Date(visibleReview.expiresAt).toLocaleString()}</dd>
-              </dl>
+              <p className="text-xs text-muted-foreground">
+                {profile.name} · Source observed{" "}
+                {new Date(visibleReview.observedAt).toLocaleString()} · Expires{" "}
+                {new Date(visibleReview.expiresAt).toLocaleString()}
+              </p>
+              <p className="text-sm font-medium">
+                {visibleReview.items.length}{" "}
+                {visibleReview.items.length === 1 ? "category" : "categories"}{" "}
+                selected:{" "}
+                {visibleReview.items.map((item) => item.title).join(", ")}
+              </p>
               <p className="text-sm text-warning">
                 Preview only. Cached inspection evidence observed{" "}
                 {new Date(visibleReview.observedAt).toLocaleString()}; this is
