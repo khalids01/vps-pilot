@@ -39,7 +39,13 @@ export const quickSetupUtilities = [
 ] as const;
 export type QuickSetupUtilityId = (typeof quickSetupUtilities)[number];
 
-export const quickSetupRuntimes = ["bun", "nvm-node", "uv"] as const;
+export const quickSetupRuntimes = [
+  "bun",
+  "nvm-node",
+  "uv",
+  "python",
+  "go",
+] as const;
 export type QuickSetupRuntimeId = (typeof quickSetupRuntimes)[number];
 
 export const quickSetupAdminModes = ["new", "existing"] as const;
@@ -87,6 +93,7 @@ export interface QuickSetupDraft {
   sshKey: {
     strategy: QuickSetupKeyStrategy;
     generatedKeyId?: string;
+    existingKeyId?: string;
   };
   access: {
     port: number;
@@ -158,6 +165,42 @@ export function parseQuickSetupPort(value: string): number | null {
   if (!/^[0-9]{1,5}$/.test(trimmed)) return null;
   const port = Number(trimmed);
   return validateQuickSetupPort(port) === null ? port : null;
+}
+
+export const quickSetupKeyNameMaxLength = 64;
+const reservedQuickSetupKeyNames = [
+  "config",
+  "authorized_keys",
+  "known_hosts",
+  "environment",
+] as const;
+
+export function validateQuickSetupKeyName(value: string): string | null {
+  if (value.length === 0)
+    return "Enter a key file name from 1 to 64 ASCII characters.";
+  if (value.length > quickSetupKeyNameMaxLength)
+    return "Use at most 64 ASCII characters.";
+  if (!/^[A-Za-z0-9_]$/.test(value[0]))
+    return "Start with a letter, number, or underscore, not a dot or hyphen.";
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(value))
+    return "Use only ASCII letters, numbers, dots, underscores, or hyphens.";
+  if (value.toLowerCase().endsWith(".pub"))
+    return "Enter the private key name without the .pub suffix.";
+  if ((reservedQuickSetupKeyNames as readonly string[]).includes(value))
+    return "That file name is reserved by OpenSSH. Choose a different name.";
+  if (value.startsWith("vps-pilot_"))
+    return "That file name is reserved for VPS Pilot. Choose a different name.";
+  return null;
+}
+
+export function defaultQuickSetupKeyName(host: string): string {
+  const base = host
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9_]+|[^a-z0-9_]+$/g, "");
+  const candidate = `vps-${base || "key"}`.slice(0, quickSetupKeyNameMaxLength);
+  if (validateQuickSetupKeyName(candidate) === null) return candidate;
+  return "vps-key";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -263,15 +306,18 @@ export function sanitizeQuickSetupDraft(
       sshKey.strategy !== "generate")
   )
     return null;
+  const existingKeyId = sshKey.existingKeyId;
   if (
-    !hasExactKeys(
-      sshKey,
-      generatedKeyId === undefined
-        ? ["strategy"]
-        : ["strategy", "generatedKeyId"],
-    )
+    existingKeyId !== undefined &&
+    (typeof existingKeyId !== "string" ||
+      !generatedKeyIdPattern.test(existingKeyId) ||
+      sshKey.strategy !== "existing")
   )
     return null;
+  const sshKeyFields = ["strategy"];
+  if (generatedKeyId !== undefined) sshKeyFields.push("generatedKeyId");
+  if (existingKeyId !== undefined) sshKeyFields.push("existingKeyId");
+  if (!hasExactKeys(sshKey, sshKeyFields)) return null;
 
   const access = value.access;
   if (!isRecord(access)) return null;
@@ -330,7 +376,14 @@ export function sanitizeQuickSetupDraft(
   )
     return null;
 
-  if (!uniqueMembers(value.runtimes, quickSetupRuntimes, 3)) return null;
+  if (
+    !uniqueMembers(
+      value.runtimes,
+      quickSetupRuntimes,
+      quickSetupRuntimes.length,
+    )
+  )
+    return null;
   if (stack.choice === "javascript" && !value.runtimes.includes("nvm-node"))
     return null;
 
@@ -341,13 +394,11 @@ export function sanitizeQuickSetupDraft(
       mode: administrator.mode as QuickSetupAdminMode,
       username: administrator.username,
     },
-    sshKey:
-      generatedKeyId === undefined
-        ? { strategy: sshKey.strategy as QuickSetupKeyStrategy }
-        : {
-            strategy: sshKey.strategy as QuickSetupKeyStrategy,
-            generatedKeyId,
-          },
+    sshKey: {
+      strategy: sshKey.strategy as QuickSetupKeyStrategy,
+      ...(generatedKeyId === undefined ? {} : { generatedKeyId }),
+      ...(existingKeyId === undefined ? {} : { existingKeyId }),
+    },
     access: {
       port: access.port,
       ufw: access.ufw as QuickSetupUfwChoice,

@@ -294,6 +294,33 @@ export const quickSetupCatalog = {
     executable: false,
     sourceStatus: "policy-only",
   },
+  python: {
+    id: "python",
+    label: "Python",
+    category: "runtime",
+    description:
+      "Official signed Python 3 distribution packages. System Python and project virtual environments are preserved.",
+    plannedSource:
+      "Official distribution-signed Python 3 packages; the stable version depends on the OS release.",
+    documentation: [
+      "https://docs.python.org/3/using/unix.html",
+      "https://www.python.org/downloads/",
+    ],
+    executable: false,
+    sourceStatus: "policy-only",
+  },
+  go: {
+    id: "go",
+    label: "Go",
+    category: "runtime",
+    description:
+      "Official stable Go archive selected for the target OS and architecture.",
+    plannedSource:
+      "Official stable Go archive with its published checksum, selected for the target OS and architecture.",
+    documentation: ["https://go.dev/doc/install", "https://go.dev/dl/"],
+    executable: false,
+    sourceStatus: "policy-only",
+  },
 } as const satisfies Record<string, QuickSetupCatalogEntry>;
 export const quickSetupHerdr = {
   id: "herdr",

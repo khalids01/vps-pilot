@@ -33,7 +33,6 @@ import {
   type QuickSetupUfwChoice,
   type QuickSetupUtilityId,
   quickSetupDraftKey,
-  quickSetupRuntimes,
   quickSetupSteps,
   quickSetupUtilities,
   readQuickSetupDraft,
@@ -59,17 +58,17 @@ const keyStrategyLabels: Record<QuickSetupKeyStrategy, string> = {
   agent: "Use the SSH agent",
 };
 const keyStrategyDescriptions: Record<QuickSetupKeyStrategy, string> = {
-  existing: "A key you already have.",
-  generate: "Create a passphrase-protected key on this device.",
-  agent: "A key loaded in your SSH agent.",
+  existing: "Choose a private key file already on this device.",
+  generate: "Create a key file in ~/.ssh with an optional passphrase.",
+  agent: "A key loaded in your desktop SSH agent.",
 };
 const keyStrategyExplanations: Record<QuickSetupKeyStrategy, string> = {
   existing:
-    "Quick Setup has no saved-key picker yet. The ordinary connection keeps using the saved profile identity; this choice copies and installs nothing.",
+    "The native file picker is functional. VPS Pilot stores an opaque local reference and public identity metadata; it never copies, moves, or changes the original private key. Keys outside ~/.ssh stay at their original path.",
   generate:
-    "Creates a functional encrypted Ed25519 key pair in ~/.ssh without overwriting an existing file. Backup and public-key installation are separate steps, and no key is installed until the remote adapter is available. Key-login verification and SSH config export remain explicit, reviewed actions.",
+    "Creates an actual Ed25519 key pair in ~/.ssh with a filename you choose. Leave the passphrase blank for an unencrypted private key, or use 12 to 4096 bytes to encrypt it. Existing files are never overwritten; backup, public-key installation, and verification remain separate explicit steps.",
   agent:
-    "Uses the existing desktop SSH agent. No local private key file is created or copied. Selecting an agent key is planning only.",
+    "Uses a key already loaded in your desktop SSH agent. The optional local desktop key cache is not used for authentication and no private key file is copied. Selecting an agent key is planning only.",
 };
 const ufwLabels: Record<QuickSetupUfwChoice, string> = {
   configure: "Configure a restrictive UFW plan",
@@ -98,10 +97,37 @@ const editorDescriptions: Record<QuickSetupEditorChoice, string> = {
     "Latest compatible stable official Neovim release, with sudoedit for privileged files.",
   lazyvim: "Official stable Neovim with the official LazyVim starter.",
 };
+const runtimeGroups: {
+  id: string;
+  title: string;
+  description: string;
+  runtimes: readonly QuickSetupRuntimeId[];
+}[] = [
+  {
+    id: "javascript",
+    title: "JavaScript / TypeScript",
+    description: "Bun or Node.js through NVM.",
+    runtimes: ["bun", "nvm-node"],
+  },
+  {
+    id: "python",
+    title: "Python",
+    description: "uv or the distribution's signed Python 3 packages.",
+    runtimes: ["uv", "python"],
+  },
+  {
+    id: "go",
+    title: "Go",
+    description: "Official stable Go archive for this OS and architecture.",
+    runtimes: ["go"],
+  },
+];
 
 function keySelectionSummary(draft: QuickSetupDraft) {
   if (draft.sshKey.strategy === "generate" && draft.sshKey.generatedKeyId)
-    return "Encrypted key selected locally";
+    return "Generated local key selected";
+  if (draft.sshKey.strategy === "existing" && draft.sshKey.existingKeyId)
+    return "Existing private key selected";
   return keyStrategyLabels[draft.sshKey.strategy];
 }
 
@@ -744,21 +770,11 @@ export function QuickSetupWorkspace({
               <ChoiceRow
                 selected={draft.sshKey.strategy === strategy}
                 onClick={() =>
-                  update((current) => ({
-                    ...current,
-                    sshKey:
-                      strategy === "generate"
-                        ? {
-                            strategy,
-                            ...(current.sshKey.strategy === "generate" &&
-                            current.sshKey.generatedKeyId
-                              ? {
-                                  generatedKeyId: current.sshKey.generatedKeyId,
-                                }
-                              : {}),
-                          }
-                        : { strategy },
-                  }))
+                  update((current) =>
+                    current.sshKey.strategy === strategy
+                      ? current
+                      : { ...current, sshKey: { strategy } },
+                  )
                 }
                 label={keyStrategyLabels[strategy]}
                 description={keyStrategyDescriptions[strategy]}
@@ -769,14 +785,30 @@ export function QuickSetupWorkspace({
             </div>
           ))}
         </ChoiceGroup>
-        {draft.sshKey.strategy === "generate" && (
+        {(draft.sshKey.strategy === "existing" ||
+          draft.sshKey.strategy === "generate") && (
           <QuickSetupKeyManager
-            selectedKeyId={draft.sshKey.generatedKeyId}
+            key={draft.sshKey.strategy}
+            strategy={draft.sshKey.strategy}
+            selectedKeyId={
+              draft.sshKey.strategy === "existing"
+                ? draft.sshKey.existingKeyId
+                : draft.sshKey.generatedKeyId
+            }
             onSelectKey={(keyId) =>
-              update((current) => ({
-                ...current,
-                sshKey: { strategy: "generate", generatedKeyId: keyId },
-              }))
+              update((current) => {
+                if (current.sshKey.strategy === "existing")
+                  return {
+                    ...current,
+                    sshKey: { strategy: "existing", existingKeyId: keyId },
+                  };
+                if (current.sshKey.strategy === "generate")
+                  return {
+                    ...current,
+                    sshKey: { strategy: "generate", generatedKeyId: keyId },
+                  };
+                return current;
+              })
             }
             source={{
               profileId: profile.id,
@@ -893,27 +925,13 @@ export function QuickSetupWorkspace({
         <ChoiceGroup label="Application stack">
           {(["dokploy", "javascript", "containers", "skip"] as const).map(
             (choice) => (
-              <div
+              <ChoiceRow
                 key={choice}
-                className="grid grid-cols-[minmax(0,1fr)_auto] items-start"
-              >
-                <ChoiceRow
-                  selected={draft.stack.choice === choice}
-                  onClick={() => chooseStack(choice)}
-                  label={stackLabels[choice]}
-                  description={stackDescriptions[choice]}
-                />
-                <PlannedSourceDisclosure
-                  inline
-                  entryId={
-                    choice === "skip"
-                      ? ""
-                      : choice === "javascript"
-                        ? "javascript-pm2"
-                        : choice
-                  }
-                />
-              </div>
+                selected={draft.stack.choice === choice}
+                onClick={() => chooseStack(choice)}
+                label={stackLabels[choice]}
+                description={stackDescriptions[choice]}
+              />
             ),
           )}
         </ChoiceGroup>
@@ -925,56 +943,49 @@ export function QuickSetupWorkspace({
               <div className="grid grid-cols-3 gap-1.5">
                 {(
                   [
-                    { value: null, label: "No engine", entryId: "" },
+                    { value: null, label: "No engine" },
                     {
                       value: "docker",
                       label: quickSetupCatalogLabel("docker"),
-                      entryId: "docker",
                     },
                     {
                       value: "podman",
                       label: quickSetupCatalogLabel("podman"),
-                      entryId: "podman",
                     },
                   ] as const
                 ).map((option) => {
                   const selected = draft.stack.engine === option.value;
                   return (
-                    <div key={option.label} className="min-w-0">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        aria-pressed={selected}
-                        onClick={() =>
-                          update((current) => ({
-                            ...current,
-                            stack: {
-                              ...current.stack,
-                              engine: option.value,
-                            },
-                          }))
-                        }
-                        className="h-auto w-full min-w-0 justify-between gap-2 rounded-none border border-border/70 px-2.5 py-2 text-left font-normal whitespace-normal aria-pressed:border-primary aria-pressed:text-foreground"
+                    <Button
+                      key={option.label}
+                      type="button"
+                      variant="ghost"
+                      aria-pressed={selected}
+                      onClick={() =>
+                        update((current) => ({
+                          ...current,
+                          stack: {
+                            ...current.stack,
+                            engine: option.value,
+                          },
+                        }))
+                      }
+                      className="h-auto min-w-0 justify-between gap-2 rounded-none border border-border/70 px-2.5 py-2 text-left font-normal whitespace-normal aria-pressed:border-primary aria-pressed:text-foreground"
+                    >
+                      <span className="min-w-0 text-sm">{option.label}</span>
+                      <span
+                        aria-hidden="true"
+                        className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${
+                          selected
+                            ? "border-primary"
+                            : "border-muted-foreground"
+                        }`}
                       >
-                        <span className="min-w-0 text-sm">{option.label}</span>
-                        <span
-                          aria-hidden="true"
-                          className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${
-                            selected
-                              ? "border-primary"
-                              : "border-muted-foreground"
-                          }`}
-                        >
-                          {selected && (
-                            <span className="size-2 rounded-full bg-primary" />
-                          )}
-                        </span>
-                      </Button>
-                      <PlannedSourceDisclosure
-                        entryId={option.entryId}
-                        className="px-0.5"
-                      />
-                    </div>
+                        {selected && (
+                          <span className="size-2 rounded-full bg-primary" />
+                        )}
+                      </span>
+                    </Button>
                   );
                 })}
               </div>
@@ -1058,25 +1069,42 @@ export function QuickSetupWorkspace({
         title="Runtimes"
         description="Choose user-scoped runtimes. Required dependencies are included once."
       >
-        <div className="divide-y divide-border/70 border-y border-border/70">
-          {quickSetupRuntimes.map((id) => {
-            const required = requiredRuntimes.includes(id);
-            const selected = required || draft.runtimes.includes(id);
+        <div className="grid gap-3 md:grid-cols-2">
+          {runtimeGroups.map((group) => {
+            const headingId = `${fieldPrefix}-runtime-group-${group.id}`;
             return (
-              <div key={id}>
-                <CheckRow
-                  id={`${fieldPrefix}-runtime-${id}`}
-                  label={quickSetupCatalog[id].label}
-                  hint={quickSetupCatalog[id].description}
-                  requiredNote={
-                    required ? "Required by JavaScript / PM2." : undefined
-                  }
-                  checked={selected}
-                  disabled={required}
-                  onToggle={() => toggleRuntime(id)}
-                />
-                <PlannedSourceDisclosure entryId={id} />
-              </div>
+              <section
+                key={group.id}
+                aria-labelledby={headingId}
+                className="rounded-lg border border-border/70 p-3"
+              >
+                <h3 id={headingId} className="text-sm font-medium">
+                  {group.title}
+                </h3>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {group.description}
+                </p>
+                <div className="mt-1 divide-y divide-border/70">
+                  {group.runtimes.map((id) => {
+                    const required = requiredRuntimes.includes(id);
+                    const selected = required || draft.runtimes.includes(id);
+                    return (
+                      <CheckRow
+                        key={id}
+                        id={`${fieldPrefix}-runtime-${id}`}
+                        label={quickSetupCatalog[id].label}
+                        hint={quickSetupCatalog[id].description}
+                        requiredNote={
+                          required ? "Required by JavaScript / PM2." : undefined
+                        }
+                        checked={selected}
+                        disabled={required}
+                        onToggle={() => toggleRuntime(id)}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
             );
           })}
         </div>

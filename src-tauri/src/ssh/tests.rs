@@ -2651,3 +2651,217 @@ async fn reviewed_config_reviews_are_bounded() {
     }
     assert!(fixture.service.setup_access.review_entries_for_test() <= 100);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn named_plaintext_key_proves_login_and_saves_a_named_config_entry() {
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault
+        .generate_named_async("loopback-named".into(), String::new())
+        .await
+        .unwrap();
+    assert!(!key.encrypted);
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fixture = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(host_key),
+    )
+    .await;
+    let (_service_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"fixture shell ready"
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    let auth_before = fixture.auth_count.load(Ordering::SeqCst);
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            setup_access::VerifyRequest {
+                profile_id: profile.id.clone(),
+                connection_id: connection,
+                profile_revision: profile.revision.clone(),
+                key_id: key.key_id.clone(),
+                username: "deploy".into(),
+                port: fixture.port,
+                passphrase: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(proof.key_fingerprint, key.fingerprint);
+    assert_eq!(fixture.auth_count.load(Ordering::SeqCst), auth_before + 1);
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    let review = service
+        .review_setup_config(&vault, &proof.proof_id, "named-plain")
+        .await
+        .unwrap();
+    assert!(
+        review
+            .entry
+            .contains("    IdentityFile ~/.ssh/loopback-named\n"),
+        "{}",
+        review.entry
+    );
+    let original = std::fs::read(&key.path).unwrap();
+    let saved = service
+        .save_setup_config(&vault, &review.review_id)
+        .await
+        .unwrap();
+    assert_eq!(saved.status, "saved");
+    let config = std::fs::read_to_string(vault.standard_ssh_root().join("config")).unwrap();
+    assert!(config.contains("IdentityFile ~/.ssh/loopback-named"));
+    assert_eq!(std::fs::read(&key.path).unwrap(), original);
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"named-source-alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"named-source-alive"
+    ));
+    assert!(fixture.commands.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn selected_external_space_key_proves_login_and_saves_a_quoted_config_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let external = key_dir.path().join("selected keys");
+    std::fs::create_dir_all(&external).unwrap();
+    let path = external.join("my chosen key");
+    let private = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    std::fs::write(
+        &path,
+        private
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let public_path = external.join("my chosen key.pub");
+    std::fs::write(
+        &public_path,
+        format!("{}\n", private.public_key().to_openssh().unwrap()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&public_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let key = vault.register_selected_async(path.clone()).await.unwrap();
+    assert_eq!(key.location, crate::setup_keys::KeyLocation::External);
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fixture = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(host_key),
+    )
+    .await;
+    let (_service_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"fixture shell ready"
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    let auth_before = fixture.auth_count.load(Ordering::SeqCst);
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            setup_access::VerifyRequest {
+                profile_id: profile.id.clone(),
+                connection_id: connection,
+                profile_revision: profile.revision.clone(),
+                key_id: key.key_id.clone(),
+                username: "deploy".into(),
+                port: fixture.port,
+                passphrase: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(proof.key_fingerprint, key.fingerprint);
+    assert_eq!(fixture.auth_count.load(Ordering::SeqCst), auth_before + 1);
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    let key_path = std::fs::canonicalize(&path).unwrap();
+    let review = service
+        .review_setup_config(&vault, &proof.proof_id, "selected-space")
+        .await
+        .unwrap();
+    let identity = format!("    IdentityFile \"{}\"\n", key_path.to_string_lossy());
+    assert!(review.entry.contains(&identity), "{}", review.entry);
+    let saved = service
+        .save_setup_config(&vault, &review.review_id)
+        .await
+        .unwrap();
+    assert_eq!(saved.status, "saved");
+    let config = std::fs::read_to_string(vault.standard_ssh_root().join("config")).unwrap();
+    assert!(config.contains(&identity));
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"selected-source-alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"selected-source-alive"
+    ));
+    assert!(fixture.commands.lock().unwrap().is_empty());
+}

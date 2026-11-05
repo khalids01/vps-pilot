@@ -7,13 +7,19 @@
 //! explicit user action.
 //!
 //! There is no in-memory index: every listing re-reads both roots and validates
-//! each app-owned entry. The renderer never supplies or receives a filesystem
-//! path for generation, copying, reading, or export.
+//! each app-owned entry. Named generated keys and explicitly chosen existing
+//! keys have no UUID-derived file name, so a bounded, protected per-reference
+//! metadata directory records only opaque IDs and non-secret verification data.
+//! The renderer never supplies or receives a filesystem path for generation,
+//! copying, reading, or export.
 use serde::Serialize;
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc};
+
+#[cfg(unix)]
+mod references;
 
 #[cfg(unix)]
 use russh::keys::{ssh_key::LineEnding, Algorithm, HashAlg, PrivateKey, PublicKey};
@@ -37,21 +43,37 @@ use zeroize::Zeroizing;
 
 pub const MAX_VAULT_ENTRIES: usize = 100;
 #[cfg(unix)]
-const MAX_KEY_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_KEY_BYTES: usize = 16 * 1024;
 #[cfg(unix)]
 const MAX_PUBLIC_BYTES: usize = 8 * 1024;
 #[cfg(unix)]
-const MAX_LIST_SCAN: usize = 4096;
+pub(crate) const MAX_LIST_SCAN: usize = 4096;
 #[cfg(unix)]
 const SSH_KEY_PREFIX: &str = "vps-pilot_";
+#[cfg(unix)]
+const MAX_KEY_NAME_BYTES: usize = 64;
+#[cfg(unix)]
+const RESERVED_KEY_NAMES: [&str; 4] = ["config", "authorized_keys", "known_hosts", "environment"];
 #[cfg(not(unix))]
 const UNAVAILABLE: &str =
-    "The local encrypted key vault is unavailable on this platform. Encrypted app-owned key generation requires Unix file permissions.";
+    "The local key vault is unavailable on this platform. Local key files require Unix file permissions.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyLocation {
     Ssh,
+    Legacy,
+    External,
+}
+
+/// How a native key reference was created. `Generated` keys are owned by this
+/// app under the standard SSH directory; `Selected` keys are existing user files
+/// that are never changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyOrigin {
+    Generated,
+    Selected,
     Legacy,
 }
 
@@ -88,6 +110,7 @@ pub struct SetupKeyList {
 pub struct ExportResult {
     pub status: &'static str,
     pub path: Option<String>,
+    pub encrypted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -97,20 +120,51 @@ pub struct CopyResult {
     pub key: SetupKey,
 }
 
+/// Read-only answer for the inline key-name availability check. It never
+/// creates the standard SSH directory or any file.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyNameCheck {
+    pub file_name: String,
+    pub available: bool,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectResult {
+    pub status: &'static str,
+    pub key: Option<SetupKey>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedKeyMetadata {
     pub path: PathBuf,
     pub fingerprint: String,
     pub digest: [u8; 32],
     pub location: KeyLocation,
+    pub algorithm: String,
+    pub encrypted: bool,
+    pub origin: KeyOrigin,
+    pub public_path: Option<PathBuf>,
+    pub public_issue: Option<String>,
 }
 
-/// A protected standard-directory key pair whose public sidecar matches the
-/// encrypted private key. `file_name` is the trusted `vps-pilot_<uuid>` name.
-#[derive(Clone, Debug)]
-pub(crate) struct ResolvedStandardKey {
-    pub metadata: ResolvedKeyMetadata,
-    pub file_name: String,
+/// Safe, renderer-independent view for the later reviewed SSH config export.
+/// A caller must resolve the opaque key ID here instead of accepting a path
+/// from the renderer.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedConfigKey {
+    pub key_id: String,
+    pub path: String,
+    pub public_path: Option<String>,
+    pub fingerprint: String,
+    pub digest: [u8; 32],
+    pub algorithm: String,
+    pub encrypted: bool,
+    pub location: KeyLocation,
+    pub origin: KeyOrigin,
 }
 
 pub struct KeyVault {
@@ -324,11 +378,15 @@ fn ensure_ssh_directory(root: &Path) -> Result<u32, String> {
 }
 
 #[cfg(unix)]
+fn valid_private_mode(mode: u32) -> bool {
+    let permissions = mode & 0o777;
+    (permissions == 0o400 || permissions == 0o600) && mode & 0o7000 == 0
+}
+
 fn valid_private_metadata(metadata: &fs::Metadata, owner: u32) -> bool {
     metadata.file_type().is_file()
         && !metadata.file_type().is_symlink()
-        && metadata.mode() & 0o777 == 0o600
-        && metadata.mode() & 0o7000 == 0
+        && valid_private_mode(metadata.mode())
         && metadata.uid() == owner
         && metadata.nlink() == 1
         && metadata.len() <= MAX_KEY_BYTES as u64
@@ -344,7 +402,7 @@ fn read_private_file(path: &Path, owner: u32) -> Result<(PrivateKey, Zeroizing<V
                 .into(),
         );
     }
-    if before.mode() & 0o777 != 0o600 || before.mode() & 0o7000 != 0 {
+    if !valid_private_mode(before.mode()) {
         return Err(
             "The stored local key has insecure permissions. It was preserved but is unavailable."
                 .into(),
@@ -392,17 +450,6 @@ fn read_private_file(path: &Path, owner: u32) -> Result<(PrivateKey, Zeroizing<V
         "The stored local key could not be decoded. It was preserved but is unavailable."
             .to_string()
     })?;
-    if !key.is_encrypted() {
-        return Err(
-            "The stored local key is not encrypted. It was preserved but is unavailable.".into(),
-        );
-    }
-    if key.algorithm() != Algorithm::Ed25519 {
-        return Err(
-            "The stored local key uses an unsupported algorithm. It was preserved but is unavailable."
-                .into(),
-        );
-    }
     Ok((key, bytes))
 }
 
@@ -487,7 +534,7 @@ fn read_ssh_key(root: &Path, id: &str, owner: u32) -> Result<SshKeyRead, String>
             digest,
             None,
             Some(
-                "The matching public key file does not match the encrypted private key. The private key is preserved; the public file was not changed."
+                "The matching public key file does not match the private key. The private key is preserved; the public file was not changed."
                     .into(),
             ),
         )),
@@ -508,6 +555,8 @@ struct FoundKey {
     key: SetupKey,
     fingerprint: String,
     digest: [u8; 32],
+    origin: KeyOrigin,
+    from_reference: bool,
 }
 
 #[cfg(unix)]
@@ -517,18 +566,22 @@ fn found_key(
     digest: [u8; 32],
     path: PathBuf,
     location: KeyLocation,
+    origin: KeyOrigin,
 ) -> FoundKey {
+    let fingerprint = private.fingerprint(HashAlg::Sha256).to_string();
     FoundKey {
         key: SetupKey {
             key_id: key_id.to_string(),
-            fingerprint: private.fingerprint(HashAlg::Sha256).to_string(),
+            fingerprint: fingerprint.clone(),
             algorithm: private.algorithm().to_string(),
-            encrypted: true,
+            encrypted: private.is_encrypted(),
             path: path.to_string_lossy().into_owned(),
             location,
         },
-        fingerprint: private.fingerprint(HashAlg::Sha256).to_string(),
+        fingerprint,
         digest,
+        origin,
+        from_reference: false,
     }
 }
 
@@ -607,6 +660,7 @@ fn scan_legacy(root: &Path) -> (Vec<FoundKey>, Vec<SetupKeyIssue>, bool) {
                     private_digest(bytes.as_slice()),
                     root.join(&id),
                     KeyLocation::Legacy,
+                    KeyOrigin::Legacy,
                 ));
             }
             Err(reason) => issues.push(SetupKeyIssue {
@@ -684,6 +738,7 @@ fn scan_ssh(root: &Path) -> (Vec<FoundKey>, Vec<SetupKeyIssue>, bool) {
                     digest,
                     root.join(ssh_private_name(&id)),
                     KeyLocation::Ssh,
+                    KeyOrigin::Generated,
                 ));
                 if let Some(reason) = issue {
                     issues.push(SetupKeyIssue {
@@ -702,55 +757,165 @@ fn scan_ssh(root: &Path) -> (Vec<FoundKey>, Vec<SetupKeyIssue>, bool) {
 }
 
 #[cfg(unix)]
+fn scan_references(root: &Path) -> (Vec<FoundKey>, Vec<SetupKeyIssue>, bool) {
+    let owner = match existing_ssh_owner(root) {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return (Vec::new(), Vec::new(), false),
+        Err(reason) => {
+            return (
+                Vec::new(),
+                vec![SetupKeyIssue {
+                    key_id: None,
+                    reason,
+                }],
+                false,
+            )
+        }
+    };
+    let load = match references::load_references(root) {
+        Ok(load) => load,
+        Err(reason) => {
+            return (
+                Vec::new(),
+                vec![SetupKeyIssue {
+                    key_id: None,
+                    reason,
+                }],
+                false,
+            )
+        }
+    };
+    let mut keys = Vec::new();
+    let mut issues = load.issues;
+    for record in load.records {
+        let key_id = record.id.clone();
+        let kind = record.kind;
+        match references::resolve_reference(root, owner, &record) {
+            Ok(resolved) => {
+                if let Some(reason) = resolved.public_issue {
+                    issues.push(SetupKeyIssue {
+                        key_id: Some(key_id.clone()),
+                        reason,
+                    });
+                }
+                keys.push(FoundKey {
+                    key: SetupKey {
+                        key_id,
+                        fingerprint: resolved.fingerprint.clone(),
+                        algorithm: resolved.algorithm,
+                        encrypted: resolved.encrypted,
+                        path: resolved.path.to_string_lossy().into_owned(),
+                        location: resolved.location,
+                    },
+                    fingerprint: resolved.fingerprint,
+                    digest: resolved.digest,
+                    origin: match kind {
+                        references::ReferenceKind::Generated => KeyOrigin::Generated,
+                        references::ReferenceKind::Selected => KeyOrigin::Selected,
+                    },
+                    from_reference: true,
+                });
+            }
+            Err(reason) => issues.push(SetupKeyIssue {
+                key_id: Some(key_id),
+                reason,
+            }),
+        }
+    }
+    (keys, issues, load.truncated)
+}
+
+#[cfg(unix)]
 fn merge_keys(
     legacy_keys: Vec<FoundKey>,
     mut issues: Vec<SetupKeyIssue>,
     ssh_keys: Vec<FoundKey>,
+    reference_keys: Vec<FoundKey>,
     legacy_root: &Path,
     ssh_root: &Path,
     mut truncated: bool,
 ) -> SetupKeyList {
-    let mut legacy: BTreeMap<String, FoundKey> = legacy_keys
+    let mut groups: BTreeMap<String, Vec<FoundKey>> = BTreeMap::new();
+    for key in legacy_keys
         .into_iter()
-        .map(|key| (key.key.key_id.clone(), key))
-        .collect();
-    let mut ssh: BTreeMap<String, FoundKey> = ssh_keys
-        .into_iter()
-        .map(|key| (key.key.key_id.clone(), key))
-        .collect();
-    let ids: BTreeSet<String> = legacy.keys().chain(ssh.keys()).cloned().collect();
-    let mut keys = Vec::with_capacity(ids.len());
-    for id in ids {
-        match (legacy.remove(&id), ssh.remove(&id)) {
-            (Some(from_legacy), Some(from_ssh))
-                if from_legacy.fingerprint == from_ssh.fingerprint
-                    && from_legacy.digest == from_ssh.digest =>
-            {
-                // A standard copy is preferred only when the identifier,
-                // fingerprint, and protected encrypted bytes match exactly.
-                keys.push(from_ssh.key);
-            }
-            (Some(from_legacy), Some(_)) => {
-                keys.push(from_legacy.key);
+        .chain(ssh_keys)
+        .chain(reference_keys)
+    {
+        groups.entry(key.key.key_id.clone()).or_default().push(key);
+    }
+    let mut keys = Vec::new();
+    for (id, mut candidates) in groups {
+        if let Some(index) = candidates.iter().position(|key| key.from_reference) {
+            let chosen = candidates.remove(index);
+            for other in candidates {
+                if other.key.path == chosen.key.path
+                    || (other.fingerprint == chosen.fingerprint && other.digest == chosen.digest)
+                {
+                    continue;
+                }
                 issues.push(SetupKeyIssue {
-                    key_id: Some(id),
-                    reason: "The standard SSH folder contains a different key or encrypted copy with the same identifier. The preserved app vault key is shown; the conflicting file was not used or changed."
+                    key_id: Some(id.clone()),
+                    reason: "The same local key identifier refers to different files or key material. Only the explicit local key reference is shown; other files were not changed."
                         .into(),
                 });
             }
-            (Some(from_legacy), None) => keys.push(from_legacy.key),
-            (None, Some(from_ssh)) => keys.push(from_ssh.key),
+            keys.push(chosen);
+            continue;
+        }
+        let mut from_legacy = None;
+        let mut from_ssh = None;
+        for key in candidates {
+            if key.origin == KeyOrigin::Legacy {
+                from_legacy = Some(key);
+            } else {
+                from_ssh = Some(key);
+            }
+        }
+        match (from_legacy, from_ssh) {
+            (Some(legacy), Some(standard))
+                if legacy.fingerprint == standard.fingerprint
+                    && legacy.digest == standard.digest =>
+            {
+                // A standard copy is preferred only when the identifier,
+                // fingerprint, and protected bytes match exactly.
+                keys.push(standard);
+            }
+            (Some(legacy), Some(_)) => {
+                keys.push(legacy);
+                issues.push(SetupKeyIssue {
+                    key_id: Some(id),
+                    reason: "The standard SSH folder contains a different key or copy with the same identifier. The preserved app vault key is shown; the conflicting file was not used or changed."
+                        .into(),
+                });
+            }
+            (Some(legacy), None) => keys.push(legacy),
+            (None, Some(standard)) => keys.push(standard),
             (None, None) => {}
         }
     }
-    keys.sort_by(|a, b| a.key_id.cmp(&b.key_id));
-    if keys.len() > MAX_VAULT_ENTRIES {
-        keys.truncate(MAX_VAULT_ENTRIES);
+    // Deduplicate aliases that resolve to the exact same native path. Explicit
+    // references win over UUID-derived discovery; otherwise the lower key ID is
+    // stable across reloads.
+    keys.sort_by(|a, b| {
+        b.from_reference
+            .cmp(&a.from_reference)
+            .then_with(|| a.key.key_id.cmp(&b.key.key_id))
+    });
+    let mut seen_paths = BTreeSet::new();
+    let mut deduplicated = Vec::with_capacity(keys.len());
+    for key in keys {
+        if seen_paths.insert(key.key.path.clone()) {
+            deduplicated.push(key.key);
+        }
+    }
+    deduplicated.sort_by(|a, b| a.key_id.cmp(&b.key_id));
+    if deduplicated.len() > MAX_VAULT_ENTRIES {
+        deduplicated.truncate(MAX_VAULT_ENTRIES);
         truncated = true;
     }
     issues.sort_by(|a, b| a.key_id.cmp(&b.key_id));
     SetupKeyList {
-        keys,
+        keys: deduplicated,
         issues,
         storage_path: ssh_root.to_string_lossy().into_owned(),
         legacy_storage_path: legacy_root.to_string_lossy().into_owned(),
@@ -762,15 +927,18 @@ fn merge_keys(
 fn list_blocking(legacy_root: &Path, ssh_root: &Path) -> Result<SetupKeyList, String> {
     let (legacy_keys, legacy_issues, legacy_truncated) = scan_legacy(legacy_root);
     let (ssh_keys, ssh_issues, ssh_truncated) = scan_ssh(ssh_root);
+    let (reference_keys, reference_issues, reference_truncated) = scan_references(ssh_root);
     let mut issues = legacy_issues;
     issues.extend(ssh_issues);
+    issues.extend(reference_issues);
     Ok(merge_keys(
         legacy_keys,
         issues,
         ssh_keys,
+        reference_keys,
         legacy_root,
         ssh_root,
-        legacy_truncated || ssh_truncated,
+        legacy_truncated || ssh_truncated || reference_truncated,
     ))
 }
 
@@ -858,81 +1026,121 @@ fn sync_directory(root: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn generate_blocking(
-    legacy_root: &Path,
-    ssh_root: &Path,
-    passphrase: &[u8],
-) -> Result<SetupKey, String> {
-    if !(12..=4096).contains(&passphrase.len()) {
-        return Err("Use a passphrase between 12 and 4096 bytes.".into());
+pub(crate) fn validate_key_name(name: &str) -> Result<(), String> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() > MAX_KEY_NAME_BYTES {
+        return Err("Use a key file name of 1 to 64 ASCII characters.".into());
     }
-    generate_blocking_with_id(
-        legacy_root,
-        ssh_root,
-        passphrase,
-        Uuid::new_v4().to_string(),
-    )
+    if !(bytes[0].is_ascii_alphanumeric() || bytes[0] == b'_') {
+        return Err(
+            "Start the key file name with a letter, number, or underscore, not a dot or hyphen."
+                .into(),
+        );
+    }
+    if !bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(byte))
+    {
+        return Err(
+            "Use only ASCII letters, numbers, dots, underscores, or hyphens in the key file name. Paths, spaces, and symbols are not supported."
+                .into(),
+        );
+    }
+    if name.to_ascii_lowercase().ends_with(".pub") {
+        return Err("Enter the private key file name without the .pub suffix.".into());
+    }
+    if RESERVED_KEY_NAMES.contains(&name) {
+        return Err("That file name is reserved by OpenSSH. Choose a different name.".into());
+    }
+    if name.starts_with(SSH_KEY_PREFIX) {
+        return Err(
+            "That file name is reserved for VPS Pilot generated keys. Choose a different name."
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
-fn generate_blocking_with_id(
-    legacy_root: &Path,
-    ssh_root: &Path,
-    passphrase: &[u8],
-    key_id: String,
-) -> Result<SetupKey, String> {
-    let key_id = canonical_id(&key_id)?;
-    ensure_ssh_directory(ssh_root)?;
-    ensure_legacy_vault(legacy_root)?;
-    let owned = count_owned_entries(legacy_root, false)? + count_owned_entries(ssh_root, true)?;
-    if owned >= MAX_VAULT_ENTRIES {
-        return Err(format!(
-            "The local key vault limit of {MAX_VAULT_ENTRIES} entries has been reached."
-        ));
+fn validate_passphrase(passphrase: &[u8]) -> Result<(), String> {
+    if passphrase.is_empty() || (12..=4096).contains(&passphrase.len()) {
+        Ok(())
+    } else {
+        Err(
+            "Use an empty passphrase for an unencrypted key, or 12 to 4096 bytes for an encrypted key."
+                .into(),
+        )
     }
+}
+
+#[cfg(unix)]
+struct GeneratedMaterial {
+    pem: Zeroizing<String>,
+    public: String,
+    fingerprint: String,
+    encrypted: bool,
+}
+
+#[cfg(unix)]
+fn generate_material(passphrase: &[u8]) -> Result<GeneratedMaterial, String> {
     let mut rng = rand::rng();
     let private = PrivateKey::random(&mut rng, Algorithm::Ed25519)
         .map_err(|_| "A local key could not be generated.".to_string())?;
-    let encrypted = private
-        .encrypt(&mut rng, passphrase)
-        .map_err(|_| "The generated key could not be encrypted.".to_string())?;
-    let fingerprint = encrypted.fingerprint(HashAlg::Sha256).to_string();
-    let public = encrypted
+    let encrypted = !passphrase.is_empty();
+    let key = if encrypted {
+        private
+            .encrypt(&mut rng, passphrase)
+            .map_err(|_| "The generated key could not be encrypted.".to_string())?
+    } else {
+        private
+    };
+    let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+    let public = key
         .public_key()
         .to_openssh()
         .map_err(|_| "The generated public key could not be encoded.".to_string())?;
-    let pem = encrypted
+    let pem = key
         .to_openssh(LineEnding::LF)
-        .map_err(|_| "The encrypted key could not be encoded.".to_string())?;
-    let private_target = ssh_root.join(ssh_private_name(&key_id));
-    let public_target = ssh_root.join(ssh_public_name(&key_id));
-    let expected_fingerprint = fingerprint.clone();
-    publish_bytes_noclobber(ssh_root, &private_target, pem.as_bytes(), move |staged| {
-        let verified = PrivateKey::from_openssh(staged)
-            .map_err(|_| "The staged key could not be verified.".to_string())?;
-        if !verified.is_encrypted()
-            || verified.algorithm() != Algorithm::Ed25519
-            || verified.fingerprint(HashAlg::Sha256).to_string() != expected_fingerprint
-        {
-            return Err(
-                "The staged key did not match the generated key. Nothing was published.".into(),
-            );
-        }
-        Ok(())
+        .map_err(|_| "The generated private key could not be encoded.".to_string())?;
+    Ok(GeneratedMaterial {
+        pem,
+        public,
+        fingerprint,
+        encrypted,
     })
-    .map_err(|failure| match failure {
-        PublishFailure::Exists => {
-            "A local key already uses this identifier. Nothing was overwritten.".to_string()
-        }
-        PublishFailure::Failed => {
-            "The generated key could not be published. Nothing was overwritten.".to_string()
-        }
-    })?;
-    let expected_fingerprint = fingerprint.clone();
+}
+
+#[cfg(unix)]
+fn verify_generated_private(
+    staged: &[u8],
+    fingerprint: &str,
+    encrypted: bool,
+) -> Result<(), String> {
+    let verified = PrivateKey::from_openssh(staged)
+        .map_err(|_| "The staged key could not be verified.".to_string())?;
+    if verified.is_encrypted() != encrypted
+        || verified.algorithm() != Algorithm::Ed25519
+        || verified.fingerprint(HashAlg::Sha256).to_string() != fingerprint
+    {
+        return Err(
+            "The staged key did not match the generated key. Nothing was published.".into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn publish_generated_public(
+    ssh_root: &Path,
+    public_target: &Path,
+    public: &str,
+    fingerprint: &str,
+) -> Result<(), String> {
+    let expected_fingerprint = fingerprint.to_string();
     let public_bytes = format!("{public}\n");
-    if publish_bytes_noclobber(
+    publish_bytes_noclobber(
         ssh_root,
-        &public_target,
+        public_target,
         public_bytes.as_bytes(),
         move |staged| {
             let text = std::str::from_utf8(staged)
@@ -948,12 +1156,72 @@ fn generate_blocking_with_id(
             Ok(())
         },
     )
+    .map_err(|_| "unpublished".to_string())
+}
+
+#[cfg(unix)]
+fn generate_blocking(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    passphrase: &[u8],
+) -> Result<SetupKey, String> {
+    validate_passphrase(passphrase)?;
+    generate_blocking_with_id(
+        legacy_root,
+        ssh_root,
+        passphrase,
+        Uuid::new_v4().to_string(),
+    )
+}
+
+#[cfg(unix)]
+fn generate_blocking_with_id(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    passphrase: &[u8],
+    key_id: String,
+) -> Result<SetupKey, String> {
+    validate_passphrase(passphrase)?;
+    let key_id = canonical_id(&key_id)?;
+    ensure_ssh_directory(ssh_root)?;
+    ensure_legacy_vault(legacy_root)?;
+    let owned = count_owned_entries(legacy_root, false)? + count_owned_entries(ssh_root, true)?;
+    if owned >= MAX_VAULT_ENTRIES {
+        return Err(format!(
+            "The local key vault limit of {MAX_VAULT_ENTRIES} entries has been reached."
+        ));
+    }
+    let material = generate_material(passphrase)?;
+    let private_target = ssh_root.join(ssh_private_name(&key_id));
+    let public_target = ssh_root.join(ssh_public_name(&key_id));
+    let expected_fingerprint = material.fingerprint.clone();
+    let encrypted = material.encrypted;
+    publish_bytes_noclobber(
+        ssh_root,
+        &private_target,
+        material.pem.as_bytes(),
+        move |staged| verify_generated_private(staged, &expected_fingerprint, encrypted),
+    )
+    .map_err(|failure| match failure {
+        PublishFailure::Exists => {
+            "A local key already uses this identifier. Nothing was overwritten.".to_string()
+        }
+        PublishFailure::Failed => {
+            "The generated key could not be published. Nothing was overwritten.".to_string()
+        }
+    })?;
+    if publish_generated_public(
+        ssh_root,
+        &public_target,
+        &material.public,
+        &material.fingerprint,
+    )
     .is_err()
     {
         // The private key is already published. Never delete it here; report
         // the preserved/uncertain state and let listing discover it.
         return Err(
-            "The encrypted key was created, but its matching public key file could not be published. The encrypted private key is preserved; reload keys before retrying."
+            "The key was created, but its matching public key file could not be published. The private key is preserved; reload keys before retrying."
                 .into(),
         );
     }
@@ -965,11 +1233,431 @@ fn generate_blocking_with_id(
     }
     Ok(SetupKey {
         key_id,
-        fingerprint,
+        fingerprint: material.fingerprint,
         algorithm: "ssh-ed25519".into(),
-        encrypted: true,
+        encrypted: material.encrypted,
         path: private_target.to_string_lossy().into_owned(),
         location: KeyLocation::Ssh,
+    })
+}
+
+#[cfg(unix)]
+fn ensure_name_available(root: &Path, name: &str) -> Result<(), String> {
+    for target in [root.join(name), root.join(format!("{name}.pub"))] {
+        match fs::symlink_metadata(&target) {
+            Ok(_) => {
+                return Err(
+                    "A file or folder already uses this key name. Nothing was overwritten.".into(),
+                )
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(
+                    "The standard SSH folder could not be checked. Nothing was overwritten.".into(),
+                )
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn check_name_blocking(ssh_root: &Path, file_name: &str) -> Result<KeyNameCheck, String> {
+    if let Err(reason) = validate_key_name(file_name) {
+        return Ok(KeyNameCheck {
+            file_name: file_name.to_string(),
+            available: false,
+            message: reason,
+        });
+    }
+    match existing_ssh_owner(ssh_root) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Ok(KeyNameCheck {
+                file_name: file_name.to_string(),
+                available: true,
+                message:
+                    "This key name is available. The standard SSH folder will be created when you create the key."
+                        .into(),
+            })
+        }
+        Err(reason) => {
+            return Ok(KeyNameCheck {
+                file_name: file_name.to_string(),
+                available: false,
+                message: reason,
+            })
+        }
+    }
+    for target in [
+        ssh_root.join(file_name),
+        ssh_root.join(format!("{file_name}.pub")),
+    ] {
+        match fs::symlink_metadata(&target) {
+            Ok(_) => {
+                return Ok(KeyNameCheck {
+                    file_name: file_name.to_string(),
+                    available: false,
+                    message:
+                        "A file or folder already uses this key name. Choose a different name."
+                            .into(),
+                })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Ok(KeyNameCheck {
+                    file_name: file_name.to_string(),
+                    available: false,
+                    message: "The standard SSH folder could not be checked. Try again.".into(),
+                })
+            }
+        }
+    }
+    Ok(KeyNameCheck {
+        file_name: file_name.to_string(),
+        available: true,
+        message: "This key name is available.".into(),
+    })
+}
+
+#[cfg(unix)]
+fn generate_named_blocking(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    file_name: &str,
+    passphrase: &[u8],
+) -> Result<SetupKey, String> {
+    generate_named_blocking_with(legacy_root, ssh_root, file_name, passphrase, |_| {})
+}
+
+#[cfg(unix)]
+fn generate_named_blocking_with<F>(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    file_name: &str,
+    passphrase: &[u8],
+    before_public: F,
+) -> Result<SetupKey, String>
+where
+    F: FnOnce(&Path),
+{
+    validate_passphrase(passphrase)?;
+    validate_key_name(file_name)?;
+    ensure_ssh_directory(ssh_root)?;
+    ensure_legacy_vault(legacy_root)?;
+    references::ensure_reference_dir(ssh_root)?;
+    let owned = count_owned_entries(legacy_root, false)?
+        + count_owned_entries(ssh_root, true)?
+        + references::count_references(ssh_root)?;
+    if owned >= MAX_VAULT_ENTRIES {
+        return Err(format!(
+            "The local key vault limit of {MAX_VAULT_ENTRIES} entries has been reached."
+        ));
+    }
+    ensure_name_available(ssh_root, file_name)?;
+    let material = generate_material(passphrase)?;
+    let private_target = ssh_root.join(file_name);
+    let public_target = ssh_root.join(format!("{file_name}.pub"));
+    let digest = references::digest_hex(&private_digest(material.pem.as_bytes()));
+    let mut record = None;
+    for _ in 0..4 {
+        let id = Uuid::new_v4().to_string();
+        let candidate = references::KeyReference {
+            version: 1,
+            id,
+            path: private_target.to_string_lossy().into_owned(),
+            kind: references::ReferenceKind::Generated,
+            fingerprint: material.fingerprint.clone(),
+            digest: digest.clone(),
+        };
+        match references::write_reference(ssh_root, &candidate) {
+            Ok(()) => {
+                record = Some(candidate);
+                break;
+            }
+            Err(error) if error.contains("already uses this identifier") => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    let record = record.ok_or_else(|| {
+        "A local key reference could not be published. Nothing was overwritten.".to_string()
+    })?;
+    if let Err(reason) = ensure_name_available(ssh_root, file_name) {
+        references::remove_reference(ssh_root, &record);
+        return Err(reason.replace("Nothing was overwritten.", "Nothing else was written."));
+    }
+    let expected_fingerprint = material.fingerprint.clone();
+    let encrypted = material.encrypted;
+    if publish_bytes_noclobber(
+        ssh_root,
+        &private_target,
+        material.pem.as_bytes(),
+        move |staged| verify_generated_private(staged, &expected_fingerprint, encrypted),
+    )
+    .is_err()
+    {
+        references::remove_reference(ssh_root, &record);
+        return Err(
+            "A file or folder already uses this key name. The private key was not published; nothing was overwritten."
+                .into(),
+        );
+    }
+    before_public(&public_target);
+    if publish_generated_public(
+        ssh_root,
+        &public_target,
+        &material.public,
+        &material.fingerprint,
+    )
+    .is_err()
+    {
+        // Keep the private key and its native reference so the partial pair is
+        // discoverable. A foreign public file is never overwritten or removed.
+        return Err(
+            "The private key and its local reference were created, but the matching public key file could not be published because another file may already use its name. The incomplete pair is preserved; verify the standard SSH folder before retrying."
+                .into(),
+        );
+    }
+    if sync_directory(ssh_root).is_err() {
+        return Err(
+            "The key and its public file were created, but the standard SSH folder could not be synced. Reload keys before retrying; the key may already exist."
+                .into(),
+        );
+    }
+    Ok(SetupKey {
+        key_id: record.id,
+        fingerprint: material.fingerprint,
+        algorithm: "ssh-ed25519".into(),
+        encrypted: material.encrypted,
+        path: private_target.to_string_lossy().into_owned(),
+        location: KeyLocation::Ssh,
+    })
+}
+
+#[cfg(unix)]
+fn validate_selected_path(path: &Path) -> Result<(), String> {
+    let Some(text) = path.to_str() else {
+        return Err("The chosen key path is not valid UTF-8 text.".into());
+    };
+    if text.is_empty() || text.chars().any(char::is_control) || text.contains(['%', '$']) {
+        return Err(
+            "Choose a private key path without control characters or expansion symbols.".into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_selected_private_file(path: &Path, owner: u32) -> Result<(PrivateKey, [u8; 32]), String> {
+    let before = fs::symlink_metadata(path)
+        .map_err(|_| "The chosen private key file is unavailable.".to_string())?;
+    if before.file_type().is_symlink() {
+        return Err("Choose the private key file itself, not a symbolic link.".into());
+    }
+    if !before.file_type().is_file() {
+        return Err("Choose a regular private key file.".into());
+    }
+    if before.uid() != owner {
+        return Err("The chosen private key belongs to another account.".into());
+    }
+    if !valid_private_mode(before.mode()) {
+        return Err(
+            "The chosen private key must be readable only by you (permissions 0400 or 0600). It was not changed."
+                .into(),
+        );
+    }
+    if before.nlink() != 1 {
+        return Err(
+            "The chosen private key has extra hard links. Choose a file with no other links."
+                .into(),
+        );
+    }
+    if before.len() > MAX_KEY_BYTES as u64 {
+        return Err("The chosen private key is larger than expected.".into());
+    }
+    let file =
+        File::open(path).map_err(|_| "The chosen private key file is unreadable.".to_string())?;
+    let opened = file
+        .metadata()
+        .map_err(|_| "The chosen private key file is unreadable.".to_string())?;
+    if opened.dev() != before.dev()
+        || opened.ino() != before.ino()
+        || !valid_private_metadata(&opened, owner)
+    {
+        return Err("The chosen private key changed while it was being read. Try again.".into());
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take(MAX_KEY_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "The chosen private key file is unreadable.".to_string())?;
+    if bytes.len() > MAX_KEY_BYTES {
+        return Err("The chosen private key is larger than expected.".into());
+    }
+    let private = PrivateKey::from_openssh(bytes.as_slice())
+        .map_err(|_| "The chosen file is not a supported OpenSSH private key.".to_string())?;
+    let digest = private_digest(bytes.as_slice());
+    Ok((private, digest))
+}
+
+#[cfg(unix)]
+fn selected_public_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".pub");
+    PathBuf::from(name)
+}
+
+#[cfg(unix)]
+fn existing_uuid_identity(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    canonical: &Path,
+    fingerprint: &str,
+    digest: &[u8; 32],
+) -> Option<(String, KeyLocation)> {
+    let parent = canonical.parent()?;
+    let name = canonical.file_name()?.to_str()?;
+    let (root, id, location, owner) = if parent == legacy_root {
+        let owner = fs::metadata(legacy_root).ok()?.uid();
+        (
+            legacy_root,
+            canonical_id(name).ok()?,
+            KeyLocation::Legacy,
+            owner,
+        )
+    } else if parent == ssh_root {
+        let owner = existing_ssh_owner(ssh_root).ok()??;
+        (ssh_root, owned_ssh_id(name)?, KeyLocation::Ssh, owner)
+    } else {
+        return None;
+    };
+    let path = if location == KeyLocation::Ssh {
+        root.join(ssh_private_name(&id))
+    } else {
+        root.join(&id)
+    };
+    let (private, bytes) = read_private_file(&path, owner).ok()?;
+    if private.fingerprint(HashAlg::Sha256).to_string() != fingerprint
+        || private_digest(bytes.as_slice()) != *digest
+    {
+        return None;
+    }
+    Some((id, location))
+}
+
+#[cfg(unix)]
+fn register_selected_blocking(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    path: &Path,
+) -> Result<SetupKey, String> {
+    let owner = ensure_ssh_directory(ssh_root)?;
+    if !path.is_absolute() {
+        return Err("Choose an absolute private key file path.".into());
+    }
+    let before = fs::symlink_metadata(path)
+        .map_err(|_| "The chosen private key file is unavailable.".to_string())?;
+    if before.file_type().is_symlink() {
+        return Err("Choose the private key file itself, not a symbolic link.".into());
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|_| "The chosen private key file is unavailable.".to_string())?;
+    validate_selected_path(&canonical)?;
+    let (private, digest) = read_selected_private_file(&canonical, owner)?;
+    let fingerprint = private.fingerprint(HashAlg::Sha256).to_string();
+    let public_path = selected_public_path(&canonical);
+    match fs::symlink_metadata(&public_path) {
+        Ok(_) => {
+            let public = read_public_sidecar(&public_path, owner)?;
+            if public.fingerprint(HashAlg::Sha256).to_string() != fingerprint {
+                return Err(
+                    "The matching public key file does not match the chosen private key. Nothing was changed."
+                        .into(),
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return Err(
+                "The matching public key file could not be checked. Nothing was changed.".into(),
+            )
+        }
+    }
+    references::ensure_reference_dir(ssh_root)?;
+    let load = references::load_references(ssh_root)?;
+    let canonical_text = canonical.to_string_lossy().into_owned();
+    let digest_text = references::digest_hex(&digest);
+    for record in &load.records {
+        if record.path == canonical_text
+            && record.fingerprint == fingerprint
+            && record.digest == digest_text
+        {
+            return Ok(SetupKey {
+                key_id: record.id.clone(),
+                fingerprint,
+                algorithm: private.algorithm().to_string(),
+                encrypted: private.is_encrypted(),
+                path: canonical_text,
+                location: references::location_for_path(ssh_root, &canonical),
+            });
+        }
+    }
+    let algorithm = private.algorithm().to_string();
+    let encrypted = private.is_encrypted();
+    if let Some(identity) =
+        existing_uuid_identity(legacy_root, ssh_root, &canonical, &fingerprint, &digest)
+    {
+        return Ok(SetupKey {
+            key_id: identity.0,
+            fingerprint,
+            algorithm,
+            encrypted,
+            path: canonical_text,
+            location: identity.1,
+        });
+    }
+    let legacy_count = match fs::symlink_metadata(legacy_root) {
+        Ok(_) => count_owned_entries(legacy_root, false)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(_) => return Err("The local key folder is unavailable.".into()),
+    };
+    let owned = legacy_count
+        + count_owned_entries(ssh_root, true)?
+        + references::count_references(ssh_root)?;
+    if owned >= MAX_VAULT_ENTRIES {
+        return Err(format!(
+            "The local key vault limit of {MAX_VAULT_ENTRIES} entries has been reached."
+        ));
+    }
+    let mut saved = None;
+    for _ in 0..4 {
+        let id = Uuid::new_v4().to_string();
+        let candidate = references::KeyReference {
+            version: 1,
+            id,
+            path: canonical_text.clone(),
+            kind: references::ReferenceKind::Selected,
+            fingerprint: fingerprint.clone(),
+            digest: digest_text.clone(),
+        };
+        match references::write_reference(ssh_root, &candidate) {
+            Ok(()) => {
+                saved = Some(candidate);
+                break;
+            }
+            Err(error) if error.contains("already uses this identifier") => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    let record = saved.ok_or_else(|| {
+        "A local key reference could not be published. Nothing was changed.".to_string()
+    })?;
+    Ok(SetupKey {
+        key_id: record.id,
+        fingerprint,
+        algorithm: private.algorithm().to_string(),
+        encrypted: private.is_encrypted(),
+        path: canonical_text,
+        location: references::location_for_path(ssh_root, &canonical),
     })
 }
 
@@ -1008,7 +1696,14 @@ fn copy_legacy_to_ssh_blocking(
                 .public_key()
                 .to_openssh()
                 .map_err(|_| "The app vault public key could not be encoded.".to_string())?;
-            Some((fingerprint, digest, bytes, public))
+            Some((
+                fingerprint,
+                digest,
+                bytes,
+                public,
+                private.algorithm().to_string(),
+                private.is_encrypted(),
+            ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => {
@@ -1029,15 +1724,15 @@ fn copy_legacy_to_ssh_blocking(
         read_target_private(
             &ssh_private_path,
             ssh_owner,
-            "A file already uses this key name in the standard SSH folder and is not a valid encrypted key. Nothing was overwritten.",
+            "A file already uses this key name in the standard SSH folder and is not a valid local key. Nothing was overwritten.",
         )?
-    } else if let Some((fingerprint, digest, _, _)) = &source {
+    } else if let Some((fingerprint, digest, _, _, _, _)) = &source {
         (fingerprint.clone(), *digest)
     } else {
         return Err("The selected local key is unavailable in the app vault.".into());
     };
 
-    if let Some((fingerprint, digest, _, _)) = &source {
+    if let Some((fingerprint, digest, _, _, _, _)) = &source {
         if target_fingerprint != *fingerprint {
             return Err(
                 "A different key already uses this identifier in the standard SSH folder. Nothing was overwritten."
@@ -1046,20 +1741,27 @@ fn copy_legacy_to_ssh_blocking(
         }
         if target_private_exists && target_digest != *digest {
             return Err(
-                "A different encrypted copy of this key already exists in the standard SSH folder. The saved key reference was not switched; nothing was overwritten."
+                "A different copy of this key already exists in the standard SSH folder. The saved key reference was not switched; nothing was overwritten."
                     .into(),
             );
         }
     }
 
     let expected_public = match &source {
-        Some((_, _, _, public)) => public.clone(),
+        Some((_, _, _, public, _, _)) => public.clone(),
         None => {
             let (private, _) = read_private_file(&ssh_private_path, ssh_owner)?;
             private
                 .public_key()
                 .to_openssh()
                 .map_err(|_| "The standard SSH public key could not be encoded.".to_string())?
+        }
+    };
+    let (target_algorithm, target_encrypted) = match &source {
+        Some((_, _, _, _, algorithm, encrypted)) => (algorithm.clone(), *encrypted),
+        None => {
+            let (private, _) = read_private_file(&ssh_private_path, ssh_owner)?;
+            (private.algorithm().to_string(), private.is_encrypted())
         }
     };
 
@@ -1088,16 +1790,14 @@ fn copy_legacy_to_ssh_blocking(
 
     let mut wrote = false;
     if !target_private_exists {
-        let Some((fingerprint, digest, bytes, _)) = &source else {
+        let Some((fingerprint, digest, bytes, _, _, _)) = &source else {
             return Err("The selected local key is unavailable in the app vault.".into());
         };
         match publish_bytes_noclobber(ssh_root, &ssh_private_path, bytes.as_slice(), |staged| {
             let verified = PrivateKey::from_openssh(staged).map_err(|_| {
                 "The staged key could not be verified. Nothing was published.".to_string()
             })?;
-            if !verified.is_encrypted()
-                || verified.algorithm() != Algorithm::Ed25519
-                || verified.fingerprint(HashAlg::Sha256).to_string() != *fingerprint
+            if verified.fingerprint(HashAlg::Sha256).to_string() != *fingerprint
                 || private_digest(staged) != *digest
             {
                 return Err(
@@ -1111,7 +1811,7 @@ fn copy_legacy_to_ssh_blocking(
                 let (raced_fingerprint, raced_digest) = read_target_private(
                     &ssh_private_path,
                     ssh_owner,
-                    "A file already uses this key name in the standard SSH folder and is not a valid encrypted key. Nothing was overwritten.",
+                    "A file already uses this key name in the standard SSH folder and is not a valid local key. Nothing was overwritten.",
                 )?;
                 if raced_fingerprint != *fingerprint {
                     return Err(
@@ -1121,15 +1821,13 @@ fn copy_legacy_to_ssh_blocking(
                 }
                 if raced_digest != *digest {
                     return Err(
-                        "A different encrypted copy of this key already exists in the standard SSH folder. The saved key reference was not switched; nothing was overwritten."
+                        "A different copy of this key already exists in the standard SSH folder. The saved key reference was not switched; nothing was overwritten."
                             .into(),
                     );
                 }
             }
             Err(PublishFailure::Failed) => {
-                return Err(
-                    "The encrypted key could not be copied. Nothing was overwritten.".into(),
-                );
+                return Err("The key could not be copied. Nothing was overwritten.".into());
             }
         }
     }
@@ -1161,14 +1859,14 @@ fn copy_legacy_to_ssh_blocking(
                     .map_err(|reason| format!("{reason} Nothing else was overwritten."))?;
                 if public.fingerprint(HashAlg::Sha256).to_string() != target_fingerprint {
                     return Err(
-                        "The encrypted key is preserved, but the existing public key file does not match. Nothing else was overwritten."
+                        "The key is preserved, but the existing public key file does not match. Nothing else was overwritten."
                             .into(),
                     );
                 }
             }
             Err(PublishFailure::Failed) => {
                 return Err(
-                    "The encrypted key is preserved, but its matching public key file could not be written. Reload keys; nothing else was overwritten."
+                    "The key is preserved, but its matching public key file could not be written. Reload keys; nothing else was overwritten."
                         .into(),
                 );
             }
@@ -1186,8 +1884,8 @@ fn copy_legacy_to_ssh_blocking(
         key: SetupKey {
             key_id: id,
             fingerprint: target_fingerprint,
-            algorithm: "ssh-ed25519".into(),
-            encrypted: true,
+            algorithm: target_algorithm,
+            encrypted: target_encrypted,
             path: ssh_private_path.to_string_lossy().into_owned(),
             location: KeyLocation::Ssh,
         },
@@ -1218,6 +1916,11 @@ fn resolve_legacy(root: &Path, id: &str) -> Result<Option<ResolvedKeyMetadata>, 
                 fingerprint: private.fingerprint(HashAlg::Sha256).to_string(),
                 digest: private_digest(bytes.as_slice()),
                 location: KeyLocation::Legacy,
+                algorithm: private.algorithm().to_string(),
+                encrypted: private.is_encrypted(),
+                origin: KeyOrigin::Legacy,
+                public_path: None,
+                public_issue: None,
             }))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1233,17 +1936,63 @@ fn resolve_ssh(root: &Path, id: &str) -> Result<Option<ResolvedKeyMetadata>, Str
     let path = root.join(ssh_private_name(id));
     match fs::symlink_metadata(&path) {
         Ok(_) => {
-            let (private, digest, _, _) = read_ssh_key(root, id, owner)?;
+            let (private, digest, public_path, public_issue) = read_ssh_key(root, id, owner)?;
             Ok(Some(ResolvedKeyMetadata {
                 path,
                 fingerprint: private.fingerprint(HashAlg::Sha256).to_string(),
                 digest,
                 location: KeyLocation::Ssh,
+                algorithm: private.algorithm().to_string(),
+                encrypted: private.is_encrypted(),
+                origin: KeyOrigin::Generated,
+                public_path,
+                public_issue,
             }))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err("The stored local key is unreadable.".into()),
     }
+}
+
+#[cfg(unix)]
+fn resolve_reference_metadata(
+    ssh_root: &Path,
+    id: &str,
+) -> Result<Option<ResolvedKeyMetadata>, String> {
+    let Some(owner) = existing_ssh_owner(ssh_root)? else {
+        return Ok(None);
+    };
+    let load = references::load_references(ssh_root)?;
+    if let Some(issue) = load
+        .issues
+        .iter()
+        .find(|issue| issue.key_id.as_deref() == Some(id))
+    {
+        return Err(format!(
+            "The saved local key reference is invalid. {} It was not used or changed.",
+            issue.reason
+        ));
+    }
+    let Some(record) = load.records.iter().find(|record| record.id == id) else {
+        return Ok(None);
+    };
+    let resolved = references::resolve_reference(ssh_root, owner, record).map_err(|reason| {
+        format!("The saved local key reference could not be resolved. {reason}")
+    })?;
+    Ok(Some(ResolvedKeyMetadata {
+        path: resolved.path,
+        fingerprint: resolved.fingerprint,
+        digest: resolved.digest,
+        location: resolved.location,
+        algorithm: resolved.algorithm,
+        encrypted: resolved.encrypted,
+        origin: match record.kind {
+            references::ReferenceKind::Generated => KeyOrigin::Generated,
+            references::ReferenceKind::Selected => KeyOrigin::Selected,
+        },
+        public_path: resolved.public_path,
+        public_issue: resolved.public_issue,
+    }))
 }
 
 #[cfg(unix)]
@@ -1253,6 +2002,22 @@ fn resolve_metadata_blocking(
     key_id: &str,
 ) -> Result<ResolvedKeyMetadata, String> {
     let id = canonical_id(key_id)?;
+    if let Some(from_reference) = resolve_reference_metadata(ssh_root, &id)? {
+        let legacy = resolve_legacy(legacy_root, &id)?;
+        let standard = resolve_ssh(ssh_root, &id)?;
+        for other in [legacy, standard].into_iter().flatten() {
+            if other.path != from_reference.path
+                && (other.fingerprint != from_reference.fingerprint
+                    || other.digest != from_reference.digest)
+            {
+                return Err(
+                    "The selected identifier refers to conflicting local key material. It was not resolved; choose another key."
+                        .into(),
+                );
+            }
+        }
+        return Ok(from_reference);
+    }
     let legacy = resolve_legacy(legacy_root, &id)?;
     let standard = resolve_ssh(ssh_root, &id)?;
     match (legacy, standard) {
@@ -1313,35 +2078,35 @@ fn export_to_blocking(
         .prefix(".vps-pilot-backup-")
         .suffix(".tmp")
         .tempfile_in(parent)
-        .map_err(|_| "The encrypted key backup could not be staged.".to_string())?;
+        .map_err(|_| "The key backup could not be staged.".to_string())?;
     temporary
         .as_file()
         .set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|_| "The encrypted key backup could not be protected.".to_string())?;
+        .map_err(|_| "The key backup could not be protected.".to_string())?;
     temporary
         .write_all(bytes.as_slice())
-        .map_err(|_| "The encrypted key backup could not be written.".to_string())?;
+        .map_err(|_| "The key backup could not be written.".to_string())?;
     temporary
         .flush()
-        .map_err(|_| "The encrypted key backup could not be written.".to_string())?;
+        .map_err(|_| "The key backup could not be written.".to_string())?;
     temporary
         .as_file()
         .sync_all()
-        .map_err(|_| "The encrypted key backup could not be saved.".to_string())?;
+        .map_err(|_| "The key backup could not be saved.".to_string())?;
     let staged_len = temporary
         .as_file()
         .metadata()
-        .map_err(|_| "The staged encrypted key backup could not be verified.".to_string())?
+        .map_err(|_| "The staged key backup could not be verified.".to_string())?
         .len();
     if staged_len != bytes.len() as u64 {
-        return Err("The staged encrypted key backup did not match. Nothing was published.".into());
+        return Err("The staged key backup did not match. Nothing was published.".into());
     }
     temporary.persist_noclobber(destination).map_err(|error| {
         if error.error.kind() == std::io::ErrorKind::AlreadyExists {
             "A file already exists at the chosen backup destination. Nothing was overwritten."
                 .to_string()
         } else {
-            "The encrypted key backup could not be published. Nothing was overwritten.".to_string()
+            "The key backup could not be published. Nothing was overwritten.".to_string()
         }
     })?;
     // The published copy is kept if this directory sync fails; report
@@ -1349,7 +2114,7 @@ fn export_to_blocking(
     File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|_| {
-            "The encrypted key backup was written, but its folder could not be synced. Verify the backup before relying on it."
+            "The key backup was written, but its folder could not be synced. Verify the backup before relying on it."
                 .to_string()
         })?;
     Ok(())
@@ -1371,9 +2136,7 @@ impl KeyVault {
     {
         // Zeroize rejected input too, then bound it before the gate or worker.
         let passphrase = Zeroizing::new(passphrase);
-        if !(12..=4096).contains(&passphrase.len()) {
-            return Err("Use a passphrase between 12 and 4096 bytes.".into());
-        }
+        validate_passphrase(passphrase.as_bytes())?;
         let guard = self.begin_generation()?;
         let legacy = self.legacy_root.clone();
         let ssh = self.ssh_root.clone();
@@ -1391,6 +2154,51 @@ impl KeyVault {
         self.run_generation(passphrase, generate_blocking).await
     }
 
+    /// Generate a key with an explicit standard-directory file name. The name
+    /// is rechecked inside the worker immediately before publishing so a UI-only
+    /// availability result can never overwrite a racing foreign file.
+    pub async fn generate_named_async(
+        &self,
+        file_name: String,
+        passphrase: String,
+    ) -> Result<SetupKey, String> {
+        let passphrase = Zeroizing::new(passphrase);
+        validate_passphrase(passphrase.as_bytes())?;
+        validate_key_name(&file_name)?;
+        let guard = self.begin_generation()?;
+        let legacy = self.legacy_root.clone();
+        let ssh = self.ssh_root.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _guard = guard;
+            generate_named_blocking(&legacy, &ssh, &file_name, passphrase.as_bytes())
+        })
+        .await
+        .map_err(|_| "The local key generation task could not complete.".to_string())?
+    }
+
+    pub async fn check_name_async(&self, file_name: &str) -> Result<KeyNameCheck, String> {
+        let ssh = self.ssh_root.clone();
+        let file_name = file_name.to_string();
+        tauri::async_runtime::spawn_blocking(move || check_name_blocking(&ssh, &file_name))
+            .await
+            .map_err(|_| "The local key name check could not complete.".to_string())?
+    }
+
+    /// Register a user-chosen existing private key without changing it. This is
+    /// intentionally not a command: the only public entry point is the native
+    /// open dialog, so no renderer-supplied path reaches it.
+    pub(crate) async fn register_selected_async(&self, path: PathBuf) -> Result<SetupKey, String> {
+        let guard = self.begin_generation()?;
+        let legacy = self.legacy_root.clone();
+        let ssh = self.ssh_root.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _guard = guard;
+            register_selected_blocking(&legacy, &ssh, &path)
+        })
+        .await
+        .map_err(|_| "The local key selection task could not complete.".to_string())?
+    }
+
     pub async fn copy_async(&self, key_id: &str) -> Result<CopyResult, String> {
         let guard = self.begin_generation()?;
         let legacy = self.legacy_root.clone();
@@ -1404,6 +2212,7 @@ impl KeyVault {
         .map_err(|_| "The local key copy task could not complete.".to_string())?
     }
 
+    #[allow(dead_code)]
     pub async fn validate_async(&self, key_id: &str) -> Result<(), String> {
         self.resolve_metadata_async(key_id).await.map(|_| ())
     }
@@ -1425,39 +2234,39 @@ impl KeyVault {
         .map_err(|_| "The local key reference could not be resolved.".to_string())?
     }
 
-    /// Resolve a protected standard-directory key pair and verify that its
-    /// matching public sidecar belongs to the encrypted private key. A private
-    /// key alone is not enough for an OpenSSH config entry.
-    pub(crate) async fn resolve_standard_key_async(
+    /// Resolve an opaque key ID to the validated native path and native origin
+    /// for the later reviewed config export. Renderer-provided paths are never
+    /// accepted by this accessor.
+    pub(crate) async fn resolve_config_key_async(
         &self,
         key_id: &str,
-    ) -> Result<ResolvedStandardKey, String> {
-        let ssh = self.ssh_root.clone();
-        let key_id = key_id.to_string();
-        tauri::async_runtime::spawn_blocking(move || {
-            let id = canonical_id(&key_id)?;
-            let owner = existing_ssh_owner(&ssh)?.ok_or_else(|| {
-                "The standard SSH folder is unavailable. Put this key in ~/.ssh first.".to_string()
-            })?;
-            let (private, digest, public_path, issue) = read_ssh_key(&ssh, &id, owner)?;
-            if let Some(reason) = issue {
-                return Err(reason);
-            }
-            public_path.ok_or_else(|| {
-                "The matching public key file is missing. Put this key in ~/.ssh again.".to_string()
-            })?;
-            Ok(ResolvedStandardKey {
-                metadata: ResolvedKeyMetadata {
-                    path: ssh.join(ssh_private_name(&id)),
-                    fingerprint: private.fingerprint(HashAlg::Sha256).to_string(),
-                    digest,
-                    location: KeyLocation::Ssh,
-                },
-                file_name: ssh_private_name(&id),
-            })
+    ) -> Result<ResolvedConfigKey, String> {
+        let id = canonical_id(key_id)?;
+        let metadata = self.resolve_metadata_async(key_id).await?;
+        if let Some(reason) = metadata.public_issue {
+            return Err(format!(
+                "The selected local key cannot be used for a reviewed SSH config entry. {reason}"
+            ));
+        }
+        if metadata.origin == KeyOrigin::Generated && metadata.public_path.is_none() {
+            return Err(
+                "The matching public key file is missing. Generated key pairs require it for a reviewed SSH config entry."
+                    .into(),
+            );
+        }
+        Ok(ResolvedConfigKey {
+            key_id: id,
+            path: metadata.path.to_string_lossy().into_owned(),
+            public_path: metadata
+                .public_path
+                .map(|path| path.to_string_lossy().into_owned()),
+            fingerprint: metadata.fingerprint,
+            digest: metadata.digest,
+            algorithm: metadata.algorithm,
+            encrypted: metadata.encrypted,
+            location: metadata.location,
+            origin: metadata.origin,
         })
-        .await
-        .map_err(|_| "The standard local key pair could not be resolved.".to_string())?
     }
 
     pub(crate) fn standard_ssh_root(&self) -> &Path {
@@ -1472,7 +2281,7 @@ impl KeyVault {
             export_to_blocking(&legacy, &ssh, &key_id, &destination)
         })
         .await
-        .map_err(|_| "The encrypted key backup task could not complete.".to_string())?
+        .map_err(|_| "The key backup task could not complete.".to_string())?
     }
 
     /// Trusted, validated reference for tests. It never returns private-key
@@ -1494,6 +2303,23 @@ impl KeyVault {
         Err(UNAVAILABLE.into())
     }
 
+    pub async fn generate_named_async(
+        &self,
+        _file_name: String,
+        passphrase: String,
+    ) -> Result<SetupKey, String> {
+        let _passphrase = Zeroizing::new(passphrase);
+        Err(UNAVAILABLE.into())
+    }
+
+    pub async fn check_name_async(&self, _file_name: &str) -> Result<KeyNameCheck, String> {
+        Err(UNAVAILABLE.into())
+    }
+
+    pub(crate) async fn register_selected_async(&self, _path: PathBuf) -> Result<SetupKey, String> {
+        Err(UNAVAILABLE.into())
+    }
+
     pub async fn copy_async(&self, _key_id: &str) -> Result<CopyResult, String> {
         Err(UNAVAILABLE.into())
     }
@@ -1509,10 +2335,10 @@ impl KeyVault {
         Err(UNAVAILABLE.into())
     }
 
-    pub(crate) async fn resolve_standard_key_async(
+    pub(crate) async fn resolve_config_key_async(
         &self,
         _key_id: &str,
-    ) -> Result<ResolvedStandardKey, String> {
+    ) -> Result<ResolvedConfigKey, String> {
         Err(UNAVAILABLE.into())
     }
 
@@ -1536,8 +2362,65 @@ pub async fn app_setup_keys_list(
 pub async fn app_setup_key_generate(
     vault: tauri::State<'_, KeyVault>,
     passphrase: String,
+    file_name: Option<String>,
 ) -> Result<SetupKey, String> {
-    vault.generate_async(passphrase).await
+    match file_name {
+        Some(file_name) => vault.generate_named_async(file_name, passphrase).await,
+        None => vault.generate_async(passphrase).await,
+    }
+}
+
+#[tauri::command]
+pub async fn app_setup_key_check_name(
+    vault: tauri::State<'_, KeyVault>,
+    file_name: String,
+) -> Result<KeyNameCheck, String> {
+    vault.check_name_async(&file_name).await
+}
+
+#[cfg(unix)]
+#[tauri::command]
+pub async fn app_setup_key_select(
+    app: tauri::AppHandle,
+    vault: tauri::State<'_, KeyVault>,
+) -> Result<SelectResult, String> {
+    let default_directory = vault.standard_ssh_root().to_path_buf();
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title("Choose an existing SSH private key");
+        if default_directory.is_dir() {
+            dialog = dialog.set_directory(default_directory);
+        }
+        dialog.blocking_pick_file()
+    })
+    .await
+    .map_err(|_| "The local key file dialog was unavailable.".to_string())?;
+    let Some(selected) = selected else {
+        return Ok(SelectResult {
+            status: "canceled",
+            key: None,
+        });
+    };
+    let path = selected
+        .into_path()
+        .map_err(|_| "Choose a local private key file.".to_string())?;
+    let key = vault.register_selected_async(path).await?;
+    Ok(SelectResult {
+        status: "selected",
+        key: Some(key),
+    })
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+pub async fn app_setup_key_select(
+    app: tauri::AppHandle,
+    vault: tauri::State<'_, KeyVault>,
+) -> Result<SelectResult, String> {
+    let _ = (app, vault);
+    Err(UNAVAILABLE.into())
 }
 
 #[tauri::command]
@@ -1555,12 +2438,18 @@ pub async fn app_setup_key_export(
     vault: tauri::State<'_, KeyVault>,
     key_id: String,
 ) -> Result<ExportResult, String> {
-    vault.validate_async(&key_id).await?;
+    let metadata = vault.resolve_metadata_async(&key_id).await?;
+    let encrypted = metadata.encrypted;
     let suggested = format!("vps-pilot-{}.key", key_id.get(..8).unwrap_or("local-key"));
+    let title = if encrypted {
+        "Back up encrypted SSH key"
+    } else {
+        "Back up unencrypted SSH key"
+    };
     let selected = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .set_title("Back up encrypted SSH key")
+            .set_title(title)
             .set_file_name(suggested)
             .blocking_save_file()
     })
@@ -1570,6 +2459,7 @@ pub async fn app_setup_key_export(
         return Ok(ExportResult {
             status: "canceled",
             path: None,
+            encrypted,
         });
     };
     let destination = selected
@@ -1579,6 +2469,7 @@ pub async fn app_setup_key_export(
     Ok(ExportResult {
         status: "exported",
         path: Some(destination.to_string_lossy().into_owned()),
+        encrypted,
     })
 }
 
@@ -1805,7 +2696,7 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
         let error =
             copy_legacy_to_ssh_blocking(&fixture.legacy(), &fixture.ssh(), &id).unwrap_err();
-        assert!(error.contains("not a valid encrypted key"), "{error}");
+        assert!(error.contains("not a valid local key"), "{error}");
         assert_eq!(fs::read(&target).unwrap(), b"not a private key");
         assert_eq!(fs::read(fixture.legacy().join(&id)).unwrap(), legacy_before);
     }
@@ -2147,7 +3038,7 @@ mod tests {
         assert!(!destination.exists());
         let error =
             copy_legacy_to_ssh_blocking(&fixture.legacy(), &fixture.ssh(), &id).unwrap_err();
-        assert!(error.contains("different encrypted copy"), "{error}");
+        assert!(error.contains("different copy"), "{error}");
         assert_eq!(fs::read(&legacy_path).unwrap(), legacy_bytes);
         assert_eq!(fs::read(&ssh_path).unwrap(), ssh_bytes);
 
@@ -2156,7 +3047,7 @@ mod tests {
         assert_eq!(listed.keys[0].location, KeyLocation::Legacy);
         assert!(listed.issues.iter().any(|issue| {
             issue.key_id.as_deref() == Some(id.as_str())
-                && issue.reason.contains("different key or encrypted copy")
+                && issue.reason.contains("different key or copy")
         }));
     }
 
@@ -2168,11 +3059,17 @@ mod tests {
                 fingerprint: "SHA256:fixture".into(),
                 algorithm: "ssh-ed25519".into(),
                 encrypted: true,
-                path: "/fixture/key".into(),
+                path: format!("/fixture/key-{id}"),
                 location,
             },
             fingerprint: "SHA256:fixture".into(),
             digest: [7u8; 32],
+            origin: if location == KeyLocation::Legacy {
+                KeyOrigin::Legacy
+            } else {
+                KeyOrigin::Generated
+            },
+            from_reference: false,
         };
         let legacy: Vec<_> = (1..=60)
             .map(|id| synthetic(id, KeyLocation::Legacy))
@@ -2184,6 +3081,7 @@ mod tests {
             legacy,
             Vec::new(),
             standard,
+            Vec::new(),
             Path::new("/fixture/legacy"),
             Path::new("/fixture/ssh"),
             false,
@@ -2258,19 +3156,515 @@ mod tests {
     }
 
     #[test]
-    fn enforces_passphrase_bounds_and_single_operation_gate() {
+    fn empty_passphrase_creates_a_real_plaintext_ed25519_key_and_bounds_still_apply() {
         let dir = tempfile::tempdir().unwrap();
         let fixture = Fixture::new(&dir);
-        for candidate in [b"".as_slice(), b"short".as_slice(), &[b'x'; 4097][..]] {
+        let key = generate_blocking(&fixture.legacy(), &fixture.ssh(), b"").unwrap();
+        assert!(!key.encrypted);
+        let pem = fs::read(&key.path).unwrap();
+        let parsed = PrivateKey::from_openssh(pem.as_slice()).unwrap();
+        assert!(!parsed.is_encrypted());
+        assert_eq!(
+            parsed.fingerprint(HashAlg::Sha256).to_string(),
+            key.fingerprint
+        );
+        assert_eq!(fs::metadata(&key.path).unwrap().mode() & 0o777, 0o600);
+        for candidate in [b"short".as_slice(), &[b'x'; 11][..], &[b'x'; 4097][..]] {
             assert!(generate_blocking(&fixture.legacy(), &fixture.ssh(), candidate).is_err());
         }
-        assert!(generate_blocking(&fixture.legacy(), &fixture.ssh(), b"twelve bytes!").is_ok());
+        let encrypted =
+            generate_blocking(&fixture.legacy(), &fixture.ssh(), b"twelve bytes!").unwrap();
+        assert!(encrypted.encrypted);
+        assert!(
+            PrivateKey::from_openssh(fs::read(&encrypted.path).unwrap().as_slice())
+                .unwrap()
+                .is_encrypted()
+        );
+    }
 
+    #[test]
+    fn single_operation_gate_still_bounds_work() {
         let dir = tempfile::tempdir().unwrap();
         let fixture = Fixture::new(&dir);
         let _guard = fixture.vault.begin_generation().unwrap();
         assert!(fixture.vault.begin_generation().is_err());
         drop(_guard);
         assert!(fixture.vault.begin_generation().is_ok());
+    }
+
+    #[test]
+    fn named_keys_are_real_plaintext_or_encrypted_files_with_protected_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        let plain =
+            generate_named_blocking(&fixture.legacy(), &fixture.ssh(), "work-key", b"").unwrap();
+        assert!(!plain.encrypted);
+        assert_eq!(PathBuf::from(&plain.path), fixture.ssh().join("work-key"));
+        assert_eq!(fs::metadata(&plain.path).unwrap().mode() & 0o777, 0o600);
+        let public_path = fixture.ssh().join("work-key.pub");
+        assert_eq!(fs::metadata(&public_path).unwrap().mode() & 0o777, 0o600);
+        let private = PrivateKey::from_openssh(fs::read(&plain.path).unwrap().as_slice()).unwrap();
+        assert!(!private.is_encrypted());
+        assert_eq!(
+            private.fingerprint(HashAlg::Sha256).to_string(),
+            plain.fingerprint
+        );
+        let public_text = fs::read_to_string(&public_path).unwrap();
+        let public = PublicKey::from_openssh(public_text.as_str()).unwrap();
+        assert_eq!(
+            public.fingerprint(HashAlg::Sha256).to_string(),
+            plain.fingerprint
+        );
+
+        let encrypted = generate_named_blocking(
+            &fixture.legacy(),
+            &fixture.ssh(),
+            "secure-key",
+            passphrase(),
+        )
+        .unwrap();
+        assert!(encrypted.encrypted);
+        let parsed =
+            PrivateKey::from_openssh(fs::read(&encrypted.path).unwrap().as_slice()).unwrap();
+        assert!(parsed.is_encrypted());
+        assert!(parsed.decrypt(passphrase()).is_ok());
+        assert!(parsed.decrypt(b"wrong passphrase").is_err());
+
+        let reference_dir = fixture.ssh().join(references::REFERENCE_DIR);
+        assert_eq!(fs::metadata(&reference_dir).unwrap().mode() & 0o777, 0o700);
+        let record_path = reference_dir.join(format!("{}.json", plain.key_id));
+        assert_eq!(fs::metadata(&record_path).unwrap().mode() & 0o777, 0o600);
+        let record_text = fs::read_to_string(&record_path).unwrap();
+        assert!(!record_text.contains("BEGIN OPENSSH PRIVATE KEY"));
+        assert!(record_text.contains(&plain.fingerprint));
+        let record: references::KeyReference = serde_json::from_str(&record_text).unwrap();
+        assert_eq!(record.kind, references::ReferenceKind::Generated);
+        assert_eq!(record.path, plain.path);
+
+        let listed = list_blocking(&fixture.legacy(), &fixture.ssh()).unwrap();
+        assert_eq!(listed.keys.len(), 2);
+        let listed_plain = listed
+            .keys
+            .iter()
+            .find(|key| key.key_id == plain.key_id)
+            .unwrap();
+        let listed_encrypted = listed
+            .keys
+            .iter()
+            .find(|key| key.key_id == encrypted.key_id)
+            .unwrap();
+        assert!(!listed_plain.encrypted);
+        assert!(listed_encrypted.encrypted);
+        assert_eq!(listed_plain.algorithm, "ssh-ed25519");
+    }
+
+    #[test]
+    fn named_names_reject_reserved_traversal_and_collisions_without_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        ensure_ssh_directory(&fixture.ssh()).unwrap();
+        for name in [
+            "",
+            "x.pub",
+            "config",
+            "authorized_keys",
+            "known_hosts",
+            "environment",
+            "../escape",
+            "dir/name",
+            ".hidden",
+            "-dash",
+            "with space",
+            "with%percent",
+            "with$dollar",
+            "with\"quote",
+            "with\\backslash",
+        ] {
+            assert!(validate_key_name(name).is_err(), "{name:?}");
+            let checked = check_name_blocking(&fixture.ssh(), name).unwrap();
+            assert!(!checked.available, "{name:?}");
+        }
+        let reserved_uuid = format!("vps-pilot_{}", Uuid::new_v4());
+        assert!(validate_key_name(&reserved_uuid).is_err());
+        assert!(validate_key_name(&"a".repeat(65)).is_err());
+
+        let private_collision = fixture.ssh().join("taken");
+        fs::write(&private_collision, b"foreign private").unwrap();
+        fs::set_permissions(&private_collision, fs::Permissions::from_mode(0o600)).unwrap();
+        let public_collision = fixture.ssh().join("taken-pub.pub");
+        fs::write(&public_collision, b"foreign public").unwrap();
+        fs::set_permissions(&public_collision, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::create_dir(fixture.ssh().join("folder")).unwrap();
+        symlink(
+            fixture.ssh().join("missing-target"),
+            fixture.ssh().join("dangling"),
+        )
+        .unwrap();
+
+        for name in ["taken", "taken-pub", "folder", "dangling"] {
+            let checked = check_name_blocking(&fixture.ssh(), name).unwrap();
+            assert!(!checked.available, "{name}");
+            let error =
+                generate_named_blocking(&fixture.legacy(), &fixture.ssh(), name, b"").unwrap_err();
+            assert!(error.contains("already uses this key name"), "{error}");
+        }
+        assert_eq!(fs::read(&private_collision).unwrap(), b"foreign private");
+        assert_eq!(fs::read(&public_collision).unwrap(), b"foreign public");
+        assert_eq!(
+            references::count_references(&fixture.ssh()).unwrap(),
+            0,
+            "a failed named generation must not leave an owned reference"
+        );
+    }
+
+    #[test]
+    fn a_foreign_file_created_after_a_successful_name_check_fails_safely() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        ensure_ssh_directory(&fixture.ssh()).unwrap();
+        assert!(
+            check_name_blocking(&fixture.ssh(), "race")
+                .unwrap()
+                .available
+        );
+        let foreign = fixture.ssh().join("race");
+        fs::write(&foreign, b"foreign race bytes").unwrap();
+        fs::set_permissions(&foreign, fs::Permissions::from_mode(0o600)).unwrap();
+        let error =
+            generate_named_blocking(&fixture.legacy(), &fixture.ssh(), "race", b"").unwrap_err();
+        assert!(error.contains("already uses this key name"), "{error}");
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign race bytes");
+        assert_eq!(references::count_references(&fixture.ssh()).unwrap(), 0);
+
+        let dir2 = tempfile::tempdir().unwrap();
+        let fixture2 = Fixture::new(&dir2);
+        ensure_ssh_directory(&fixture2.ssh()).unwrap();
+        assert!(
+            check_name_blocking(&fixture2.ssh(), "race-pub")
+                .unwrap()
+                .available
+        );
+        let foreign_public = fixture2.ssh().join("race-pub.pub");
+        fs::write(&foreign_public, b"foreign public bytes").unwrap();
+        fs::set_permissions(&foreign_public, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            generate_named_blocking(&fixture2.legacy(), &fixture2.ssh(), "race-pub", b"").is_err()
+        );
+        assert_eq!(fs::read(&foreign_public).unwrap(), b"foreign public bytes");
+        assert!(!fixture2.ssh().join("race-pub").exists());
+    }
+
+    #[test]
+    fn a_public_race_after_private_publish_keeps_the_key_and_reference_discoverable() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        let error = generate_named_blocking_with(
+            &fixture.legacy(),
+            &fixture.ssh(),
+            "partial",
+            b"",
+            |public_target| {
+                fs::write(public_target, b"foreign public key").unwrap();
+                fs::set_permissions(public_target, fs::Permissions::from_mode(0o600)).unwrap();
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("public key file"), "{error}");
+        let private = fixture.ssh().join("partial");
+        assert!(private.is_file());
+        assert_eq!(fs::metadata(&private).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::read(fixture.ssh().join("partial.pub")).unwrap(),
+            b"foreign public key"
+        );
+        assert_eq!(references::count_references(&fixture.ssh()).unwrap(), 1);
+        let listed = list_blocking(&fixture.legacy(), &fixture.ssh()).unwrap();
+        assert_eq!(listed.keys.len(), 1);
+        assert!(!listed.keys[0].encrypted);
+        assert!(listed
+            .issues
+            .iter()
+            .any(|issue| issue.reason.contains("public key")));
+        let resolved =
+            resolve_metadata_blocking(&fixture.legacy(), &fixture.ssh(), &listed.keys[0].key_id)
+                .unwrap();
+        assert_eq!(resolved.path, private);
+        assert!(resolved.public_path.is_none());
+        assert!(resolved.public_issue.is_some());
+    }
+
+    #[test]
+    fn named_references_survive_restart_and_fail_closed_when_changed_or_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        let key =
+            generate_named_blocking(&fixture.legacy(), &fixture.ssh(), "restart-key", b"").unwrap();
+        let restart = KeyVault::new(fixture.legacy(), fixture.ssh());
+        let listed = list_blocking(&restart.legacy_root, &restart.ssh_root).unwrap();
+        assert_eq!(listed.keys.len(), 1);
+        assert_eq!(listed.keys[0].key_id, key.key_id);
+        let resolved = restart.resolve_metadata(&key.key_id).unwrap();
+        assert_eq!(resolved.path, PathBuf::from(&key.path));
+        assert_eq!(resolved.origin, KeyOrigin::Generated);
+
+        let original = fs::read(&key.path).unwrap();
+        fs::write(&key.path, b"tampered key bytes").unwrap();
+        fs::set_permissions(&key.path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(restart.resolve_metadata(&key.key_id).is_err());
+        let listed = list_blocking(&restart.legacy_root, &restart.ssh_root).unwrap();
+        assert!(listed
+            .issues
+            .iter()
+            .any(|issue| issue.key_id.as_deref() == Some(key.key_id.as_str())));
+        fs::write(&key.path, &original).unwrap();
+        fs::set_permissions(&key.path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(restart.resolve_metadata(&key.key_id).is_ok());
+
+        let record_path = restart
+            .ssh_root
+            .join(references::REFERENCE_DIR)
+            .join(format!("{}.json", key.key_id));
+        let record = fs::read(&record_path).unwrap();
+        fs::write(&record_path, b"{\"version\":1,\"id\":\"bad\"}").unwrap();
+        assert!(restart.resolve_metadata(&key.key_id).is_err());
+        let listed = list_blocking(&restart.legacy_root, &restart.ssh_root).unwrap();
+        assert!(listed.issues.iter().any(|issue| {
+            issue.key_id.as_deref() == Some(key.key_id.as_str()) && issue.reason.contains("corrupt")
+        }));
+        assert!(record_path.exists(), "corrupt metadata must be preserved");
+        fs::write(&record_path, &record).unwrap();
+
+        let reference_dir = restart.ssh_root.join(references::REFERENCE_DIR);
+        fs::set_permissions(&reference_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(restart.resolve_metadata(&key.key_id).is_err());
+        let listed = list_blocking(&restart.legacy_root, &restart.ssh_root).unwrap();
+        assert!(listed
+            .issues
+            .iter()
+            .any(|issue| issue.reason.contains("not a private directory")));
+        assert!(record_path.exists());
+        fs::set_permissions(&reference_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn selected_keys_preserve_files_support_0400_and_reuse_or_replace_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        let external_dir = dir.path().join("outside keys");
+        fs::create_dir_all(&external_dir).unwrap();
+        let selected_path = external_dir.join("chosen key");
+        fs::write(
+            &selected_path,
+            PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+                .unwrap()
+                .to_openssh(LineEnding::LF)
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+        fs::set_permissions(&selected_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let original = fs::read(&selected_path).unwrap();
+        let selected =
+            register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &selected_path).unwrap();
+        assert_eq!(
+            PathBuf::from(&selected.path),
+            fs::canonicalize(&selected_path).unwrap()
+        );
+        assert_eq!(selected.location, KeyLocation::External);
+        assert!(!selected.encrypted);
+        assert_eq!(fs::read(&selected_path).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&selected_path).unwrap().mode() & 0o777,
+            0o400,
+            "selection must never chmod the chosen file"
+        );
+        assert!(!external_dir.join("chosen key.pub").exists());
+        let count = references::count_references(&fixture.ssh()).unwrap();
+        let again =
+            register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &selected_path).unwrap();
+        assert_eq!(again.key_id, selected.key_id);
+        assert_eq!(references::count_references(&fixture.ssh()).unwrap(), count);
+        assert_eq!(fs::metadata(&selected_path).unwrap().mode() & 0o777, 0o400);
+
+        let restart = KeyVault::new(fixture.legacy(), fixture.ssh());
+        let resolved = restart.resolve_metadata(&selected.key_id).unwrap();
+        assert_eq!(resolved.origin, KeyOrigin::Selected);
+        assert_eq!(resolved.location, KeyLocation::External);
+        assert_eq!(resolved.path, fs::canonicalize(&selected_path).unwrap());
+        assert!(resolved.public_path.is_none());
+        assert!(resolved.public_issue.is_none());
+        assert_eq!(fs::read(&selected_path).unwrap(), original);
+
+        let matching_public = external_dir.join("chosen key.pub");
+        let private_key = PrivateKey::from_openssh(original.as_slice()).unwrap();
+        fs::write(
+            &matching_public,
+            format!("{}\n", private_key.public_key().to_openssh().unwrap()),
+        )
+        .unwrap();
+        fs::set_permissions(&matching_public, fs::Permissions::from_mode(0o644)).unwrap();
+        let resolved = restart.resolve_metadata(&selected.key_id).unwrap();
+        assert_eq!(
+            resolved.public_path.as_deref(),
+            Some(matching_public.as_path())
+        );
+
+        fs::remove_file(&matching_public).unwrap();
+        fs::set_permissions(&selected_path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(
+            &selected_path,
+            PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+                .unwrap()
+                .to_openssh(LineEnding::LF)
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+        fs::set_permissions(&selected_path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(restart.resolve_metadata(&selected.key_id).is_err());
+        let changed = fs::read(&selected_path).unwrap();
+        let replacement =
+            register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &selected_path).unwrap();
+        assert_ne!(replacement.key_id, selected.key_id);
+        assert_eq!(
+            references::count_references(&fixture.ssh()).unwrap(),
+            count + 1,
+            "explicit reselection creates a fresh reference without deleting the old one"
+        );
+        assert_eq!(fs::read(&selected_path).unwrap(), changed);
+    }
+
+    #[test]
+    fn selected_key_validation_rejects_unsafe_files_but_allows_spaces_and_ecdsa() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        ensure_ssh_directory(&fixture.ssh()).unwrap();
+        let base = dir.path().join("keys");
+        fs::create_dir_all(&base).unwrap();
+        let make_key = |name: &str, mode: u32| -> PathBuf {
+            let path = base.join(name);
+            let private = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+            fs::write(
+                &path,
+                private.to_openssh(LineEnding::LF).unwrap().as_bytes(),
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+        let insecure = make_key("insecure", 0o644);
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &insecure).is_err());
+        let secure = make_key("secure", 0o600);
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &secure).is_ok());
+
+        let linked = base.join("linked");
+        symlink(&secure, &linked).unwrap();
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &linked).is_err());
+
+        let hardlink = base.join("hardlink");
+        fs::hard_link(&secure, &hardlink).unwrap();
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &hardlink).is_err());
+
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &base).is_err());
+
+        let spaced = make_key("key with space", 0o400);
+        let spaced_key =
+            register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &spaced).unwrap();
+        assert_eq!(spaced_key.location, KeyLocation::External);
+        assert_eq!(fs::metadata(&spaced).unwrap().mode() & 0o777, 0o400);
+
+        let expansion = make_key("with%percent", 0o600);
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &expansion).is_err());
+        let dollar = make_key("with$dollar", 0o600);
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &dollar).is_err());
+
+        let ecdsa_path = base.join("ecdsa-key");
+        let ecdsa = PrivateKey::random(
+            &mut rand::rng(),
+            Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap();
+        fs::write(
+            &ecdsa_path,
+            ecdsa.to_openssh(LineEnding::LF).unwrap().as_bytes(),
+        )
+        .unwrap();
+        fs::set_permissions(&ecdsa_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let ecdsa_key =
+            register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &ecdsa_path).unwrap();
+        assert_ne!(ecdsa_key.algorithm, "ssh-ed25519");
+        assert_eq!(ecdsa_key.algorithm, ecdsa.algorithm().to_string());
+
+        let public_path = base.join("secure.pub");
+        let other = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        fs::write(&public_path, other.public_key().to_openssh().unwrap()).unwrap();
+        fs::set_permissions(&public_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::read(&secure).unwrap();
+        assert!(register_selected_blocking(&fixture.legacy(), &fixture.ssh(), &secure).is_err());
+        assert_eq!(fs::read(&secure).unwrap(), before);
+    }
+
+    #[test]
+    fn selecting_an_unchanged_uuid_generated_key_reuses_its_original_identifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        let original = generate_blocking(&fixture.legacy(), &fixture.ssh(), b"").unwrap();
+        let before_records = references::count_references(&fixture.ssh()).unwrap();
+        let selected = register_selected_blocking(
+            &fixture.legacy(),
+            &fixture.ssh(),
+            Path::new(&original.path),
+        )
+        .unwrap();
+        assert_eq!(selected.key_id, original.key_id);
+        assert_eq!(selected.location, KeyLocation::Ssh);
+        assert_eq!(
+            references::count_references(&fixture.ssh()).unwrap(),
+            before_records
+        );
+        let listed = list_blocking(&fixture.legacy(), &fixture.ssh()).unwrap();
+        assert_eq!(listed.keys.len(), 1);
+        assert_eq!(listed.keys[0].key_id, original.key_id);
+        assert!(
+            resolve_metadata_blocking(&fixture.legacy(), &fixture.ssh(), &original.key_id).is_ok()
+        );
+    }
+
+    #[test]
+    fn plaintext_backup_export_copies_the_exact_private_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        let key =
+            generate_named_blocking(&fixture.legacy(), &fixture.ssh(), "backup-key", b"").unwrap();
+        let destination = dir.path().join("plain-backup.key");
+        export_to_blocking(&fixture.legacy(), &fixture.ssh(), &key.key_id, &destination).unwrap();
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            fs::read(&key.path).unwrap()
+        );
+        assert_eq!(fs::metadata(&destination).unwrap().mode() & 0o777, 0o600);
+        assert!(
+            export_to_blocking(&fixture.legacy(), &fixture.ssh(), &key.key_id, &destination)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn write_reference_validates_schema_and_bounded_size_before_publishing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Fixture::new(&dir);
+        ensure_ssh_directory(&fixture.ssh()).unwrap();
+        let record = references::KeyReference {
+            version: 2,
+            id: Uuid::new_v4().to_string(),
+            path: fixture.ssh().join("key").to_string_lossy().into_owned(),
+            kind: references::ReferenceKind::Generated,
+            fingerprint: "SHA256:fixture".into(),
+            digest: "0".repeat(64),
+        };
+        assert!(references::write_reference(&fixture.ssh(), &record).is_err());
+        assert_eq!(references::count_references(&fixture.ssh()).unwrap(), 0);
     }
 }

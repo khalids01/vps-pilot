@@ -32,6 +32,8 @@ pub fn run() {
             database::app_save_document,
             setup_keys::app_setup_keys_list,
             setup_keys::app_setup_key_generate,
+            setup_keys::app_setup_key_check_name,
+            setup_keys::app_setup_key_select,
             setup_keys::app_setup_key_use_ssh_directory,
             setup_keys::app_setup_key_export,
             ssh::files::ssh_files_review_operation,

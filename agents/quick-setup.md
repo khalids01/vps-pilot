@@ -576,3 +576,68 @@ completed small lint/copy/screenshot repairs, and independently verified. The
 JavaScript/PM2 source mapping and compact source-row layout were returned to the
 same CLI chat for correction; the original Next-in-viewport assertion passed
 without being removed or weakened. Existing uncommitted work remains intact.
+
+## Named keys, existing-key selection and runtime cards — 2026-11-05
+
+The user requested implementation after committing the previous work as
+`8794d9b` (native SSH keys/config) and `147a8b1` (Quick Setup UI/details).
+
+- Existing-key strategy must offer an actual native file picker. Preserve the
+  original private/public files; persist only a native-owned opaque reference
+  and public identity metadata. Revalidate it after restart and before use.
+- New keys accept an explicit basename under `~/.ssh` and an optional passphrase.
+  Empty means an unencrypted private file; nonempty uses encryption. This is the
+  user's explicit update to the earlier encrypted-only policy. Protection and
+  backup labels must reflect the actual file. No extra approval flow is needed.
+- Filename availability checks cover both `name` and `name.pub`, including
+  directories and dangling symlinks, without creating directories on input.
+  Report conflicts beneath the filename field and disable creation until the
+  latest name is checked. Native creation independently rechecks and publishes
+  without overwriting, even if a file appears after the UI check. Preserve any
+  partially published private key with a recoverable native reference.
+- Keep existing UUID/legacy keys and opaque draft IDs compatible. Named and
+  user-selected files need bounded, protected reference metadata, surviving app
+  restarts without moving/renaming user keys. No secrets in those records.
+- Selected/named/unencrypted keys must work with the independent exact-key login
+  proof and reviewed config export; do not leave a picker that only stores an
+  unusable path. Config identity paths are generated from native references,
+  safely quoted and revalidated; renderer paths/text are never trusted.
+- Remove all Source controls from Application stack. Runtime choices become
+  grouped selectable cards: JavaScript/TypeScript (Bun, Node.js through NVM),
+  Python (uv, Python) and Go. Preserve existing choices and PM2's Node requirement.
+- Final Review displays selected package sources directly in a tidy summary.
+  Show exact commands only when an implemented native preflight produces them;
+  unavailable installers must not be represented by invented final commands.
+
+New Python and Go source references checked on 2026-11-05:
+[Python on Unix](https://docs.python.org/3/using/unix.html) and
+[official Go installation](https://go.dev/doc/install). Python can use supported
+distribution-maintained stable packages; do not overwrite system Python or imply
+that a distribution version is latest upstream. No installers execute here.
+
+Native key implementation conversation:
+`vps-pilot-named-existing-keys-20261105`. Test only temporary homes and explicit
+loopback fixtures; never inspect the actual user's keys, agent or important VPS.
+
+Implementation and verification completed for this scope:
+
+- Native filename checks and no-clobber publication cover both private/public
+  names. Named and selected keys persist through protected opaque references;
+  existing files retain their bytes and permissions. Plaintext keys use direct
+  exact-key verification; encrypted keys retain the transient unlock dialog.
+- Existing key selection, optional passphrases, language runtime cards and
+  directly visible final source summaries are implemented. Server provisioning
+  adapters remain pending; no account/firewall/installer execution was enabled.
+- Command Code wrote the primary implementation in the native conversation above,
+  `vps-pilot-key-picker-ui-20261105` and `vps-pilot-runtime-review-20261105`.
+  Codex reviewed integration and independently verified it, with a small Rust
+  comparison/lint repair and browser timing/screenshot repairs. All CLI runs
+  terminated; saved conversations require no idle process.
+- `bun run check`, `bun run build`, and `bun test src`: passed (61 unit tests).
+  Native suite: 133 passed, 5 intentionally ignored; formatting, cargo check,
+  strict all-target Clippy passed. Two loopback named/external-key login/config
+  tests also passed after the lint repair. Browser coverage includes 19 relevant
+  scenarios; the single asynchronous error-locator timing failure was repaired
+  and its focused rerun passed without weakening the collision assertions.
+- Native tests used temporary homes and loopback fixtures; browser tests used
+  mocked IPC. No actual user keys, agent, SSH config or important VPS was touched.

@@ -10,7 +10,7 @@
 mod local_config;
 
 use super::{auth, client_config, Client, HostKey, Profile, SshService, NETWORK_TIMEOUT};
-use crate::setup_keys::{KeyLocation, KeyVault, ResolvedKeyMetadata};
+use crate::setup_keys::{KeyLocation, KeyOrigin, KeyVault, ResolvedConfigKey, ResolvedKeyMetadata};
 use russh::Disconnect;
 use serde::Serialize;
 use std::{
@@ -511,12 +511,7 @@ impl SshService {
         request: &VerifyRequest,
         passphrase: Option<Zeroizing<String>>,
     ) -> Result<KeyLoginProof, String> {
-        let Some(passphrase) = passphrase else {
-            return Err("Enter the passphrase for the selected encrypted key.".into());
-        };
-        if passphrase.is_empty() {
-            return Err("Enter the passphrase for the selected encrypted key.".into());
-        }
+        let passphrase = passphrase.filter(|value| !value.is_empty());
         let (profile, metadata, expected) = validate_source(
             self,
             vault,
@@ -568,7 +563,7 @@ impl SshService {
                 &mut handle,
                 &request.username,
                 metadata.path.clone(),
-                Some(passphrase),
+                passphrase,
             ),
         )
         .await;
@@ -695,6 +690,27 @@ impl SshService {
         Ok(proof)
     }
 
+    #[cfg(unix)]
+    fn validate_config_key(proof: &Proof, key: &ResolvedConfigKey) -> Result<(), String> {
+        if std::path::Path::new(&key.path) != proof.key_path.as_path()
+            || key.fingerprint != proof.key_fingerprint
+            || key.digest != proof.key_digest
+            || key.location != proof.key_location
+        {
+            return Err(
+                "The selected local key changed since key login was verified. Verify key login again."
+                    .into(),
+            );
+        }
+        if key.origin == KeyOrigin::Legacy {
+            return Err(
+                "This key is in the app vault. Put it in ~/.ssh before saving a reviewed SSH config entry."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) async fn review_setup_config(
         &self,
         vault: &KeyVault,
@@ -710,24 +726,15 @@ impl SshService {
         {
             local_config::validate_alias(alias)?;
             let proof = self.valid_setup_proof_record(vault, proof_id).await?;
-            let standard = vault.resolve_standard_key_async(&proof.key_id).await?;
-            if standard.metadata.path != proof.key_path
-                || standard.metadata.fingerprint != proof.key_fingerprint
-                || standard.metadata.digest != proof.key_digest
-                || standard.metadata.location != KeyLocation::Ssh
-            {
-                return Err(
-                    "The selected key is not a matching protected key pair in ~/.ssh. Put it in ~/.ssh and verify key login again."
-                        .into(),
-                );
-            }
+            let key = vault.resolve_config_key_async(&proof.key_id).await?;
+            Self::validate_config_key(&proof, &key)?;
             let request = local_config::PrepareRequest {
                 profile_id: proof.profile_id.clone(),
                 alias: alias.to_string(),
                 host: proof.host.clone(),
                 username: proof.username.clone(),
                 port: proof.port,
-                file_name: standard.file_name,
+                identity_path: PathBuf::from(&key.path),
             };
             let prepared = local_config::prepare(vault, request).await?;
             let after = self.valid_setup_proof_record(vault, proof_id).await?;
@@ -814,17 +821,8 @@ impl SshService {
                         .into(),
                 );
             }
-            let standard = vault.resolve_standard_key_async(&proof.key_id).await?;
-            if standard.metadata.path != proof.key_path
-                || standard.metadata.fingerprint != proof.key_fingerprint
-                || standard.metadata.digest != proof.key_digest
-                || standard.metadata.location != KeyLocation::Ssh
-            {
-                return Err(
-                    "The selected key pair changed or its matching public file no longer matches. Nothing was written."
-                        .into(),
-                );
-            }
+            let key = vault.resolve_config_key_async(&proof.key_id).await?;
+            Self::validate_config_key(&proof, &key)?;
             let saved = local_config::publish(
                 vault,
                 review.profile_id.clone(),

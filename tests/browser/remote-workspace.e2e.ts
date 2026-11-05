@@ -34,14 +34,34 @@ test.beforeEach(async ({ page }) => {
     for(const p of profiles)remoteFiles.set(p.id+":/home/tester/.env",{content:"fixture-only",revision:"1"});
     const storedSetupKeys=()=>{try{const value=JSON.parse(localStorage.getItem("__fixture_setup_keys")??"[]");return Array.isArray(value)?value:[];}catch{return [];}};
     const saveSetupKeys=(keys:any[])=>localStorage.setItem("__fixture_setup_keys",JSON.stringify(keys));
+    const fixtureKeyFiles=()=>{try{const value=JSON.parse(localStorage.getItem("__fixture_setup_key_files")??"[]");return Array.isArray(value)?value.filter((item:any)=>typeof item==="string"):[];}catch{return [];}};
+    const saveFixtureKeyFiles=(names:string[])=>localStorage.setItem("__fixture_setup_key_files",JSON.stringify([...new Set(names)]));
+    const validKeyName=(name:any)=>typeof name==="string"&&/^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/.test(name)&&!name.toLowerCase().endsWith(".pub")&&!["config","authorized_keys","known_hosts","environment"].includes(name)&&!name.startsWith("vps-pilot_");
+    const occupiedKeyNames=()=>{
+      const occupied=new Set<string>(fixtureKeyFiles());
+      for(const key of storedSetupKeys()){
+        const match=typeof key.path==="string"?key.path.match(/^\/fixture\/\.ssh\/(.+)$/):null;
+        if(match)occupied.add(match[1]);
+      }
+      return occupied;
+    };
+    const keyNameResult=(name:string)=>{
+      if(!validKeyName(name))return {fileName:name,available:false,message:"Use a valid key file name."};
+      const occupied=occupiedKeyNames();
+      if(occupied.has(name)||occupied.has(`${name}.pub`))return {fileName:name,available:false,message:"A file or folder already uses this key name. Choose a different name."};
+      return {fileName:name,available:true,message:"This key name is available."};
+    };
     const setupProofs=new Map<string,any>();
     const setupReviews=new Map<string,any>();
+    const keyNameChecksHeld=new Map<string,{resolve:(value:any)=>void;result:()=>any}>();
+    const keySelectHeld=new Map<string,{resolve:(value:any)=>void;reject:(reason:any)=>void;build:()=>any}>();
+    let keySelectSequence=0;
     const savedConfigHosts:any[]=[];
     const setupAccessHeld={
       verify:new Map<string,{resolve:(value:any)=>void;reject:(reason:any)=>void;build:()=>any}>(),
       review:new Map<string,{resolve:(value:any)=>void;reject:(reason:any)=>void;build:()=>any}>(),
     };
-    const setupAccessMeta={proofs:0,reviews:0,saves:0,rejects:0,savedAliases:[] as string[],savedReviewIds:[] as string[],rejectedReviewIds:[] as string[]};
+    const setupAccessMeta={proofs:0,reviews:0,saves:0,rejects:0,verifyPassphraseState:"none" as "none"|"provided",savedAliases:[] as string[],savedReviewIds:[] as string[],rejectedReviewIds:[] as string[]};
     const pruneSetupAccess=()=>{
       const now=Date.now();
       for(const [id,proof] of setupProofs) if(proof.expiresAtMs<=now) setupProofs.delete(id);
@@ -64,7 +84,12 @@ test.beforeEach(async ({ page }) => {
       if(!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/.test(args.alias))throw "Use an SSH alias of 1 to 64 ASCII letters, numbers, dots, underscores or hyphens, not starting with a hyphen.";
       const begin=`# vps-pilot:begin ${proof.profileId}`;
       const end=`# vps-pilot:end ${proof.profileId}`;
-      return {reviewId:crypto.randomUUID(),proofId:proof.proofId,profileId:proof.profileId,alias:args.alias,entry:`${begin}\nHost ${args.alias}\n    HostName ${proof.host}\n    User ${proof.username}\n    Port ${proof.port}\n    IdentityFile ~/.ssh/vps-pilot_${proof.keyId}\n    IdentitiesOnly yes\n    PreferredAuthentications publickey\nHost *\n${end}\n`,destination:"~/.ssh/config",mode:"create",backup:true,host:proof.host,username:proof.username,port:proof.port,keyFingerprint:proof.keyFingerprint,expiresAtMs:Math.min(proof.expiresAtMs,Date.now()+120000)};
+      const selectedKey=storedSetupKeys().find((item:any)=>item.keyId===proof.keyId);
+      const rawIdentity=typeof selectedKey?.path==="string"?selectedKey.path:`/fixture/.ssh/vps-pilot_${proof.keyId}`;
+      const standard=rawIdentity.match(/^\/fixture\/\.ssh\/(.+)$/);
+      const displayIdentity=standard?`~/.ssh/${standard[1]}`:rawIdentity;
+      const identityFile=/[\s"]/g.test(displayIdentity)?`"${displayIdentity.replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`:displayIdentity;
+      return {reviewId:crypto.randomUUID(),proofId:proof.proofId,profileId:proof.profileId,alias:args.alias,entry:`${begin}\nHost ${args.alias}\n    HostName ${proof.host}\n    User ${proof.username}\n    Port ${proof.port}\n    IdentityFile ${identityFile}\n    IdentitiesOnly yes\n    PreferredAuthentications publickey\nHost *\n${end}\n`,destination:"~/.ssh/config",mode:"create",backup:true,host:proof.host,username:proof.username,port:proof.port,keyFingerprint:proof.keyFingerprint,expiresAtMs:Math.min(proof.expiresAtMs,Date.now()+120000)};
     };
     const operationReviews=new Map<string,any>();
     let pendingOperation:((value:any)=>void)|null=null;
@@ -190,12 +215,40 @@ test.beforeEach(async ({ page }) => {
         proofs: () => [...setupProofs.values()].map(proof=>({...proof})),
         reviews: () => [...setupReviews.values()].map(review=>({...review})),
       },
+      __setupKeys: {
+        nameChecksHeld: () => [...keyNameChecksHeld.keys()],
+        releaseNameCheck: (fileName?: string) => {
+          const id = fileName ?? [...keyNameChecksHeld.keys()][0];
+          if (id === undefined) return false;
+          const held = keyNameChecksHeld.get(id);
+          if (!held) return false;
+          keyNameChecksHeld.delete(id);
+          held.resolve(held.result());
+          return true;
+        },
+        selectHeld: () => [...keySelectHeld.keys()],
+        releaseSelect: () => {
+          const id = [...keySelectHeld.keys()][0];
+          if (id === undefined) return false;
+          const held = keySelectHeld.get(id);
+          if (!held) return false;
+          keySelectHeld.delete(id);
+          try {
+            held.resolve(held.build());
+          } catch (error) {
+            held.reject(error);
+          }
+          return true;
+        },
+        keys: () => storedSetupKeys().map((key:any)=>({...key})),
+        files: () => fixtureKeyFiles(),
+      },
       __TAURI_INTERNALS__: {
         transformCallback: () => ++next,
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           // No credentials or user terminal input are retained by the mock.
-          calls.push({ cmd, profileId: args.profileId, ...(cmd==="app_save_document"?{key:args.key}:{}), ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId, ...(args.snapshotId?{snapshotId:args.snapshotId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(Array.isArray(args.selected)?{selected:args.selected}:{})} : {}), ...(cmd.startsWith("ssh_setup_") ? {connectionId:args.connectionId, ...(args.profileRevision?{profileRevision:args.profileRevision}:{}), ...(args.keyId?{keyId:args.keyId}:{}), ...(args.proofId?{proofId:args.proofId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(args.alias?{alias:args.alias}:{}), ...(typeof args.username==="string"?{username:args.username}:{}), ...(typeof args.port==="number"?{port:args.port}:{})} : {}) });
+          calls.push({ cmd, profileId: args.profileId, ...(cmd==="app_save_document"?{key:args.key}:{}), ...(cmd.startsWith("app_setup_key")?{...(typeof args.fileName==="string"?{fileName:args.fileName}:{}),...(typeof args.keyId==="string"?{keyId:args.keyId}:{})}:{}), ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId, ...(args.snapshotId?{snapshotId:args.snapshotId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(Array.isArray(args.selected)?{selected:args.selected}:{})} : {}), ...(cmd.startsWith("ssh_setup_") ? {connectionId:args.connectionId, ...(args.profileRevision?{profileRevision:args.profileRevision}:{}), ...(args.keyId?{keyId:args.keyId}:{}), ...(args.proofId?{proofId:args.proofId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(args.alias?{alias:args.alias}:{}), ...(typeof args.username==="string"?{username:args.username}:{}), ...(typeof args.port==="number"?{port:args.port}:{})} : {}) });
           if (cmd === "app_bootstrap") {
             if ((window as any).__databaseUnavailable) throw new Error("Fixture database unavailable");
             return {
@@ -224,18 +277,48 @@ test.beforeEach(async ({ page }) => {
             if ((window as any).__holdKeyList) return new Promise(resolve=>{(window as any).__releaseKeyList=()=>resolve(fixture());});
             return fixture();
           }
+          if (cmd === "app_setup_key_check_name") {
+            const name=typeof args.fileName==="string"?args.fileName:"";
+            if((window as any).__keyNameCheckFailure)throw "Fixture key name check failed.";
+            const result=()=>keyNameResult(name);
+            if((window as any).__holdKeyNameCheck)return new Promise(resolve=>{keyNameChecksHeld.set(name,{resolve,result});});
+            return result();
+          }
           if (cmd === "app_setup_key_generate") {
             if ((window as any).__keyGenerateFailure) throw "Fixture local key generation failed";
             const passphrase=typeof args.passphrase==="string"?args.passphrase:"";
             const bytes=new TextEncoder().encode(passphrase).length;
-            if(bytes<12||bytes>4096)throw "Use a passphrase between 12 and 4096 bytes.";
+            if(bytes!==0&&(bytes<12||bytes>4096))throw "Use an empty passphrase for an unencrypted key, or 12 to 4096 bytes for an encrypted key.";
+            const fileName=typeof args.fileName==="string"?args.fileName:null;
             const build=()=>{
               const keyId=crypto.randomUUID();
-              const key={keyId,fingerprint:`SHA256:fixture${keyId.slice(0,8)}`,algorithm:"ssh-ed25519",encrypted:true,path:`/fixture/.ssh/vps-pilot_${keyId}`,location:"ssh"};
+              const name=fileName??`vps-pilot_${keyId}`;
+              if(fileName!==null){
+                const occupied=occupiedKeyNames();
+                if(occupied.has(fileName)||occupied.has(`${fileName}.pub`))throw "A file or folder already uses this key name. The private key was not published; nothing was overwritten.";
+              }
+              const key={keyId,fingerprint:`SHA256:fixture${keyId.slice(0,8)}`,algorithm:"ssh-ed25519",encrypted:bytes>0,path:`/fixture/.ssh/${name}`,location:"ssh"};
+              if(fileName!==null)saveFixtureKeyFiles([...fixtureKeyFiles(),fileName,`${fileName}.pub`]);
               const keys=storedSetupKeys();keys.push(key);saveSetupKeys(keys);
               return key;
             };
             if((window as any).__holdKeyGenerate)return new Promise(resolve=>{(window as any).__releaseKeyGenerate=()=>resolve(build());});
+            return build();
+          }
+          if (cmd === "app_setup_key_select") {
+            if ((window as any).__keySelectFailure) throw "Fixture key selection failed.";
+            const build=()=>{
+              if ((window as any).__keySelectCancel) return {status:"canceled",key:null};
+              const fixture=(window as any).__keySelectFixture??{fingerprint:"SHA256:fixtureExternalKey",algorithm:"ssh-ed25519",encrypted:false,path:"/fixture/keys/external key",location:"external"};
+              const keyId=fixture.keyId??crypto.randomUUID();
+              const key={keyId,fingerprint:fixture.fingerprint,algorithm:fixture.algorithm,encrypted:Boolean(fixture.encrypted),path:fixture.path,location:fixture.location??"external"};
+              const keys=storedSetupKeys();
+              if(!keys.some((item:any)=>item.keyId===keyId)){keys.push(key);saveSetupKeys(keys);}
+              return {status:"selected",key};
+            };
+            if((window as any).__holdKeySelect){
+              return new Promise((resolve,reject)=>{const id=String(++keySelectSequence);keySelectHeld.set(id,{resolve,reject,build});});
+            }
             return build();
           }
           if (cmd === "app_setup_key_use_ssh_directory") {
@@ -250,15 +333,17 @@ test.beforeEach(async ({ page }) => {
             return {status:already?"already":"copied",key};
           }
           if (cmd === "app_setup_key_export") {
-            if ((window as any).__keyExportFailure) throw "Fixture encrypted key backup failed";
-            if ((window as any).__keyExportCancel) return {status:"canceled",path:null};
             const key=storedSetupKeys().find((item:any)=>item.keyId===args.keyId);
             if(!key)throw "Selected local key is unavailable.";
-            const result={status:"exported",path:`/fixture/backups/${key.keyId}.key`};
+            const encrypted=Boolean(key.encrypted);
+            if ((window as any).__keyExportFailure) throw "Fixture key backup failed";
+            if ((window as any).__keyExportCancel) return {status:"canceled",path:null,encrypted};
+            const result={status:"exported",path:`/fixture/backups/${key.keyId}.key`,encrypted};
             if((window as any).__holdKeyExport)return new Promise(resolve=>{(window as any).__releaseKeyExport=()=>resolve(result);});
             return result;
           }
           if(cmd==="ssh_setup_key_verify"){
+            setupAccessMeta.verifyPassphraseState=args.passphrase===null||args.passphrase===undefined?"none":"provided";
             if((window as any).__setupVerifyFailure)throw "The server rejected the selected key.";
             if((window as any).__holdSetupVerify)return new Promise((resolve,reject)=>{
               setupAccessHeld.verify.set(args.keyId,{resolve:(proof:any)=>{setupProofs.set(proof.proofId,proof);setupAccessMeta.proofs++;resolve(proof);},reject,build:()=>buildSetupProof(args)});
@@ -2476,9 +2561,9 @@ test("Quick Setup creates and selects a local encrypted key without SSH actions"
   const setup=await openStep3();
   expect((await remoteCalls())).toHaveLength(0);
   await setup.getByRole("button",{name:/Generate a new key/}).click();
-  await expect(setup.getByText("No generated keys are stored in this app yet.")).toBeVisible();
-  const passfield=setup.getByLabel("Passphrase",{exact:true});
-  const confirm=setup.getByLabel("Confirm passphrase",{exact:true});
+  await expect(setup.getByText("No local keys are stored in this app yet.")).toBeVisible();
+  const passfield=setup.getByLabel("Passphrase (optional)",{exact:true});
+  const confirm=setup.getByLabel("Confirm passphrase (optional)",{exact:true});
   await expect(passfield).toHaveAttribute("type","password");
   await expect(passfield).toHaveAttribute("autocomplete","new-password");
   await expect(confirm).toHaveAttribute("type","password");
@@ -2498,10 +2583,10 @@ test("Quick Setup creates and selects a local encrypted key without SSH actions"
   const selectedCard=setup.getByRole("group",{name:"Selected local key"});
   await expect(selectedCard).toBeVisible();
   await expect(selectedCard.getByText(/SHA256:fixture/)).toBeVisible();
-  await expect(selectedCard.getByText(/·\s*Local key$/)).toBeVisible();
+  await expect(selectedCard.getByText(/Encrypted\s*·\s*Stored in ~\/\.ssh/)).toBeVisible();
   await expect(selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true})).toBeVisible();
-  await expect(setup.getByRole("status",{name:"Key activity"})).toHaveText("Key created on this device.");
-  await expect(setup.getByLabel("Passphrase",{exact:true})).toHaveCount(0);
+  await expect(setup.getByRole("status",{name:"Key activity"})).toHaveText("Encrypted key created in ~/.ssh.");
+  await expect(setup.getByLabel("Passphrase (optional)",{exact:true})).toHaveCount(0);
   await expect(setup.getByRole("button",{name:"Create another key",exact:true})).toBeVisible();
   await page.mouse.move(0,0);
   await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement)document.activeElement.blur();});
@@ -2515,9 +2600,11 @@ test("Quick Setup creates and selects a local encrypted key without SSH actions"
   await setup.getByRole("button",{name:"Create another key",exact:true}).click();
   await expect(passfield).toHaveValue("");
   await expect(confirm).toHaveValue("");
-  await expect(setup.getByRole("button",{name:"Create another key",exact:true})).toHaveAttribute("aria-expanded","true");
+  const hideCreate=setup.getByRole("button",{name:"Hide new key form",exact:true});
+  await expect(hideCreate).toHaveAttribute("aria-expanded","true");
   await page.screenshot({path:testInfo.outputPath("quick-setup-keys-create-form-desktop.png")});
-  await setup.getByRole("button",{name:"Create another key",exact:true}).click();
+  await hideCreate.click();
+  await expect(setup.getByRole("button",{name:"Create another key",exact:true})).toHaveAttribute("aria-expanded","false");
   await expect(passfield).toHaveCount(0);
   await page.clock.fastForward(300);
   const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
@@ -2552,7 +2639,7 @@ test("Quick Setup creates and selects a local encrypted key without SSH actions"
   await afterReset.getByRole("button",{name:"Choose a stored key",exact:true}).click();
   await expect(afterReset.getByText(/SHA256:fixture/).first()).toBeVisible();
   expect(await remoteCalls()).toHaveLength(0);
-  await expect(afterReset.getByRole("button",{name:"Create encrypted key",exact:true})).toBeVisible();
+  await expect(afterReset.getByRole("button",{name:"Create key without passphrase",exact:true})).toBeVisible();
   await afterReset.getByRole("button",{name:/Select key SHA256/}).first().click();
   await expect(afterReset.getByRole("group",{name:"Selected local key"})).toBeVisible();
   await page.setViewportSize({width:430,height:900});
@@ -2603,8 +2690,8 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
   await setup.getByRole("button",{name:/Generate a new key/}).click();
   const create=setup.getByRole("button",{name:"Create encrypted key",exact:true});
-  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
-  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
   await create.click();
   const selectedCard=setup.getByRole("group",{name:"Selected local key"});
   await expect(selectedCard).toBeVisible();
@@ -2615,7 +2702,7 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   await page.evaluate(()=>{
     const keyId="33333333-3333-4333-8333-333333333333";
     const keys=JSON.parse(localStorage.getItem("__fixture_setup_keys")??"[]");
-    if(!keys.some((key:any)=>key.keyId===keyId))keys.push({keyId,fingerprint:"SHA256:fixtureSecondStoredKey",algorithm:"ssh-ed25519",encrypted:true,path:`/fixture/setup-keys/${keyId}`});
+    if(!keys.some((key:any)=>key.keyId===keyId))keys.push({keyId,fingerprint:"SHA256:fixtureSecondStoredKey",algorithm:"ssh-ed25519",encrypted:true,path:`/fixture/.ssh/vps-pilot_${keyId}`,location:"ssh"});
     localStorage.setItem("__fixture_setup_keys",JSON.stringify(keys));
   });
   await setup.getByRole("button",{name:"Reload keys",exact:true}).click();
@@ -2631,7 +2718,7 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   await page.evaluate(()=>{(window as any).__holdKeyExport=true;});
   await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Saving backup…",exact:true})).toBeVisible();
-  await expect(setup.getByRole("button",{name:"Create encrypted key",exact:true})).toBeDisabled();
+  await expect(setup.getByRole("button",{name:"Create key without passphrase",exact:true})).toBeDisabled();
   await expect(setup.getByRole("button",{name:"Reload keys",exact:true})).toBeDisabled();
   await expect(otherKey).toBeDisabled();
   expect(await exportCalls()).toBe(callsBeforeHold+1);
@@ -2649,22 +2736,25 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
   await expect(activity()).toContainText("/fixture/backups/");
 
+  await setup.getByLabel("Key filename",{exact:true}).fill("second-generation");
+  await page.clock.fastForward(300);
   await page.evaluate(()=>{(window as any).__keyGenerateFailure=true;});
-  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
-  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
   await create.click();
   await expect(operationError()).toContainText("existing key selection was preserved");
-  await expect(setup.getByLabel("Passphrase",{exact:true})).toHaveValue("");
+  await expect(setup.getByLabel("Passphrase (optional)",{exact:true})).toHaveValue("");
   await expect(selectedCard).toBeVisible();
   expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(passphrase);
 
   await page.evaluate(()=>{(window as any).__keyGenerateFailure=false;(window as any).__holdKeyGenerate=true;});
-  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
-  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await page.clock.fastForward(300);
+  await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
   await create.click();
-  await expect(setup.getByRole("button",{name:"Creating encrypted key…",exact:true})).toBeVisible();
-  await expect(setup.getByLabel("Passphrase",{exact:true})).toHaveValue("");
-  await expect(setup.getByLabel("Confirm passphrase",{exact:true})).toHaveValue("");
+  await expect(setup.getByRole("button",{name:"Creating key…",exact:true})).toBeVisible();
+  await expect(setup.getByLabel("Passphrase (optional)",{exact:true})).toHaveValue("");
+  await expect(setup.getByLabel("Confirm passphrase (optional)",{exact:true})).toHaveValue("");
   await expect(selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true})).toBeDisabled();
   await expect(setup.getByRole("button",{name:"Reload keys",exact:true})).toBeDisabled();
   await setup.getByRole("button",{name:"Back",exact:true}).click();
@@ -2686,19 +2776,278 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   expect(await page.evaluate(()=>JSON.parse(localStorage.getItem("__fixture_setup_keys")??"[]").length)).toBeGreaterThanOrEqual(2);
   await afterReload.getByRole("button",{name:"Create another key",exact:true}).click();
 
+  await afterReload.getByLabel("Key filename",{exact:true}).fill("after-reload-key");
+  await page.clock.fastForward(300);
   await page.evaluate(()=>{(window as any).__keyListFailure=true;});
   await afterReload.getByRole("button",{name:"Reload keys",exact:true}).click();
   await expect(afterReload.getByRole("alert",{name:"Local key list error"})).toContainText("local key vault is unavailable");
-  await afterReload.getByLabel("Passphrase",{exact:true}).fill(passphrase);
-  await afterReload.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await afterReload.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
+  await afterReload.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
   await expect(afterReload.getByRole("button",{name:"Create encrypted key",exact:true})).toBeDisabled();
-  await expect(afterReload.getByText("No generated keys are stored in this app yet.")).toHaveCount(0);
+  await expect(afterReload.getByText("No local keys are stored in this app yet.")).toHaveCount(0);
   await page.evaluate(()=>{(window as any).__keyListFailure=false;});
   await afterReload.getByRole("button",{name:"Retry key list",exact:true}).click();
+  await page.clock.fastForward(300);
   await expect(afterReload.getByRole("button",{name:"Create encrypted key",exact:true})).toBeEnabled();
   await expect(reloadedCard).toBeVisible();
   await expect(reloadedCard.getByText(/SHA256:fixture/)).toBeVisible();
   expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(passphrase);
+});
+
+const quickSetupDraftKey=(id:string)=>`vps-pilot:quick-setup-draft:v1:${id}`;
+const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+async function seedQuickSetupDraft(page:import("@playwright/test").Page,key:string,draft:unknown){
+  await page.evaluate(({key,draft})=>{
+    const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+    docs[key]=JSON.stringify(draft);
+    localStorage.setItem("__fixture_documents",JSON.stringify(docs));
+  },{key,draft});
+  await page.reload();
+}
+async function openQuickSetupStep3(page:import("@playwright/test").Page,strategy:"existing"|"generate"){
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  if(strategy==="generate")await setup.getByRole("button",{name:/Generate a new key/}).click();
+  return setup;
+}
+function quickSetupDraft(state:{strategy:"existing"|"generate",generatedKeyId?:string}= {strategy:"generate"}){
+  return {version:1,step:3,administrator:{mode:"new",username:"deploy"},sshKey:state,access:{port:52022,ufw:"configure",recoveryAcknowledged:false,allowHttp:false,allowHttps:false,rules:[]},stack:{choice:"skip",engine:null},tools:{editor:"none",utilities:["git","curl","unzip"]},runtimes:[]};
+}
+
+test("Quick Setup validates filenames inline, ignores stale checks and keeps the old key on a race",async({page},testInfo)=>{
+  const draftKey=quickSetupDraftKey(first);
+  const missingKeyId="99999999-9999-4999-8999-999999999999";
+  await seedQuickSetupDraft(page,draftKey,quickSetupDraft({strategy:"generate",generatedKeyId:missingKeyId}));
+  const setup=await openQuickSetupStep3(page,"generate");
+  await expect(setup.getByText(/saved key reference is not available/)).toBeVisible();
+  const nameInput=setup.getByLabel("Key filename",{exact:true});
+  await expect(nameInput).toBeVisible();
+  const createPlain=setup.getByRole("button",{name:"Create key without passphrase",exact:true});
+  await nameInput.fill("replacement-name");
+  await page.clock.fastForward(300);
+  await expect(createPlain).toBeEnabled();
+  const generateCalls=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="app_setup_key_generate").length);
+  await createPlain.click();
+  const selectedCard=setup.getByRole("group",{name:"Selected local key"});
+  await expect(selectedCard).toContainText("No passphrase");
+  await page.clock.fastForward(300);
+  const replacementId=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]).sshKey.generatedKeyId,draftKey);
+  expect(replacementId).not.toBe(missingKeyId);
+  expect(replacementId).toMatch(uuidPattern);
+
+  await setup.getByRole("button",{name:"Create another key",exact:true}).click();
+  const callsBeforeNameErrors=await generateCalls();
+  const errorFor=async()=>{
+    const describedBy=await nameInput.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    return setup.locator(`[id="${describedBy}"]`);
+  };
+  // Immediate frontend validation stays under the filename field.
+  await nameInput.fill("x.pub");
+  await expect(nameInput).toHaveAttribute("aria-invalid","true");
+  await expect(await errorFor()).toContainText("without the .pub suffix");
+  await expect(createPlain).toBeDisabled();
+  // Both the private name and its .pub sidecar occupy the name.
+  await page.evaluate(()=>localStorage.setItem("__fixture_setup_key_files",JSON.stringify(["taken","used.pub"])));
+  await nameInput.fill("taken");
+  await page.clock.fastForward(300);
+  await expect(nameInput).toHaveAttribute("aria-invalid","true");
+  await expect(await errorFor()).toContainText("already uses this key name");
+  await expect(createPlain).toBeDisabled();
+  await nameInput.fill("used");
+  await page.clock.fastForward(300);
+  await expect(nameInput).toHaveAttribute("aria-invalid","true");
+  await expect(await errorFor()).toContainText("already uses this key name");
+  await expect(createPlain).toBeDisabled();
+  expect(await generateCalls()).toBe(callsBeforeNameErrors);
+  await page.mouse.move(0,0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-key-filename-error-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  await nameInput.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.mouse.move(0,0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-key-filename-error-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+
+  // A held availability reply for the old name must never enable the current name.
+  await page.evaluate(()=>{(window as any).__holdKeyNameCheck=true;});
+  await nameInput.fill("free-held");
+  await page.clock.fastForward(300);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__setupKeys.nameChecksHeld().length)).toBe(1);
+  await nameInput.fill("used");
+  await page.clock.fastForward(300);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__setupKeys.nameChecksHeld().length)).toBe(2);
+  await page.evaluate(()=>{(window as any).__setupKeys.releaseNameCheck("used");});
+  await expect(createPlain).toBeDisabled();
+  await page.evaluate(()=>{(window as any).__setupKeys.releaseNameCheck("free-held");(window as any).__holdKeyNameCheck=false;});
+  await expect(createPlain).toBeDisabled();
+  await expect(nameInput).toHaveAttribute("aria-invalid","true");
+
+  // A file appearing after the availability check must fail under the name.
+  await nameInput.fill("race-name");
+  await page.clock.fastForward(300);
+  await expect(createPlain).toBeEnabled();
+  const filesBeforeRace=await page.evaluate(()=>(window as any).__setupKeys.files() as string[]);
+  await page.evaluate(()=>{
+    const files=JSON.parse(localStorage.getItem("__fixture_setup_key_files")??"[]");
+    files.push("race-name.pub");
+    localStorage.setItem("__fixture_setup_key_files",JSON.stringify([...new Set(files)]));
+  });
+  await createPlain.click();
+  await expect(nameInput).toHaveAttribute("aria-invalid","true");
+  await expect(await errorFor()).toContainText("already uses this key name");
+  await expect(selectedCard).toContainText("No passphrase");
+  const afterRaceId=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]).sshKey.generatedKeyId,draftKey);
+  expect(afterRaceId).toBe(replacementId);
+  expect(await page.evaluate(()=>(window as any).__setupKeys.keys().some((key:any)=>key.path.endsWith("/race-name")))).toBe(false);
+  expect(await page.evaluate(()=>(window as any).__setupKeys.files() as string[])).toEqual(expect.arrayContaining(["race-name.pub",...filesBeforeRace]));
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain("passphrase");
+});
+
+test("Quick Setup creates an unencrypted named key and verifies it without an unlock dialog",async({page},testInfo)=>{
+  const draftKey=quickSetupDraftKey(first);
+  const setup=await openQuickSetupStep3(page,"generate");
+  const nameInput=setup.getByLabel("Key filename",{exact:true});
+  await nameInput.fill("friendly-vps");
+  await page.clock.fastForward(300);
+  const create=setup.getByRole("button",{name:"Create key without passphrase",exact:true});
+  await expect(create).toBeEnabled();
+  await create.click();
+  const selectedCard=setup.getByRole("group",{name:"Selected local key"});
+  await expect(selectedCard).toContainText("No passphrase");
+  await expect(selectedCard).toContainText("/fixture/.ssh/friendly-vps");
+  const plainKey=await page.evaluate(()=>(window as any).__setupKeys.keys().find((key:any)=>key.path.endsWith("/friendly-vps")));
+  expect(plainKey?.encrypted).toBe(false);
+  expect(plainKey?.path).toBe("/fixture/.ssh/friendly-vps");
+  const files=await page.evaluate(()=>(window as any).__setupKeys.files() as string[]);
+  expect(files).toEqual(expect.arrayContaining(["friendly-vps","friendly-vps.pub"]));
+  await expect(selectedCard.getByRole("button",{name:"Backup key without passphrase",exact:true})).toBeVisible();
+  await page.mouse.move(0,0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-key-named-plaintext-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.mouse.move(0,0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-key-named-plaintext-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+
+  const access=setup.getByRole("region",{name:"Key login access",exact:true});
+  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await expect(page.getByRole("dialog",{name:"Unlock selected key",exact:true})).toHaveCount(0);
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  expect(await page.evaluate(()=>(window as any).__setupAccess.meta.proofs)).toBe(1);
+  expect(await page.evaluate(()=>(window as any).__setupAccess.meta.verifyPassphraseState)).toBe("none");
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_setup_key_verify").length)).toBe(1);
+  await expect(page.getByLabel(/password/i)).toHaveCount(0);
+
+  await access.getByRole("button",{name:"Review SSH config",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review SSH config",exact:true});
+  await expect(review).toContainText("IdentityFile ~/.ssh/friendly-vps");
+  await expect(review).not.toContainText("IdentityFile ~/.ssh/vps-pilot_");
+  await review.getByRole("button",{name:"Save to SSH config",exact:true}).click();
+  await expect(access.getByRole("status",{name:"SSH config save result"})).toContainText("Saved");
+  expect(await page.evaluate(()=>(window as any).__setupAccess.meta.saves)).toBe(1);
+
+  const generateCalls=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="app_setup_key_generate").length);
+  await setup.getByRole("button",{name:"Create another key",exact:true}).click();
+  await page.clock.fastForward(300);
+  await expect(nameInput).toHaveAttribute("aria-invalid","true");
+  const describedBy=await nameInput.getAttribute("aria-describedby");
+  await expect(setup.locator(`[id="${describedBy}"]`)).toContainText("already uses this key name");
+  await expect(setup.getByRole("button",{name:"Create key without passphrase",exact:true})).toBeDisabled();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="app_setup_key_generate").length)).toBe(generateCalls);
+
+  const selectedId=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]).sshKey.generatedKeyId,draftKey);
+  await page.reload();
+  const reloaded=await openQuickSetupStep3(page,"generate");
+  await expect(reloaded.getByRole("group",{name:"Selected local key"})).toContainText("/fixture/.ssh/friendly-vps");
+  expect(await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]).sshKey.generatedKeyId,draftKey)).toBe(selectedId);
+});
+
+test("Quick Setup existing-key picking preserves selection, persists only an opaque ID and verifies external keys",async({page})=>{
+  const draftKey=quickSetupDraftKey(first);
+  const setup=await openQuickSetupStep3(page,"existing");
+  const readDraftSsh=async()=>{
+    await page.clock.fastForward(300);
+    return page.evaluate(k=>{
+      const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+      const raw=docs[k];
+      if(typeof raw!=="string")return null;
+      try{return JSON.parse(raw).sshKey;}catch{return null;}
+    },draftKey);
+  };
+  const choose=setup.getByRole("button",{name:"Choose private key",exact:true});
+  await expect(choose).toBeVisible();
+  await page.evaluate(()=>{(window as any).__keySelectCancel=true;});
+  await choose.click();
+  await expect(setup.getByRole("status",{name:"Key activity"})).toContainText("previous selection was kept");
+  expect(await page.evaluate(()=>(window as any).__setupKeys.keys().length)).toBe(0);
+  await expect.poll(readDraftSsh).toEqual({strategy:"existing"});
+
+  await page.evaluate(()=>{(window as any).__keySelectCancel=false;});
+  await choose.click();
+  const selectedCard=setup.getByRole("group",{name:"Selected local key"});
+  await expect(selectedCard).toContainText("/fixture/keys/external key");
+  await expect(selectedCard).toContainText("No passphrase");
+  await expect(selectedCard).toContainText("Original file outside ~/.ssh");
+  await page.clock.fastForward(300);
+  const externalId=await page.evaluate(()=>((window as any).__setupKeys.keys()[0]?.keyId as string)??"");
+  expect(externalId).toMatch(uuidPattern);
+  await expect.poll(readDraftSsh).toEqual({strategy:"existing",existingKeyId:externalId});
+  const draftSsh=await readDraftSsh();
+  expect(draftSsh).toEqual({strategy:"existing",existingKeyId:externalId});
+  expect(JSON.stringify(draftSsh)).not.toContain("/fixture/keys/external key");
+  expect(JSON.stringify(draftSsh)).not.toMatch(/passphrase|secret/i);
+
+  await page.evaluate(()=>{(window as any).__keySelectCancel=true;});
+  await setup.getByRole("button",{name:"Choose a different private key",exact:true}).click();
+  await expect(setup.getByRole("status",{name:"Key activity"})).toContainText("previous selection was kept");
+  expect(await readDraftSsh()).toEqual({strategy:"existing",existingKeyId:externalId});
+  await page.evaluate(()=>{(window as any).__keySelectCancel=false;(window as any).__keySelectFailure=true;});
+  await setup.getByRole("button",{name:"Choose a different private key",exact:true}).click();
+  await expect(setup.getByRole("alert",{name:"Key operation error"})).toContainText("previous selection was kept");
+  expect(await readDraftSsh()).toEqual({strategy:"existing",existingKeyId:externalId});
+  await page.evaluate(()=>{(window as any).__keySelectFailure=false;});
+
+  await page.reload();
+  const reloaded=await openQuickSetupStep3(page,"existing");
+  await expect(reloaded.getByRole("group",{name:"Selected local key"})).toContainText("/fixture/keys/external key");
+  expect(await readDraftSsh()).toEqual({strategy:"existing",existingKeyId:externalId});
+  const access=reloaded.getByRole("region",{name:"Key login access",exact:true});
+  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await expect(page.getByRole("dialog",{name:"Unlock selected key",exact:true})).toHaveCount(0);
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  expect(await page.evaluate(()=>(window as any).__setupAccess.meta.verifyPassphraseState)).toBe("none");
+
+  await access.getByRole("button",{name:"Review SSH config",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review SSH config",exact:true});
+  await expect(review).toContainText('IdentityFile "/fixture/keys/external key"');
+  await review.getByRole("button",{name:"Cancel",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__setupAccess.meta.rejects)).toBe(1);
+
+  await page.evaluate(()=>{(window as any).__keySelectFixture={keyId:"55555555-5555-4555-8555-555555555555",fingerprint:"SHA256:fixtureExternalEncrypted",algorithm:"ssh-ed25519",encrypted:true,path:"/fixture/keys/encrypted key",location:"external"};});
+  await reloaded.getByRole("button",{name:"Choose a different private key",exact:true}).click();
+  await expect(reloaded.getByRole("group",{name:"Selected local key"})).toContainText("Encrypted");
+  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
+  await expect(unlock).toBeVisible();
+  await unlock.getByLabel("Key passphrase").fill("short");
+  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  expect(await page.evaluate(()=>(window as any).__setupAccess.meta.verifyPassphraseState)).toBe("provided");
+
+  const heldId="66666666-6666-4666-8666-666666666666";
+  await page.evaluate(id=>{(window as any).__holdKeySelect=true;(window as any).__keySelectFixture={keyId:id,fingerprint:"SHA256:fixtureHeldPicker",algorithm:"ssh-ed25519",encrypted:false,path:"/fixture/keys/held key",location:"external"};},heldId);
+  await reloaded.getByRole("button",{name:"Choose a different private key",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__setupKeys.selectHeld().length)).toBe(1);
+  await reloaded.getByRole("button",{name:/Generate a new key/}).click();
+  await page.evaluate(()=>{(window as any).__setupKeys.releaseSelect();(window as any).__holdKeySelect=false;});
+  await page.clock.fastForward(300);
+  await expect.poll(readDraftSsh).toEqual({strategy:"generate"});
+  const afterSwitch=await readDraftSsh();
+  expect(afterSwitch).toEqual({strategy:"generate"});
+  expect(JSON.stringify(afterSwitch)).not.toContain(heldId);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_connect","ssh_configuration_snapshot"].includes(call.cmd)).length)).toBe(0);
 });
 
 async function openStandardKeyAccess(page:import("@playwright/test").Page,passphrase:string){
@@ -2706,8 +3055,8 @@ async function openStandardKeyAccess(page:import("@playwright/test").Page,passph
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
   await setup.getByRole("button",{name:/Generate a new key/}).click();
-  await setup.getByLabel("Passphrase",{exact:true}).fill(passphrase);
-  await setup.getByLabel("Confirm passphrase",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
   await setup.getByRole("button",{name:"Create encrypted key",exact:true}).click();
   const selectedCard=setup.getByRole("group",{name:"Selected local key"});
   await expect(selectedCard).toBeVisible();
@@ -2774,7 +3123,10 @@ test("Quick Setup proves key login explicitly and saves only a reviewed SSH conf
   await expect(review).toContainText("Host fixture-alpha");
   await expect(review).toContainText("HostName alpha.invalid");
   await expect(review).toContainText("Port 52022");
-  await expect(review).toContainText("IdentityFile ~/.ssh/vps-pilot_");
+  const selectedKeyPath=await page.evaluate(()=>((window as any).__setupKeys.keys()[0]?.path as string)??"");
+  const selectedKeyName=selectedKeyPath.split("/").pop()??"";
+  expect(selectedKeyName).toBeTruthy();
+  await expect(review).toContainText(`IdentityFile ~/.ssh/${selectedKeyName}`);
   await expect(review).toContainText(`# vps-pilot:begin ${first}`);
   await expect(review).toContainText(`# vps-pilot:end ${first}`);
   await expect(review).toContainText("Host *");
@@ -3079,35 +3431,26 @@ test("Quick Setup plans protected SSH, HTTP/HTTPS and validated custom firewall 
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_connect","ssh_action_execute"].includes(call.cmd)))).toEqual([]);
 });
 
-test("Quick Setup discloses planned sources before choices and resolves every selected item",async({page},testInfo)=>{
+test("Quick Setup keeps stack choices source-free and Review shows selected sources directly",async({page},testInfo)=>{
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   await setup.getByRole("button",{name:"Step 5: Application stack",exact:true}).click();
-  const dokploySource=setup.getByRole("button",{name:"Source for Dokploy",exact:true});
-  await expect(dokploySource).toHaveAttribute("aria-expanded","false");
-  await dokploySource.click();
-  await expect(dokploySource).toHaveAttribute("aria-expanded","true");
-  await expect(setup.getByRole("link",{name:"Dokploy official documentation",exact:true})).toHaveAttribute("href","https://docs.dokploy.com/docs/core/installation");
-  await expect(setup).toContainText("Planned source only.");
-  const javascriptSource=setup.getByRole("button",{name:"Source for JavaScript / PM2",exact:true});
-  await javascriptSource.click();
-  await expect(setup.getByRole("link",{name:"JavaScript / PM2 official documentation 3",exact:true})).toHaveAttribute("href","https://pm2.keymetrics.io/docs/usage/quick-start/");
-  await javascriptSource.click();
-  await dokploySource.click();
-  await expect(setup.getByRole("button",{name:"Source for Skip application stack",exact:true})).toHaveCount(0);
-  await expect(setup).not.toContainText("No verified installation source is available for this option.");
+  await expect(setup.getByRole("button",{name:/^Source for /})).toHaveCount(0);
+  await expect(setup.getByRole("link",{name:/official documentation/})).toHaveCount(0);
+  await expect(setup).not.toContainText("Planned source only.");
 
+  await setup.getByRole("button",{name:/^Dokploy/}).click();
   await setup.getByRole("button",{name:/^Container foundation/}).click();
   await setup.getByRole("button",{name:"Docker",exact:true}).click();
-  const dockerSource=setup.getByRole("button",{name:"Source for Docker",exact:true});
-  await dockerSource.click();
-  await expect(setup.getByRole("link",{name:"Docker official documentation",exact:true})).toHaveAttribute("href","https://docs.docker.com/engine/install/");
+  await expect(setup.getByRole("button",{name:/^Source for /})).toHaveCount(0);
+  await expect(setup.getByRole("link",{name:/official documentation/})).toHaveCount(0);
 
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
   for(const name of ["tmux","bat","eza","rsync","direnv"]){
     await expect(setup.getByRole("checkbox",{name,exact:true})).not.toBeChecked();
   }
+  await setup.getByRole("button",{name:/Neovim \+ LazyVim/}).click();
   await setup.getByRole("checkbox",{name:"tmux",exact:true}).check();
   const neovimSource=setup.getByRole("button",{name:"Source for Neovim",exact:true});
   await neovimSource.click();
@@ -3124,23 +3467,111 @@ test("Quick Setup discloses planned sources before choices and resolves every se
   await page.setViewportSize({width:1366,height:900});
 
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByRole("button",{name:/^Source for /})).toHaveCount(0);
   await setup.getByRole("checkbox",{name:"uv",exact:true}).check();
-  await setup.getByRole("button",{name:"Source for uv",exact:true}).click();
-  await expect(setup.getByRole("link",{name:"uv official documentation",exact:true})).toHaveAttribute("href","https://docs.astral.sh/uv/getting-started/installation/");
-  await setup.getByRole("button",{name:"Source for Bun",exact:true}).click();
-  await expect(setup.getByRole("link",{name:"Bun official documentation",exact:true})).toHaveAttribute("href","https://bun.sh/docs/installation");
+  await setup.getByRole("checkbox",{name:"Python",exact:true}).check();
+  await setup.getByRole("checkbox",{name:"Go",exact:true}).check();
 
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
-  await expect(setup).toContainText("Planned installation sources");
-  await expect(setup.getByRole("button",{name:"Source for Git",exact:true})).toBeVisible();
-  await expect(setup.getByRole("button",{name:"Source for Docker",exact:true})).toBeVisible();
-  await expect(setup.getByRole("button",{name:"Source for tmux",exact:true})).toBeVisible();
+  await expect(setup.getByRole("heading",{name:"Planned installation sources",exact:true})).toBeVisible();
+  await expect(setup.getByRole("button",{name:/^Source for /})).toHaveCount(0);
+  await expect(setup.getByRole("link",{name:"Docker Engine installation",exact:true})).toHaveAttribute("href","https://docs.docker.com/engine/install/");
+  await expect(setup.getByRole("link",{name:"tmux project",exact:true})).toHaveAttribute("href","https://github.com/tmux/tmux");
+  await expect(setup.getByRole("link",{name:"Neovim releases",exact:true})).toHaveAttribute("href","https://github.com/neovim/neovim/releases");
+  await expect(setup.getByRole("link",{name:"uv installation",exact:true})).toHaveAttribute("href","https://docs.astral.sh/uv/getting-started/installation/");
+  await expect(setup.getByRole("link",{name:"Python on Unix",exact:true})).toHaveAttribute("href","https://docs.python.org/3/using/unix.html");
+  await expect(setup.getByRole("link",{name:"Official Python downloads",exact:true})).toHaveAttribute("href","https://www.python.org/downloads/");
+  await expect(setup.getByRole("link",{name:"Go installation",exact:true})).toHaveAttribute("href","https://go.dev/doc/install");
+  await expect(setup.getByRole("link",{name:"Official Go downloads",exact:true})).toHaveAttribute("href","https://go.dev/dl/");
+  await expect(setup).toContainText("Exact install commands stay unavailable");
   await page.clock.fastForward(300);
 
   await page.reload();
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(reloaded.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(reloaded.getByRole("link",{name:"Python on Unix",exact:true})).toBeVisible();
   await reloaded.getByRole("button",{name:"Step 6: Developer tools",exact:true}).click();
   await expect(reloaded.getByRole("checkbox",{name:"tmux",exact:true})).toBeChecked();
   await expect(reloaded.getByRole("checkbox",{name:"direnv",exact:true})).not.toBeChecked();
+});
+
+test("Quick Setup runtime cards group JavaScript, Python and Go and keep optional choices off",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 5: Application stack",exact:true}).click();
+  await setup.getByRole("button",{name:/^JavaScript \/ PM2/}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+
+  await expect(setup.getByRole("heading",{name:"JavaScript / TypeScript",exact:true})).toBeVisible();
+  await expect(setup.getByRole("heading",{name:"Python",exact:true})).toBeVisible();
+  await expect(setup.getByRole("heading",{name:"Go",exact:true})).toBeVisible();
+  for(const name of ["Bun","uv","Python","Go"]){
+    await expect(setup.getByRole("checkbox",{name,exact:true})).not.toBeChecked();
+  }
+  const node=setup.getByRole("checkbox",{name:/NVM \+ Node\.js/});
+  await expect(node).toBeChecked();
+  await expect(node).toBeDisabled();
+  await expect(setup).toContainText("Node.js through NVM");
+
+  await setup.getByRole("checkbox",{name:"Bun",exact:true}).check();
+  await setup.getByRole("checkbox",{name:"uv",exact:true}).check();
+  await setup.getByRole("checkbox",{name:"Python",exact:true}).check();
+  await setup.getByRole("checkbox",{name:"Go",exact:true}).check();
+  await expect(node).toBeChecked();
+  await expect(node).toBeDisabled();
+  await page.mouse.move(0,0);
+  await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement)document.activeElement.blur();});
+  await page.screenshot({path:testInfo.outputPath("quick-setup-runtimes-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-runtimes-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+
+  await setup.getByRole("button",{name:"Next step",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
+  for(const [name,href] of [
+    ["Bun installation","https://bun.sh/docs/installation"],
+    ["uv installation","https://docs.astral.sh/uv/getting-started/installation/"],
+    ["Python on Unix","https://docs.python.org/3/using/unix.html"],
+    ["Official Python downloads","https://www.python.org/downloads/"],
+    ["Go installation","https://go.dev/doc/install"],
+    ["Official Go downloads","https://go.dev/dl/"],
+  ] as const){
+    await expect(setup.getByRole("link",{name,exact:true})).toHaveAttribute("href",href);
+  }
+  const nodeDownloads="https://nodejs.org/en/download";
+  await expect(setup.getByRole("listitem").filter({hasText:"NVM + Node.js"}).getByRole("link",{name:"Node.js downloads",exact:true})).toHaveAttribute("href",nodeDownloads);
+  await expect(setup.getByRole("listitem").filter({hasText:/^JavaScript \/ PM2/}).getByRole("link",{name:"Node.js downloads",exact:true})).toHaveAttribute("href",nodeDownloads);
+  await expect(setup.getByRole("button",{name:/^Source for /})).toHaveCount(0);
+  await page.mouse.move(0,0);
+  await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement)document.activeElement.blur();});
+  await setup.getByRole("heading",{name:"Planned installation sources",exact:true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path:testInfo.outputPath("quick-setup-review-sources-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  await setup.getByRole("heading",{name:"Planned installation sources",exact:true}).scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-review-sources-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+
+  await page.clock.fastForward(300);
+  const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
+  expect(stored.stack).toMatchObject({choice:"javascript"});
+  expect(stored.runtimes.slice().sort()).toEqual(["bun","go","nvm-node","python","uv"]);
+
+  await page.reload();
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(reloaded.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(reloaded.getByRole("link",{name:"Go installation",exact:true})).toBeVisible();
+  await reloaded.getByRole("button",{name:"Step 7: Runtimes",exact:true}).click();
+  await expect(reloaded.getByRole("checkbox",{name:"Bun",exact:true})).toBeChecked();
+  await expect(reloaded.getByRole("checkbox",{name:"uv",exact:true})).toBeChecked();
+  await expect(reloaded.getByRole("checkbox",{name:"Python",exact:true})).toBeChecked();
+  await expect(reloaded.getByRole("checkbox",{name:"Go",exact:true})).toBeChecked();
+  await expect(reloaded.getByRole("checkbox",{name:/NVM \+ Node\.js/})).toBeChecked();
+  await expect(reloaded.getByRole("checkbox",{name:/NVM \+ Node\.js/})).toBeDisabled();
 });

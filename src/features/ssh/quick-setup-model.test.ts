@@ -6,16 +6,19 @@ import {
 } from "./quick-setup-catalog";
 import {
   defaultQuickSetupDraft,
+  defaultQuickSetupKeyName,
   parseQuickSetupPort,
   type QuickSetupDraft,
   type QuickSetupFirewallRule,
   quickSetupDraftKey,
   quickSetupDraftPrefix,
   quickSetupFirewallRuleLimit,
+  quickSetupKeyNameMaxLength,
   quickSetupUtilities,
   resolveQuickSetupFirewallPlan,
   resolveQuickSetupPlan,
   sanitizeQuickSetupDraft,
+  validateQuickSetupKeyName,
   validateQuickSetupPort,
   validateQuickSetupUsername,
 } from "./quick-setup-model";
@@ -96,6 +99,75 @@ test("generated key references are optional, opaque and strategy-bound", () => {
     { strategy: "generate", generatedKeyId, passphrase: "never persist" },
   ])
     expect(sanitizeQuickSetupDraft({ ...clone(), sshKey: value })).toBeNull();
+});
+
+test("existing key references are optional, opaque and strategy-bound", () => {
+  const existingKeyId = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+  const withKey = requireDraft({
+    ...clone(),
+    sshKey: { strategy: "existing", existingKeyId },
+  });
+  expect(withKey.sshKey).toEqual({ strategy: "existing", existingKeyId });
+  expect(
+    sanitizeQuickSetupDraft({
+      ...clone(),
+      sshKey: { strategy: "existing" },
+    })?.sshKey,
+  ).toEqual({ strategy: "existing" });
+  expect(sanitizeQuickSetupDraft(clone())?.sshKey).toEqual({
+    strategy: "existing",
+  });
+
+  for (const value of [
+    { strategy: "existing", existingKeyId: null },
+    { strategy: "generate", existingKeyId: null },
+    { strategy: "existing", existingKeyId: "not-a-uuid" },
+    { strategy: "existing", existingKeyId: existingKeyId.toUpperCase() },
+    { strategy: "existing", existingKeyId: `${existingKeyId}/../escape` },
+    { strategy: "generate", existingKeyId },
+    { strategy: "agent", existingKeyId },
+    { strategy: "existing", existingKeyId, path: "/tmp/key" },
+    { strategy: "existing", existingKeyId, passphrase: "never persist" },
+    { strategy: "existing", generatedKeyId: existingKeyId, existingKeyId },
+    { strategy: "generate", generatedKeyId: existingKeyId, existingKeyId },
+  ])
+    expect(sanitizeQuickSetupDraft({ ...clone(), sshKey: value })).toBeNull();
+});
+
+test("key filenames match the native standard-directory contract", () => {
+  for (const name of ["vps-host", "key_1", "a.b-c_d", "_", "k".repeat(64)])
+    expect(validateQuickSetupKeyName(name)).toBeNull();
+  for (const name of [
+    "",
+    "-dash",
+    ".dot",
+    "x.pub",
+    "KEY.PUB",
+    "config",
+    "authorized_keys",
+    "known_hosts",
+    "environment",
+    "dir/name",
+    "./key",
+    "../key",
+    "with space",
+    "with%percent",
+    "with$dollar",
+    "with\\slash",
+    "k".repeat(65),
+    "vps-pilot_11111111-1111-4111-8111-111111111111",
+    "vps-pilot_key",
+    "ümlaut",
+  ])
+    expect(validateQuickSetupKeyName(name)).not.toBeNull();
+
+  expect(quickSetupKeyNameMaxLength).toBe(64);
+  expect(defaultQuickSetupKeyName("203.0.113.7")).toBe("vps-203.0.113.7");
+  expect(defaultQuickSetupKeyName("My Server!")).toBe("vps-my-server");
+  expect(defaultQuickSetupKeyName("pilot_host")).toBe("vps-key");
+  expect(
+    validateQuickSetupKeyName(defaultQuickSetupKeyName("My Server!")),
+  ).toBeNull();
 });
 
 test("quick setup sanitizer rejects unknown versions, fields and secrets", () => {
@@ -370,6 +442,18 @@ test("every catalog entry discloses an official HTTPS source and stays non-execu
   expect(quickSetupCatalog.tmux.documentation).toEqual([
     "https://github.com/tmux/tmux",
   ]);
+  expect(quickSetupCatalog.python.documentation).toEqual([
+    "https://docs.python.org/3/using/unix.html",
+    "https://www.python.org/downloads/",
+  ]);
+  expect(quickSetupCatalog.python.plannedSource).toContain(
+    "distribution-signed",
+  );
+  expect(quickSetupCatalog.go.documentation).toEqual([
+    "https://go.dev/doc/install",
+    "https://go.dev/dl/",
+  ]);
+  expect(quickSetupCatalog.go.plannedSource).toContain("checksum");
 });
 
 test("every stack choice requires an explicit engine key", () => {
@@ -414,6 +498,48 @@ test("JavaScript / PM2 requires NVM + Node.js and cannot drop it", () => {
     runtimes: ["nvm-node", "bun", "uv"],
   });
   expect(optional.runtimes).toEqual(["nvm-node", "bun", "uv"]);
+});
+
+test("all five runtime choices validate, persist and keep PM2's Node requirement", () => {
+  const all = ["bun", "nvm-node", "uv", "python", "go"] as const;
+  const accepted = requireDraft({
+    ...clone(),
+    stack: { choice: "skip", engine: null },
+    runtimes: [...all],
+  });
+  expect(accepted.runtimes).toEqual([...all]);
+  expect(
+    requireDraft({
+      ...clone(),
+      stack: { choice: "skip", engine: null },
+      runtimes: ["bun", "nvm-node", "uv"],
+    }).runtimes,
+  ).toEqual(["bun", "nvm-node", "uv"]);
+
+  for (const runtimes of [
+    ["bun", "bun"],
+    ["deno"],
+    [null],
+    ["bun", "nvm-node", "uv", "python", "go", "python"],
+    ["bun", "nvm-node", "uv", "python", "go", "rust"],
+    ["bun", "secret"],
+  ])
+    expect(sanitizeQuickSetupDraft({ ...clone(), runtimes })).toBeNull();
+
+  expect(
+    sanitizeQuickSetupDraft({
+      ...clone(),
+      stack: { choice: "javascript", engine: null },
+      runtimes: [...all],
+    }),
+  ).not.toBeNull();
+  expect(
+    sanitizeQuickSetupDraft({
+      ...clone(),
+      stack: { choice: "javascript", engine: null },
+      runtimes: ["bun", "uv", "python", "go"],
+    }),
+  ).toBeNull();
 });
 
 test("quick setup resolver deduplicates stack and selected dependencies", () => {

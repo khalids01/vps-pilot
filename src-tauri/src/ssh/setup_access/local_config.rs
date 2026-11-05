@@ -30,7 +30,9 @@ pub(super) struct PrepareRequest {
     pub host: String,
     pub username: String,
     pub port: u16,
-    pub file_name: String,
+    /// Trusted absolute private-key path from the native vault resolver. The
+    /// renderer never supplies this value.
+    pub identity_path: PathBuf,
 }
 
 pub(super) struct Prepared {
@@ -130,11 +132,113 @@ fn validate_username(username: &str) -> Result<(), String> {
     }
 }
 
-fn validate_file_name(file_name: &str) -> Result<(), String> {
-    let rest = file_name.strip_prefix("vps-pilot_").ok_or_else(|| {
-        "The selected key does not use the standard VPS Pilot file name.".to_string()
-    })?;
-    canonical_uuid(rest)?;
+fn validate_identity_name(name: &str) -> Result<(), String> {
+    if let Some(rest) = name.strip_prefix("vps-pilot_") {
+        if canonical_uuid(rest).is_ok() {
+            return Ok(());
+        }
+    }
+    let bytes = name.as_bytes();
+    let valid = !bytes.is_empty()
+        && bytes.len() <= 64
+        && (bytes[0].is_ascii_alphanumeric() || bytes[0] == b'_')
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(byte))
+        && !name.to_ascii_lowercase().ends_with(".pub")
+        && !["config", "authorized_keys", "known_hosts", "environment"].contains(&name);
+    if valid {
+        Ok(())
+    } else {
+        Err(
+            "The existing VPS Pilot SSH config block does not match the supported schema. It was not changed."
+                .into(),
+        )
+    }
+}
+
+fn validate_identity_text(text: &str) -> Result<(), String> {
+    if text.is_empty() || text.chars().any(char::is_control) || text.contains(['%', '$']) {
+        return Err(
+            "The selected key path cannot be written safely to the SSH config. No change was made."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn escape_double_quoted(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        if character == '\\' || character == '"' {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped.push('"');
+    escaped
+}
+
+fn render_identity_file(root: &Path, identity_path: &Path) -> Result<String, String> {
+    if !identity_path.is_absolute() {
+        return Err("The selected key path is not absolute. No change was made.".into());
+    }
+    let text = identity_path
+        .to_str()
+        .ok_or_else(|| "The selected key path is not valid UTF-8 text.".to_string())?;
+    validate_identity_text(text)?;
+    if identity_path.parent() == Some(root) {
+        if let Some(name) = identity_path.file_name().and_then(|name| name.to_str()) {
+            if validate_identity_name(name).is_ok() {
+                return Ok(format!("~/.ssh/{name}"));
+            }
+        }
+    }
+    Ok(escape_double_quoted(text))
+}
+
+fn unsupported_block() -> String {
+    "The existing VPS Pilot SSH config block does not match the supported schema. It was not changed."
+        .to_string()
+}
+
+fn parse_identity_file(value: &str) -> Result<(), String> {
+    if let Some(rest) = value.strip_prefix("~/.ssh/") {
+        if rest.contains('/') || rest.is_empty() {
+            return Err(unsupported_block());
+        }
+        validate_identity_name(rest)?;
+        return Ok(());
+    }
+    let Some(inner) = value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+    else {
+        return Err(unsupported_block());
+    };
+    let mut unescaped = String::with_capacity(inner.len());
+    let mut characters = inner.chars();
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            match characters.next() {
+                Some('\\') => unescaped.push('\\'),
+                Some('"') => unescaped.push('"'),
+                _ => return Err(unsupported_block()),
+            }
+        } else if character == '"' {
+            return Err(unsupported_block());
+        } else {
+            unescaped.push(character);
+        }
+    }
+    if escape_double_quoted(&unescaped) != value {
+        return Err(unsupported_block());
+    }
+    validate_identity_text(&unescaped)?;
+    if !Path::new(&unescaped).is_absolute() {
+        return Err(unsupported_block());
+    }
     Ok(())
 }
 
@@ -268,13 +372,13 @@ fn validate_owned_block(text: &str, block: &Block) -> Result<(), String> {
                 .into(),
         );
     }
-    let file_name = lines[4]
-        .strip_prefix("    IdentityFile ~/.ssh/")
+    let identity = lines[4]
+        .strip_prefix("    IdentityFile ")
         .ok_or_else(|| {
             "The existing VPS Pilot SSH config block does not match the supported schema. It was not changed."
                 .to_string()
         })?;
-    validate_file_name(file_name)?;
+    parse_identity_file(identity)?;
     if lines[5] != "    IdentitiesOnly yes"
         || lines[6] != "    PreferredAuthentications publickey"
         || lines[7] != "Host *"
@@ -384,11 +488,12 @@ fn literal_aliases(text: &str, blocks: &[Block], excluded: Option<usize>) -> Has
     aliases
 }
 
-fn build_entry(request: &PrepareRequest, profile_id: &str) -> String {
-    format!(
-        "# vps-pilot:begin {profile_id}\nHost {}\n    HostName {}\n    User {}\n    Port {}\n    IdentityFile ~/.ssh/{}\n    IdentitiesOnly yes\n    PreferredAuthentications publickey\nHost *\n# vps-pilot:end {profile_id}\n",
-        request.alias, request.host, request.username, request.port, request.file_name
-    )
+fn build_entry(root: &Path, request: &PrepareRequest, profile_id: &str) -> Result<String, String> {
+    let identity = render_identity_file(root, &request.identity_path)?;
+    Ok(format!(
+        "# vps-pilot:begin {profile_id}\nHost {}\n    HostName {}\n    User {}\n    Port {}\n    IdentityFile {identity}\n    IdentitiesOnly yes\n    PreferredAuthentications publickey\nHost *\n# vps-pilot:end {profile_id}\n",
+        request.alias, request.host, request.username, request.port
+    ))
 }
 
 fn field_value(params: &ssh2_config::HostParams, name: &str) -> Option<String> {
@@ -404,7 +509,6 @@ fn field_value(params: &ssh2_config::HostParams, name: &str) -> Option<String> {
 fn validate_effective(
     candidate: &str,
     home: &Path,
-    root: &Path,
     request: &PrepareRequest,
 ) -> Result<(), String> {
     let config = SshConfig::default()
@@ -435,7 +539,7 @@ fn validate_effective(
                 .into(),
         );
     }
-    let expected_identity = root.join(&request.file_name);
+    let expected_identity = request.identity_path.clone();
     match params.identity_file.as_deref() {
         Some([only]) if only == &expected_identity => {}
         _ => {
@@ -703,7 +807,7 @@ fn prepare_blocking(root: &Path, request: PrepareRequest) -> Result<Prepared, St
     if request.port == 0 {
         return Err("The reviewed SSH port is invalid.".into());
     }
-    validate_file_name(&request.file_name)?;
+    render_identity_file(root, &request.identity_path)?;
     let owner = validate_dirs(root)?;
     let (source, bytes) = read_source(root, owner)?;
     let text = if source.exists {
@@ -715,7 +819,7 @@ fn prepare_blocking(root: &Path, request: PrepareRequest) -> Result<Prepared, St
     };
     scan_unsupported(text)?;
     let blocks = scan_blocks(text)?;
-    let entry = build_entry(&request, &profile_id);
+    let entry = build_entry(root, &request, &profile_id)?;
     let own = blocks.iter().find(|block| block.id == profile_id);
     let aliases = literal_aliases(text, &blocks, own.map(|block| block.start));
     if aliases.contains(&request.alias.to_ascii_lowercase()) {
@@ -743,7 +847,7 @@ fn prepare_blocking(root: &Path, request: PrepareRequest) -> Result<Prepared, St
     let home = root
         .parent()
         .ok_or_else(|| "The home folder is unavailable.".to_string())?;
-    validate_effective(&candidate, home, root, &request)?;
+    validate_effective(&candidate, home, &request)?;
     Ok(Prepared {
         entry,
         mode,
@@ -919,21 +1023,59 @@ mod tests {
         (dir, root)
     }
 
-    fn request() -> PrepareRequest {
+    fn request(root: &Path) -> PrepareRequest {
         PrepareRequest {
             profile_id: Uuid::new_v4().to_string(),
             alias: "safe-alias".into(),
             host: "example.com".into(),
             username: "deploy".into(),
             port: 22,
-            file_name: format!("vps-pilot_{}", Uuid::new_v4()),
+            identity_path: root.join(format!("vps-pilot_{}", Uuid::new_v4())),
         }
     }
 
-    fn request_with_alias(alias: &str) -> PrepareRequest {
-        let mut request = request();
+    fn request_with_alias(root: &Path, alias: &str) -> PrepareRequest {
+        let mut request = request(root);
         request.alias = alias.into();
         request
+    }
+
+    #[test]
+    fn identity_lines_use_canonical_app_forms_and_refuse_extra_arguments() {
+        let uuid = Uuid::new_v4();
+        let canonical = format!("vps-pilot_{uuid}");
+        assert!(parse_identity_file(&format!("~/.ssh/{canonical}")).is_ok());
+        assert!(parse_identity_file("~/.ssh/vps-pilot_myserver").is_ok());
+        assert!(parse_identity_file("~/.ssh/my%key").is_err());
+        assert!(parse_identity_file("\"/tmp/my key\"").is_ok());
+        assert!(parse_identity_file("\"/tmp/my key\" extra").is_err());
+        assert!(parse_identity_file("\"/tmp/unterminated").is_err());
+        assert!(parse_identity_file("/tmp/unquoted").is_err());
+        assert!(parse_identity_file("\"/tmp/percent%key\"").is_err());
+        assert!(parse_identity_file("\"/tmp/dollar$key\"").is_err());
+    }
+
+    #[test]
+    fn custom_names_and_standard_root_spaces_render_safe_identity_files() {
+        let (_dir, root) = fixture();
+        let mut named = request(&root);
+        named.identity_path = root.join("vps-pilot_myserver");
+        let prepared = prepare_blocking(&root, named).unwrap();
+        assert!(
+            prepared
+                .entry
+                .contains("    IdentityFile ~/.ssh/vps-pilot_myserver\n"),
+            "{}",
+            prepared.entry
+        );
+
+        let mut spaced = request(&root);
+        spaced.identity_path = root.join("my selected key");
+        let spaced_path = spaced.identity_path.clone();
+        let prepared = prepare_blocking(&root, spaced).unwrap();
+        let expected = format!("    IdentityFile \"{}\"\n", spaced_path.to_string_lossy());
+        assert!(prepared.entry.contains(&expected), "{}", prepared.entry);
+        assert!(!prepared.entry.contains("~/.ssh/my selected key"));
     }
 
     #[test]
@@ -942,7 +1084,7 @@ mod tests {
         let config = root.join("config");
         std::fs::write(&config, b"Host *\n    ServerAliveInterval 30\n").unwrap();
         std::fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
-        let request = request();
+        let request = request(&root);
         let profile_id = request.profile_id.clone();
         let prepared = prepare_blocking(&root, request).unwrap();
         let before = std::fs::read(&config).unwrap();
@@ -971,7 +1113,7 @@ mod tests {
         );
         std::fs::write(root.join("config"), &text).unwrap();
         std::fs::set_permissions(root.join("config"), fs::Permissions::from_mode(0o600)).unwrap();
-        let error = match prepare_blocking(&root, request_with_alias("taken")) {
+        let error = match prepare_blocking(&root, request_with_alias(&root, "taken")) {
             Ok(_) => panic!("an alias in another managed block must collide"),
             Err(error) => error,
         };
@@ -995,7 +1137,10 @@ mod tests {
             let text = format!("Host *\n    {directive}\n");
             std::fs::write(&config, &text).unwrap();
             std::fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
-            assert!(prepare_blocking(&root, request()).is_err(), "{directive}");
+            assert!(
+                prepare_blocking(&root, request(&root)).is_err(),
+                "{directive}"
+            );
             assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
         }
     }

@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "setup-keys"
-description = "App-owned local encrypted SSH key vault. Bounded listing across the standard ~/.ssh folder and the legacy app vault, strict Ed25519 generation with transient passphrases, explicit no-overwrite copy from the app vault into ~/.ssh, and user-initiated backup export through a native save dialog. No arbitrary local paths, private-key contents, passphrase persistence, or SSH actions."
-commands.allow = ["app_setup_keys_list", "app_setup_key_generate", "app_setup_key_use_ssh_directory", "app_setup_key_export"]
+description = "App-owned local SSH key vault. Bounded listing across the standard ~/.ssh folder, named or UUID-generated OpenSSH keys with optional empty passphrases, user-initiated selection of an existing private key through a native open dialog, read-only key-name availability checks, explicit no-overwrite copy from the app vault into ~/.ssh, and user-initiated backup export through a native save dialog. No arbitrary local paths, private-key contents, passphrase persistence, or SSH actions."
+commands.allow = ["app_setup_keys_list", "app_setup_key_generate", "app_setup_key_check_name", "app_setup_key_select", "app_setup_key_use_ssh_directory", "app_setup_key_export"]

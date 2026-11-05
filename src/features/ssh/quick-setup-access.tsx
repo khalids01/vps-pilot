@@ -21,7 +21,7 @@ interface KeyLoginProof {
   connectionId: string;
   keyId: string;
   keyFingerprint: string;
-  keyLocation: "ssh" | "legacy";
+  keyLocation: SetupKey["location"];
   host: string;
   username: string;
   port: number;
@@ -256,7 +256,7 @@ export function QuickSetupAccess({
 
   function proofMatches(result: KeyLoginProof) {
     return (
-      result.keyLocation === "ssh" &&
+      result.keyLocation === selectedKey.location &&
       result.profileId === source.profileId &&
       result.profileRevision === source.profileRevision &&
       result.connectionId === connectionId &&
@@ -297,6 +297,13 @@ export function QuickSetupAccess({
     setUnlockOpen(true);
   }
 
+  function startVerify() {
+    if (keyBusy || busy || verifyActive.current) return;
+    setVerifyError("");
+    if (selectedKey.encrypted) openUnlock();
+    else void submitVerify(null);
+  }
+
   function closeUnlock() {
     epoch.current += 1;
     setPassphrase("");
@@ -304,7 +311,7 @@ export function QuickSetupAccess({
     setUnlockOpen(false);
   }
 
-  async function submitVerify() {
+  async function submitVerify(secret: string | null) {
     if (
       verifyActive.current ||
       verifying ||
@@ -313,9 +320,8 @@ export function QuickSetupAccess({
       !connectionId
     )
       return;
-    const secret = passphrase;
-    if (!secret) {
-      setVerifyError("Enter the passphrase for the selected key.");
+    if (selectedKey.encrypted && !secret) {
+      setVerifyError("Enter the passphrase for the selected encrypted key.");
       return;
     }
     setPassphrase("");
@@ -559,7 +565,7 @@ export function QuickSetupAccess({
             type="button"
             variant="outline"
             disabled={verifyDisabled}
-            onClick={openUnlock}
+            onClick={startVerify}
           >
             {verifying ? "Verifying key login…" : "Verify key login"}
           </Button>
@@ -661,8 +667,9 @@ export function QuickSetupAccess({
           <DialogHeader>
             <DialogTitle>Unlock selected key</DialogTitle>
             <DialogDescription>
-              Enter the passphrase once for {selectedKey.fingerprint}. It is
-              used for this verification and is not saved.
+              Enter the passphrase once for the encrypted key{" "}
+              {selectedKey.fingerprint}. It is used for this verification and is
+              not saved.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -699,7 +706,7 @@ export function QuickSetupAccess({
             <Button
               type="button"
               disabled={verifying || !passphrase}
-              onClick={() => void submitVerify()}
+              onClick={() => void submitVerify(passphrase)}
             >
               {verifying ? "Verifying key login…" : "Verify key login"}
             </Button>

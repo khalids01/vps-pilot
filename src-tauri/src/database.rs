@@ -186,6 +186,8 @@ struct QuickSetupSshKey {
     strategy: String,
     #[serde(default, deserialize_with = "optional_generated_key_id")]
     generated_key_id: Option<String>,
+    #[serde(default, deserialize_with = "optional_generated_key_id")]
+    existing_key_id: Option<String>,
 }
 fn optional_generated_key_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -285,14 +287,18 @@ fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
                     previous.port == rule.port && previous.protocol == rule.protocol
                 })
         });
+    let canonical_reference = |id: &str| {
+        uuid::Uuid::parse_str(id)
+            .map(|parsed| parsed.to_string() == id)
+            .unwrap_or(false)
+    };
     let generated_key_id_valid = match &draft.ssh_key.generated_key_id {
         None => true,
-        Some(id) => {
-            draft.ssh_key.strategy == "generate"
-                && uuid::Uuid::parse_str(id)
-                    .map(|parsed| parsed.to_string() == *id)
-                    .unwrap_or(false)
-        }
+        Some(id) => draft.ssh_key.strategy == "generate" && canonical_reference(id),
+    };
+    let existing_key_id_valid = match &draft.ssh_key.existing_key_id {
+        None => true,
+        Some(id) => draft.ssh_key.strategy == "existing" && canonical_reference(id),
     };
     if draft.version != 1
         || !(1..=8).contains(&draft.step)
@@ -300,6 +306,7 @@ fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
         || !quick_setup_username_valid(&draft.administrator.username)
         || !["existing", "generate", "agent"].contains(&draft.ssh_key.strategy.as_str())
         || !generated_key_id_valid
+        || !existing_key_id_valid
         || draft.access.port == 0
         || !["configure", "keep-current"].contains(&draft.access.ufw.as_str())
         || !firewall_rules_valid
@@ -313,7 +320,11 @@ fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
             ],
             14,
         )
-        || !unique_allowed(&draft.runtimes, &["bun", "nvm-node", "uv"], 3)
+        || !unique_allowed(
+            &draft.runtimes,
+            &["bun", "nvm-node", "uv", "python", "go"],
+            5,
+        )
         || (draft.stack.choice == "javascript"
             && !draft.runtimes.iter().any(|runtime| runtime == "nvm-node"))
     {
@@ -758,6 +769,70 @@ mod tests {
     }
 
     #[test]
+    fn quick_setup_existing_key_reference_is_optional_opaque_and_strategy_bound() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
+        let existing = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+
+        let mut absent = valid_quick_setup_draft();
+        absent["sshKey"] = serde_json::json!({ "strategy": "existing" });
+        validate_document(&key, &absent.to_string()).unwrap();
+
+        let mut draft = valid_quick_setup_draft();
+        draft["sshKey"] = serde_json::json!({ "strategy": "existing", "existingKeyId": existing });
+        validate_document(&key, &draft.to_string()).unwrap();
+        let serialized = draft.to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let db = LocalDatabase::open(&dir.path().join("app.sqlite3")).unwrap();
+        db.write(&key, &serialized).unwrap();
+        assert_eq!(db.read(&key).unwrap(), Some(serialized));
+
+        // An older generate-only draft remains valid without a reset.
+        let legacy = valid_quick_setup_draft();
+        validate_document(&key, &legacy.to_string()).unwrap();
+
+        for invalid in [
+            serde_json::json!({ "strategy": "existing", "existingKeyId": null }),
+            serde_json::json!({ "strategy": "generate", "existingKeyId": null }),
+            serde_json::json!({ "strategy": "existing", "existingKeyId": "not-a-uuid" }),
+            serde_json::json!({
+                "strategy": "existing",
+                "existingKeyId": existing.to_uppercase()
+            }),
+            serde_json::json!({ "strategy": "existing", "existingKeyId": "../escape" }),
+            serde_json::json!({ "strategy": "generate", "existingKeyId": existing }),
+            serde_json::json!({ "strategy": "agent", "existingKeyId": existing }),
+            serde_json::json!({
+                "strategy": "existing",
+                "existingKeyId": existing,
+                "path": "/tmp/key"
+            }),
+            serde_json::json!({
+                "strategy": "existing",
+                "existingKeyId": existing,
+                "passphrase": "never save"
+            }),
+            serde_json::json!({
+                "strategy": "existing",
+                "generatedKeyId": existing,
+                "existingKeyId": existing
+            }),
+            serde_json::json!({
+                "strategy": "generate",
+                "generatedKeyId": existing,
+                "existingKeyId": existing
+            }),
+        ] {
+            let mut rejected = valid_quick_setup_draft();
+            rejected["sshKey"] = invalid.clone();
+            assert!(
+                validate_document(&key, &rejected.to_string()).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn quick_setup_firewall_fields_are_optional_strict_and_persisted() {
         let id = "11111111-1111-4111-8111-111111111111";
         let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
@@ -940,6 +1015,47 @@ mod tests {
         )
         .is_err());
     }
+    #[test]
+    fn quick_setup_runtime_choices_accept_new_ids_and_keep_nvm_node_required() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
+        let mut draft = valid_quick_setup_draft();
+        draft["runtimes"] = serde_json::json!(["bun", "nvm-node", "uv", "python", "go"]);
+        validate_document(&key, &draft.to_string()).unwrap();
+        let serialized = draft.to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let db = LocalDatabase::open(&dir.path().join("app.sqlite3")).unwrap();
+        db.write(&key, &serialized).unwrap();
+        assert_eq!(db.read(&key).unwrap(), Some(serialized));
+
+        let mut legacy = valid_quick_setup_draft();
+        legacy["runtimes"] = serde_json::json!(["bun", "nvm-node", "uv"]);
+        validate_document(&key, &legacy.to_string()).unwrap();
+
+        for runtimes in [
+            serde_json::json!(["bun", "bun"]),
+            serde_json::json!(["deno"]),
+            serde_json::json!([null]),
+            serde_json::json!(["bun", "nvm-node", "uv", "python", "go", "python"]),
+            serde_json::json!(["bun", "nvm-node", "uv", "python", "go", "rust"]),
+            serde_json::json!(["bun", "secret"]),
+        ] {
+            let mut rejected = valid_quick_setup_draft();
+            rejected["runtimes"] = runtimes.clone();
+            assert!(
+                validate_document(&key, &rejected.to_string()).is_err(),
+                "{runtimes}"
+            );
+        }
+
+        let mut javascript = valid_quick_setup_draft();
+        javascript["stack"] = serde_json::json!({ "choice": "javascript", "engine": null });
+        javascript["runtimes"] = serde_json::json!(["bun", "uv", "python", "go"]);
+        assert!(validate_document(&key, &javascript.to_string()).is_err());
+        javascript["runtimes"] = serde_json::json!(["bun", "nvm-node", "uv", "python", "go"]);
+        validate_document(&key, &javascript.to_string()).unwrap();
+    }
+
     #[test]
     fn bootstrap_replaces_every_invalid_quick_setup_draft_with_a_bounded_sentinel() {
         let dir = tempfile::tempdir().unwrap();

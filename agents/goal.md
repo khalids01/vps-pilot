@@ -421,3 +421,22 @@ Never equate key creation, a saved connection or local config export with a
 successful key login. Keep the old working connection until replacement access
 is independently verified. No key overwrite/deletion, unreviewed real-home
 writes by test tools, production-VPS tests or broad mutation-gate changes.
+
+## Named and existing SSH keys, runtime cards and final review — 2026-11-05
+
+The user authorized selecting an existing private-key file without changing it,
+naming new files in `~/.ssh` and allowing an empty passphrase. This supersedes
+the encrypted-only restriction for explicitly unprotected new keys. Nonempty
+passphrases protect the local private file; they are not the VPS account password.
+Never save key bytes/passphrases in SQLite or logs. Show truthful protection and
+backup labels. Check filename availability inline against both private/public
+names, then enforce atomic no-overwrite creation natively, including races and
+symlinks. Native references must survive restarts without renaming existing keys.
+
+Remove source controls from Application stack. Group runtime choices into cards
+for JavaScript/TypeScript (Bun, Node.js through NVM), Python (uv, Python) and Go.
+Keep backward-compatible non-secret drafts and required dependencies. Final
+Review should show selected sources clearly and only claim exact executable
+commands when the native installer/preflight has actually produced them; no
+invented final commands or credential-containing shell previews. These changes
+do not enable the pending remote account/firewall/install adapters.

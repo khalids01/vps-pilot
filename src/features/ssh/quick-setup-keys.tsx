@@ -4,8 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { desktopAvailable, safeError } from "./api";
 import { QuickSetupAccess } from "./quick-setup-access";
+import {
+  defaultQuickSetupKeyName,
+  quickSetupKeyNameMaxLength,
+  validateQuickSetupKeyName,
+} from "./quick-setup-model";
 
-export type KeyLocation = "ssh" | "legacy";
+export type KeyLocation = "ssh" | "legacy" | "external";
 export interface SetupKey {
   keyId: string;
   fingerprint: string;
@@ -28,17 +33,36 @@ interface SetupKeyList {
 interface ExportResult {
   status: "exported" | "canceled";
   path: string | null;
+  encrypted: boolean;
 }
 interface CopyResult {
   status: "copied" | "already";
   key: SetupKey;
 }
+interface SelectResult {
+  status: "selected" | "canceled";
+  key: SetupKey | null;
+}
+interface KeyNameCheck {
+  fileName: string;
+  available: boolean;
+  message: string;
+}
+
+type KeyMutation = "load" | "create" | "select" | "copy" | "export";
 
 function passphraseBytes(value: string) {
   return new TextEncoder().encode(value).length;
 }
 
+function locationLabel(location: KeyLocation) {
+  if (location === "ssh") return "Stored in ~/.ssh";
+  if (location === "legacy") return "App vault";
+  return "Original file outside ~/.ssh";
+}
+
 export function QuickSetupKeyManager({
+  strategy,
   selectedKeyId,
   onSelectKey,
   source,
@@ -46,6 +70,7 @@ export function QuickSetupKeyManager({
   connected,
   target,
 }: {
+  strategy: "existing" | "generate";
   selectedKeyId?: string;
   onSelectKey: (keyId: string) => void;
   source: {
@@ -63,9 +88,14 @@ export function QuickSetupKeyManager({
   const [loading, setLoading] = useState(false);
   const [passphrase, setPassphrase] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [mutation, setMutation] = useState<
-    "load" | "create" | "copy" | "export" | null
-  >(null);
+  const [fileName, setFileName] = useState(() =>
+    defaultQuickSetupKeyName(source.host),
+  );
+  const [fileNameError, setFileNameError] = useState("");
+  const [nameCheck, setNameCheck] = useState<KeyNameCheck | null>(null);
+  const [nameChecking, setNameChecking] = useState(false);
+  const [keyRevision, setKeyRevision] = useState(0);
+  const [mutation, setMutation] = useState<KeyMutation | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
   const [copying, setCopying] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -76,13 +106,18 @@ export function QuickSetupKeyManager({
   const [accessBusy, setAccessBusy] = useState(false);
   const active = useRef(true);
   const accessBusyRef = useRef(false);
-  const mutationGate = useRef<"load" | "create" | "copy" | "export" | null>(
-    null,
-  );
+  const mutationGate = useRef<KeyMutation | null>(null);
+  const strategyRef = useRef(strategy);
+  strategyRef.current = strategy;
+  const fileNameRef = useRef(fileName);
+  fileNameRef.current = fileName;
   const createRequest = useRef(0);
+  const selectRequest = useRef(0);
   const copyRequest = useRef(0);
   const exportRequest = useRef(0);
   const loadRequest = useRef(0);
+  const nameRequest = useRef(0);
+  const nameTimer = useRef<number | null>(null);
 
   const handleAccessBusy = useCallback((busy: boolean) => {
     accessBusyRef.current = busy;
@@ -91,13 +126,11 @@ export function QuickSetupKeyManager({
 
   const load = useCallback(async () => {
     if (!desktopAvailable) {
-      setListError(
-        "The local encrypted key vault is available only in the desktop app.",
-      );
+      setListError("Local SSH keys are available only in the desktop app.");
       return;
     }
-    // One mutation at a time; a reload never queues behind generation/export
-    // or an active key-login operation.
+    // One mutation at a time; a reload never queues behind generation,
+    // selection, export, or an active key-login operation.
     if (mutationGate.current || accessBusyRef.current) return;
     mutationGate.current = "load";
     if (active.current) {
@@ -110,11 +143,13 @@ export function QuickSetupKeyManager({
       const result = await invoke<SetupKeyList>("app_setup_keys_list");
       if (!active.current || token !== loadRequest.current) return;
       setKeys(result);
+      setKeyRevision((value) => value + 1);
     } catch (failure) {
       if (!active.current || token !== loadRequest.current) return;
       setListError(
         `${safeError(failure)} Stored keys were not listed; existing entries are preserved.`,
       );
+      setKeyRevision((value) => value + 1);
     } finally {
       if (token === loadRequest.current) {
         mutationGate.current = null;
@@ -139,14 +174,91 @@ export function QuickSetupKeyManager({
       canceled = true;
       active.current = false;
       createRequest.current += 1;
+      selectRequest.current += 1;
       copyRequest.current += 1;
       exportRequest.current += 1;
       loadRequest.current += 1;
+      nameRequest.current += 1;
+      if (nameTimer.current !== null) {
+        window.clearTimeout(nameTimer.current);
+        nameTimer.current = null;
+      }
       // Release only the load gate from this effect run. A user mutation's
       // worker owns its own gate; a stale reply can never release a newer one.
       if (mutationGate.current === "load") mutationGate.current = null;
     };
   }, [load]);
+
+  const checkName = useCallback(async (name: string, token: number) => {
+    if (!active.current || token !== nameRequest.current) return;
+    try {
+      const result = await invoke<KeyNameCheck>("app_setup_key_check_name", {
+        fileName: name,
+      });
+      if (
+        !active.current ||
+        token !== nameRequest.current ||
+        fileNameRef.current !== name
+      )
+        return;
+      setNameCheck(result);
+      setFileNameError(result.available ? "" : result.message);
+    } catch (failure) {
+      if (
+        !active.current ||
+        token !== nameRequest.current ||
+        fileNameRef.current !== name
+      )
+        return;
+      setNameCheck(null);
+      setFileNameError(safeError(failure));
+    } finally {
+      if (active.current && token === nameRequest.current)
+        setNameChecking(false);
+    }
+  }, []);
+
+  const selectedKey =
+    keys?.keys.find((key) => key.keyId === selectedKeyId) ?? null;
+  const nameFormVisible =
+    strategy === "generate" && (!selectedKey || createOpen);
+  useEffect(() => {
+    // These are intentional freshness triggers: a reload must not reuse an
+    // earlier availability answer even when the filename text is unchanged.
+    void keyRevision;
+    void keys;
+    nameRequest.current += 1;
+    const token = nameRequest.current;
+    if (nameTimer.current !== null) {
+      window.clearTimeout(nameTimer.current);
+      nameTimer.current = null;
+    }
+    setNameCheck(null);
+    if (!nameFormVisible) {
+      setFileNameError("");
+      setNameChecking(false);
+      return;
+    }
+    const immediate = validateQuickSetupKeyName(fileName);
+    setFileNameError(immediate ?? "");
+    if (immediate !== null || !desktopAvailable) {
+      setNameChecking(false);
+      return;
+    }
+    setNameChecking(true);
+    nameTimer.current = window.setTimeout(() => {
+      nameTimer.current = null;
+      void checkName(fileName, token);
+    }, 250);
+    return () => {
+      if (nameTimer.current !== null) {
+        window.clearTimeout(nameTimer.current);
+        nameTimer.current = null;
+      }
+    };
+    // A fresh inventory or form opening must not reuse an availability answer
+    // that was produced before a key was created, copied, or selected.
+  }, [fileName, nameFormVisible, keyRevision, keys, checkName]);
 
   const measured = passphraseBytes(passphrase);
   const passphraseError =
@@ -161,25 +273,37 @@ export function QuickSetupKeyManager({
     confirmation.length > 0 && confirmation !== passphrase
       ? "The passphrases do not match."
       : "";
+  const nameReady =
+    nameCheck !== null &&
+    nameCheck.fileName === fileName &&
+    nameCheck.available;
   const canCreate =
+    strategy === "generate" &&
     desktopAvailable &&
     keys !== null &&
     listError.length === 0 &&
     mutation === null &&
     !accessBusy &&
-    measured >= 12 &&
-    measured <= 4096 &&
-    confirmation === passphrase &&
-    passphrase.length > 0;
+    fileNameError.length === 0 &&
+    nameReady &&
+    passphraseError.length === 0 &&
+    confirmation === passphrase;
 
   async function createKey() {
     if (!canCreate || mutationGate.current || accessBusyRef.current) return;
-    // Copy the transient value for this IPC call, then clear the inputs before
-    // awaiting so no passphrase lingers in component state.
+    const name = fileName;
     const secret = passphrase;
+    // Clear the transient values before awaiting so no passphrase lingers in
+    // component state while the native worker runs.
     setPassphrase("");
     setConfirmation("");
+    // The availability answer used to enable this attempt is now stale; a
+    // racing file must be rechecked after the inventory reloads.
+    setNameCheck(null);
+    setFileNameError("");
+    nameRequest.current += 1;
     const token = ++createRequest.current;
+    const startingStrategy = strategy;
     mutationGate.current = "create";
     setMutation("create");
     setError("");
@@ -187,24 +311,90 @@ export function QuickSetupKeyManager({
     let refresh = false;
     try {
       const key = await invoke<SetupKey>("app_setup_key_generate", {
+        fileName: name,
         passphrase: secret,
       });
       if (!active.current || token !== createRequest.current) return;
-      // Keep the opaque reference even though the key is not installed.
+      if (strategyRef.current !== startingStrategy) {
+        refresh = true;
+        return;
+      }
       onSelectKey(key.keyId);
       setCreateOpen(false);
-      setNotice("Key created on this device.");
+      setFileNameError("");
+      setNotice(
+        key.encrypted
+          ? "Encrypted key created in ~/.ssh."
+          : "Key created in ~/.ssh without a passphrase.",
+      );
       refresh = true;
     } catch (failure) {
       if (!active.current || token !== createRequest.current) return;
-      setError(
-        `${safeError(failure)} The existing key selection was preserved. Reload local keys to check whether a key was published; nothing was retried.`,
-      );
-      // A native error can still mean the key was published before a sync
-      // failure. Discover it; never auto-retry and never erase the reference.
+      const message = safeError(failure);
+      const collision =
+        /already uses this key name|already use its name|file or folder already uses this key/i.test(
+          message,
+        );
+      // A native failure may still have published part of the pair. Never claim
+      // that nothing was created; reload metadata and report uncertainty.
+      if (collision) {
+        setFileNameError(message);
+        setNotice(
+          "Existing files were not overwritten. Reload local keys to check whether any part of this key pair was published; nothing was retried.",
+        );
+      } else {
+        setError(
+          `${message} The existing key selection was preserved. Reload local keys to check whether a key or part of its pair was published; nothing was retried.`,
+        );
+      }
       refresh = true;
     } finally {
       if (token === createRequest.current) {
+        mutationGate.current = null;
+        if (active.current) setMutation(null);
+      }
+    }
+    if (refresh && active.current) void load();
+  }
+
+  async function choosePrivateKey() {
+    if (!desktopAvailable || mutationGate.current || accessBusyRef.current)
+      return;
+    setPassphrase("");
+    setConfirmation("");
+    const token = ++selectRequest.current;
+    const startingStrategy = strategy;
+    mutationGate.current = "select";
+    setMutation("select");
+    setError("");
+    setNotice("");
+    let refresh = false;
+    try {
+      const result = await invoke<SelectResult>("app_setup_key_select");
+      if (!active.current || token !== selectRequest.current) return;
+      if (result.status === "canceled") {
+        setNotice("No key was chosen. The previous selection was kept.");
+        return;
+      }
+      if (!result.key) {
+        setError(
+          "The native picker did not return a usable key. The previous selection was kept.",
+        );
+        return;
+      }
+      if (strategyRef.current !== startingStrategy) return;
+      onSelectKey(result.key.keyId);
+      setNotice(
+        result.key.encrypted
+          ? "Encrypted private key selected."
+          : "Private key selected without a passphrase.",
+      );
+      refresh = true;
+    } catch (failure) {
+      if (!active.current || token !== selectRequest.current) return;
+      setError(`${safeError(failure)} The previous selection was kept.`);
+    } finally {
+      if (token === selectRequest.current) {
         mutationGate.current = null;
         if (active.current) setMutation(null);
       }
@@ -271,10 +461,16 @@ export function QuickSetupKeyManager({
       });
       if (!active.current || token !== exportRequest.current) return;
       if (result.status === "canceled") {
-        setNotice("Backup canceled. The encrypted key was not copied.");
+        setNotice(
+          result.encrypted
+            ? "Backup canceled. The encrypted key was not copied."
+            : "Backup canceled. The key was not copied.",
+        );
       } else {
         setNotice(
-          `Encrypted key copied to ${
+          `${
+            result.encrypted ? "Encrypted key" : "Key without a passphrase"
+          } copied to ${
             result.path ?? "the chosen destination"
           }. The local key was not changed.`,
         );
@@ -295,14 +491,12 @@ export function QuickSetupKeyManager({
     }
   }
 
-  function selectKey(keyId: string) {
+  function selectStoredKey(keyId: string) {
     if (mutationGate.current || accessBusyRef.current) return;
     onSelectKey(keyId);
     setStoredOpen(false);
   }
 
-  const selectedKey =
-    keys?.keys.find((key) => key.keyId === selectedKeyId) ?? null;
   const selectedMissing =
     Boolean(selectedKeyId) &&
     Boolean(keys) &&
@@ -313,15 +507,60 @@ export function QuickSetupKeyManager({
   const issueReasons = [...new Set(keys?.issues.map((issue) => issue.reason))];
   const otherKeys =
     keys?.keys.filter((key) => key.keyId !== selectedKeyId) ?? [];
-  const showCreateForm = !selectedKey || createOpen;
+  const showCreateForm = nameFormVisible;
+  const namePreview = fileName || "name";
 
   const createForm = (
     <fieldset id={`${id}-create`} className="space-y-3 border-0 p-0">
-      <legend className="text-sm font-medium">Create an encrypted key</legend>
+      <legend className="text-sm font-medium">Create a local key</legend>
+      <div className="space-y-1.5">
+        <label htmlFor={`${id}-name`} className="block text-sm">
+          Key filename
+        </label>
+        <Input
+          id={`${id}-name`}
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={quickSetupKeyNameMaxLength}
+          value={fileName}
+          disabled={mutation !== null || accessBusy}
+          aria-invalid={Boolean(fileNameError)}
+          aria-describedby={
+            fileNameError ? `${id}-name-error` : `${id}-name-preview`
+          }
+          onChange={(event) => setFileName(event.target.value)}
+        />
+        <p
+          id={`${id}-name-preview`}
+          className="break-all text-xs text-muted-foreground"
+        >
+          ~/.ssh/{namePreview} and ~/.ssh/{namePreview}.pub
+        </p>
+        {fileNameError && (
+          <p
+            id={`${id}-name-error`}
+            role="alert"
+            className="text-xs leading-relaxed text-destructive"
+          >
+            {fileNameError}
+          </p>
+        )}
+        {!fileNameError && nameReady && nameCheck && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {nameCheck.message}
+          </p>
+        )}
+        {!fileNameError && nameChecking && !nameReady && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Checking that this name is available…
+          </p>
+        )}
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <label htmlFor={`${id}-passphrase`} className="block text-sm">
-            Passphrase
+            Passphrase (optional)
           </label>
           <Input
             id={`${id}-passphrase`}
@@ -339,7 +578,7 @@ export function QuickSetupKeyManager({
         </div>
         <div className="space-y-1.5">
           <label htmlFor={`${id}-confirmation`} className="block text-sm">
-            Confirm passphrase
+            Confirm passphrase (optional)
           </label>
           <Input
             id={`${id}-confirmation`}
@@ -374,6 +613,11 @@ export function QuickSetupKeyManager({
           {confirmationError}
         </p>
       )}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Leave both passphrase fields blank for an unencrypted private key, or
+        use 12 to 4096 bytes to encrypt it. Existing files are never
+        overwritten.
+      </p>
       <Button
         type="button"
         variant={selectedKey ? "outline" : "default"}
@@ -381,22 +625,18 @@ export function QuickSetupKeyManager({
         onClick={() => void createKey()}
       >
         {mutation === "create"
-          ? "Creating encrypted key…"
-          : "Create encrypted key"}
+          ? "Creating key…"
+          : measured > 0
+            ? "Create encrypted key"
+            : "Create key without passphrase"}
       </Button>
-      {!selectedKey && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          VPS Pilot cannot recover a forgotten passphrase. Back up the encrypted
-          key.
-        </p>
-      )}
     </fieldset>
   );
 
   return (
     <div className="space-y-4 border-t border-border/70 pt-5">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium">Local encrypted key</h3>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-medium">Local SSH key</h3>
         <Button
           type="button"
           variant="ghost"
@@ -408,6 +648,27 @@ export function QuickSetupKeyManager({
         </Button>
       </div>
 
+      {strategy === "existing" && (
+        <div className="space-y-2">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Choose a private key file on this device. VPS Pilot references it
+            without copying, moving, or changing the original file.
+          </p>
+          <Button
+            type="button"
+            variant={selectedKey ? "outline" : "default"}
+            disabled={mutation !== null || accessBusy}
+            onClick={() => void choosePrivateKey()}
+          >
+            {mutation === "select"
+              ? "Choosing private key…"
+              : selectedKey
+                ? "Choose a different private key"
+                : "Choose private key"}
+          </Button>
+        </div>
+      )}
+
       {selectedKey && (
         <fieldset className="min-w-0 border-0 p-0">
           <legend className="sr-only">Selected local key</legend>
@@ -418,14 +679,40 @@ export function QuickSetupKeyManager({
                 {selectedKey.fingerprint}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {selectedKey.algorithm} · Encrypted ·{" "}
-                {selectedKey.location === "ssh"
-                  ? "Stored in ~/.ssh"
-                  : "App vault"}{" "}
-                · Local key
+                {selectedKey.algorithm} ·{" "}
+                {selectedKey.encrypted ? "Encrypted" : "No passphrase"} ·{" "}
+                {locationLabel(selectedKey.location)}
+              </p>
+              <p className="mt-1 break-all text-xs text-muted-foreground">
+                {selectedKey.path}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {strategy === "existing" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={mutation !== null || accessBusy}
+                  onClick={() => void choosePrivateKey()}
+                >
+                  {mutation === "select"
+                    ? "Choosing private key…"
+                    : "Choose key file"}
+                </Button>
+              )}
+              {strategy === "generate" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={createOpen}
+                  aria-controls={`${id}-create`}
+                  disabled={mutation !== null || accessBusy}
+                  onClick={() => setCreateOpen((value) => !value)}
+                >
+                  {createOpen ? "Hide new key form" : "Create another key"}
+                </Button>
+              )}
               {selectedKey.location === "legacy" && (
                 <Button
                   type="button"
@@ -445,7 +732,9 @@ export function QuickSetupKeyManager({
               >
                 {exporting === selectedKey.keyId
                   ? "Saving backup…"
-                  : "Backup encrypted key"}
+                  : selectedKey.encrypted
+                    ? "Backup encrypted key"
+                    : "Backup key without passphrase"}
               </Button>
             </div>
           </div>
@@ -455,14 +744,21 @@ export function QuickSetupKeyManager({
               key login; the app vault copy is kept.
             </p>
           )}
+          {selectedKey.location === "external" && (
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              This key stays at its original path. VPS Pilot did not copy or
+              change it.
+            </p>
+          )}
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            VPS Pilot cannot recover a forgotten passphrase. Back up the
-            encrypted key.
+            {selectedKey.encrypted
+              ? "VPS Pilot cannot recover a forgotten passphrase. Back up the encrypted key."
+              : "This private key has no passphrase protection. Anyone who can read the file can use it."}
           </p>
         </fieldset>
       )}
 
-      {selectedKey?.location === "ssh" && (
+      {selectedKey && selectedKey.location !== "legacy" && (
         <QuickSetupAccess
           source={source}
           connectionId={connectionId}
@@ -474,21 +770,22 @@ export function QuickSetupKeyManager({
         />
       )}
 
-      {selectedKey && (
+      {showCreateForm && createForm}
+
+      {strategy === "generate" && !selectedKey && (
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          aria-expanded={createOpen}
-          aria-controls={`${id}-create`}
           disabled={mutation !== null || accessBusy}
-          onClick={() => setCreateOpen((value) => !value)}
+          onClick={() => void choosePrivateKey()}
           className="-ml-2.5 text-muted-foreground"
         >
-          Create another key
+          {mutation === "select"
+            ? "Choosing private key…"
+            : "Choose an existing private key instead"}
         </Button>
       )}
-      {showCreateForm && createForm}
 
       {error && (
         <p
@@ -548,7 +845,7 @@ export function QuickSetupKeyManager({
           </Button>
           {storedOpen && (
             <ul
-              aria-label="Stored encrypted keys"
+              aria-label="Stored local keys"
               className="mt-1 divide-y divide-border/70 border-y border-border/70"
             >
               {otherKeys.map((key) => (
@@ -559,8 +856,12 @@ export function QuickSetupKeyManager({
                   <div className="min-w-0">
                     <p className="break-all text-sm">{key.fingerprint}</p>
                     <p className="text-xs text-muted-foreground">
-                      {key.algorithm} · Encrypted ·{" "}
-                      {key.location === "ssh" ? "In ~/.ssh" : "App vault"}
+                      {key.algorithm} ·{" "}
+                      {key.encrypted ? "Encrypted" : "No passphrase"} ·{" "}
+                      {locationLabel(key.location)}
+                    </p>
+                    <p className="break-all text-xs text-muted-foreground">
+                      {key.path}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -584,7 +885,7 @@ export function QuickSetupKeyManager({
                       variant="outline"
                       aria-label={`Select key ${key.fingerprint}`}
                       disabled={mutation !== null || accessBusy}
-                      onClick={() => selectKey(key.keyId)}
+                      onClick={() => selectStoredKey(key.keyId)}
                     >
                       Use key
                     </Button>
@@ -598,7 +899,7 @@ export function QuickSetupKeyManager({
 
       {keys && keys.keys.length === 0 && !keys.issues.length && !listError && (
         <p role="status" className="text-sm text-muted-foreground">
-          No generated keys are stored in this app yet.
+          No local keys are stored in this app yet.
         </p>
       )}
       {keys && keys.keys.length > 0 && !selectedKeyId && !listError && (
@@ -634,15 +935,19 @@ export function QuickSetupKeyManager({
         {storageOpen && (
           <div className="mt-1 space-y-1 text-xs leading-relaxed text-muted-foreground">
             <p>
-              Stored at{" "}
+              Named keys are stored in{" "}
               <span className="break-all">
-                {keys?.storagePath ?? "the app's private key folder"}
+                {keys?.storagePath ?? "the standard SSH folder"}
+              </span>
+              . Older app-vault keys remain at{" "}
+              <span className="break-all">
+                {keys?.legacyStoragePath ?? "the app's private key folder"}
               </span>
               .
             </p>
             <p>
-              Generated keys remain in this local vault after resetting the
-              setup draft. VPS Pilot has no key deletion action.
+              Selected existing keys stay at their original paths. VPS Pilot has
+              no key deletion or overwrite action.
             </p>
           </div>
         )}

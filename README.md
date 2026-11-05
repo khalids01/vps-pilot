@@ -53,18 +53,27 @@ restarting. Existing-account mode does not reset that account's password.
 **SSH and firewall** shows proposed protected current/target SSH allow rules,
 HTTP/HTTPS choices and up to 16 custom TCP/UDP rules. Choices survive restarts;
 they do not apply UFW changes or report live/provider firewall state. **Keep the
-current firewall** plans no changes. Package choices have a separate **Source**
-disclosure with official documentation and the intended channel; exact versions,
-checksums and commands still require installer review. Additional optional tools
+current firewall** plans no changes. **Review** displays package sources and
+official links directly; Application Stack keeps its choices free of source
+controls. Exact versions, checksums and commands still require installer review.
+Runtimes are grouped into JavaScript/TypeScript (Bun, Node.js through NVM),
+Python (uv, Python) and Go cards. Additional optional tools
 include tmux, bat, eza, rsync and direnv, all off by default.
 
-On Unix desktops, **SSH key → Generate a new key** creates an encrypted Ed25519
-key locally. Enter and confirm a passphrase, then choose **Create encrypted key**.
-The encrypted private key is saved as `~/.ssh/vps-pilot_<ID>`, with its matching
-public key in the adjacent `.pub` file; the setup draft stores only its ID.
-Use **Backup encrypted key** to choose a separate
-backup destination. Existing destination files are never overwritten. Keep your
-passphrase separately: the app does not save it and cannot recover it.
+On Unix desktops, **SSH key → Generate a new key** creates an Ed25519 pair in
+`~/.ssh`. Choose a filename; its availability is checked against both the private
+file and its `.pub` partner, with conflicts shown below the input. Native creation
+rechecks and never overwrites either file, even after a successful UI check.
+Both passphrase fields may be empty for an unencrypted private key. A nonempty
+passphrase encrypts the file; keep it separately because the app cannot recover
+it. Backup labels reflect the actual protection state. Backup destinations are
+also never overwritten. The setup draft stores only an opaque key ID.
+
+**Use an existing key → Choose private key** opens the native file picker. Select
+a supported OpenSSH private key rather than its `.pub` file. Its contents and
+permissions are preserved; protected native metadata remembers the reference
+after restart and detects a changed key. No private bytes or passphrases enter
+SQLite or command history. Existing keys outside `~/.ssh` remain in place.
 Older keys in the app's `setup-keys` vault remain available. **Put in ~/.ssh**
 explicitly copies a legacy key into the standard directory, preserving its ID
 and original copy; conflicting destinations are refused.
@@ -74,9 +83,10 @@ Key generation is unavailable on Windows until native ACL support is implemented
 Creating or selecting a local key does not install it on the server or prove
 SSH login works. Fully restart the desktop development app after native changes.
 
-For a selected standard key, **Verify key login** tests the chosen administrator
-and port in a separate SSH connection using that key alone. Unlock it with its
-passphrase; the original connection stays open. The server must already accept
+For a selected key, **Verify key login** tests the chosen administrator and port
+in a separate SSH connection using that key alone. Encrypted keys prompt for
+their passphrase; unencrypted keys do not. The original connection stays open.
+The server must already accept
 the key for that account/port. A successful test does not establish sudo access,
 disable passwords, or verify firewall recovery.
 
@@ -85,7 +95,7 @@ After verification, choose an alias and **Review SSH config**, then explicitly
 entry. Existing config bytes are backed up before replacement; unrelated entries
 are preserved, and collisions, unsafe files, stale reviews and unsupported config
 constructs are refused. Verification/reviews expire and are not restored after a
-restart. Saved encrypted keys and the saved config entry remain on disk. Config
+restart. Saved keys and the saved config entry remain on disk. Config
 export does not replace the active app profile or automatically reconnect it.
 The connection picker can discover the saved alias. Native tests use temporary
 homes and loopback SSH servers, never your actual SSH directory or VPS.
