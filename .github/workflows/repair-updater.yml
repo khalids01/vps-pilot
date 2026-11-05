@@ -1,0 +1,82 @@
+name: Repair published updater manifest
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/repair-updater.yml]
+permissions:
+  contents: write
+concurrency:
+  group: repair-published-updater
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const crypto = require('node:crypto');
+            const {owner, repo} = context.repo;
+            const {data: release} = await github.rest.repos.getLatestRelease({owner, repo});
+            const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+            if (release.draft || release.prerelease || !release.tag_name.startsWith(`v${version}-build.`)) {
+              throw new Error('Latest published release does not match this application version');
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {owner, repo, release_id: release.id});
+            const asset = name => {
+              const matches = assets.filter(a => a.name === name);
+              if (matches.length !== 1) throw new Error('Expected exactly one asset: ' + name);
+              return matches[0];
+            };
+            const download = async a => {
+              const response = await github.request('GET /repos/{owner}/{repo}/releases/assets/{asset_id}', {
+                owner, repo, asset_id: a.id, headers: {accept: 'application/octet-stream'}
+              });
+              return Buffer.from(response.data);
+            };
+            const manifestAsset = asset('latest.json');
+            const sumsAsset = asset('SHA256SUMS.txt');
+            const original = await download(manifestAsset);
+            const sums = (await download(sumsAsset)).toString('utf8');
+            const oldDigest = crypto.createHash('sha256').update(original).digest('hex');
+            if (!sums.split('\n').includes(oldDigest + '  latest.json')) throw new Error('Manifest checksum mismatch');
+            const manifest = JSON.parse(original.toString('utf8'));
+            const platforms = ['linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-deb', 'linux-x86_64-rpm', 'windows-x86_64', 'windows-x86_64-nsis', 'windows-x86_64-msi', 'darwin-aarch64', 'darwin-aarch64-app', 'darwin-x86_64', 'darwin-x86_64-app'];
+            if (manifest.version !== version || JSON.stringify(Object.keys(manifest.platforms).sort()) !== JSON.stringify(platforms.sort())) {
+              throw new Error('Unexpected manifest version or platform set');
+            }
+            for (const entry of Object.values(manifest.platforms)) {
+              const previous = new URL(entry.url);
+              if (previous.origin !== 'https://github.com' || !previous.pathname.startsWith(`/${owner}/${repo}/releases/download/`)) {
+                throw new Error('Unexpected updater artifact origin');
+              }
+              const name = decodeURIComponent(previous.pathname.split('/').pop());
+              const artifact = asset(name);
+              const signature = (await download(asset(name + '.sig'))).toString('utf8').trim();
+              if (!signature || entry.signature !== signature) throw new Error('Artifact signature mismatch: ' + name);
+              if (!sums.split('\n').some(line => line.endsWith('  ' + artifact.name))) throw new Error('Missing artifact checksum');
+              entry.url = `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag_name)}/${encodeURIComponent(artifact.name)}`;
+            }
+            const data = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
+            const digest = crypto.createHash('sha256').update(data).digest('hex');
+            const lines = sums.trimEnd().split('\n').filter(line => !line.endsWith('  latest.json'));
+            lines.push(digest + '  latest.json');
+            const replacements = [
+              [manifestAsset, data, 'application/json'],
+              [sumsAsset, Buffer.from(lines.join('\n') + '\n'), 'text/plain'],
+            ];
+            // Recheck the release identity before changing its public metadata.
+            const {data: latest} = await github.rest.repos.getLatestRelease({owner, repo});
+            if (latest.id !== release.id) throw new Error('Latest release changed; retry against fresh evidence');
+            for (const [previous, data, type] of replacements) {
+              await github.rest.repos.deleteReleaseAsset({owner, repo, asset_id: previous.id});
+              const {data: uploaded} = await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name: previous.name, data,
+                headers: {'content-type': type}
+              });
+              if (!(await download(uploaded)).equals(data)) throw new Error('Metadata readback mismatch');
+            }
+            core.info(`Repaired ${release.tag_name}: permanent tagged URLs; signatures and installer assets unchanged.`);
