@@ -44,17 +44,51 @@ Dokploy requires Docker; JavaScript/PM2 requires NVM/Node; LazyVim adds its shar
 dependencies once. Server provisioning remains unavailable until its recovery
 and installation adapters are validated. See [the provisioning plan](agents/quick-setup.md).
 
+**Administrator** now shows new-account password/confirmation or an existing
+administrator's sudo password. These optional preparation fields are not sent,
+saved or verified while account provisioning is unavailable. They clear when
+leaving the step, changing account/server/connection, visiting Home/Settings or
+restarting. Existing-account mode does not reset that account's password.
+
+**SSH and firewall** shows proposed protected current/target SSH allow rules,
+HTTP/HTTPS choices and up to 16 custom TCP/UDP rules. Choices survive restarts;
+they do not apply UFW changes or report live/provider firewall state. **Keep the
+current firewall** plans no changes. Package choices have a separate **Source**
+disclosure with official documentation and the intended channel; exact versions,
+checksums and commands still require installer review. Additional optional tools
+include tmux, bat, eza, rsync and direnv, all off by default.
+
 On Unix desktops, **SSH key → Generate a new key** creates an encrypted Ed25519
 key locally. Enter and confirm a passphrase, then choose **Create encrypted key**.
-The private key stays in the app's protected `setup-keys` directory; the setup
-draft stores only its ID. Use **Backup encrypted key** to choose a separate
+The encrypted private key is saved as `~/.ssh/vps-pilot_<ID>`, with its matching
+public key in the adjacent `.pub` file; the setup draft stores only its ID.
+Use **Backup encrypted key** to choose a separate
 backup destination. Existing destination files are never overwritten. Keep your
 passphrase separately: the app does not save it and cannot recover it.
+Older keys in the app's `setup-keys` vault remain available. **Put in ~/.ssh**
+explicitly copies a legacy key into the standard directory, preserving its ID
+and original copy; conflicting destinations are refused.
 **Reload keys** discovers stored keys after a restart, including a generation
 that finished after leaving the step. Resetting a draft does not delete keys.
-This vault is unavailable on Windows until native ACL support is implemented.
+Key generation is unavailable on Windows until native ACL support is implemented.
 Creating or selecting a local key does not install it on the server or prove
 SSH login works. Fully restart the desktop development app after native changes.
+
+For a selected standard key, **Verify key login** tests the chosen administrator
+and port in a separate SSH connection using that key alone. Unlock it with its
+passphrase; the original connection stays open. The server must already accept
+the key for that account/port. A successful test does not establish sudo access,
+disable passwords, or verify firewall recovery.
+
+After verification, choose an alias and **Review SSH config**, then explicitly
+**Save to SSH config**. The native preview contains only the proposed app-owned
+entry. Existing config bytes are backed up before replacement; unrelated entries
+are preserved, and collisions, unsafe files, stale reviews and unsupported config
+constructs are refused. Verification/reviews expire and are not restored after a
+restart. Saved encrypted keys and the saved config entry remain on disk. Config
+export does not replace the active app profile or automatically reconnect it.
+The connection picker can discover the saved alias. Native tests use temporary
+homes and loopback SSH servers, never your actual SSH directory or VPS.
 
 1. Open **Settings → Appearance**, choose Tokyo Night, One Dark Pro or GitHub
    Dark, then check menus, inputs, an open terminal and an editor. Fully quit and

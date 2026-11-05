@@ -3,13 +3,16 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { desktopAvailable, safeError } from "./api";
+import { QuickSetupAccess } from "./quick-setup-access";
 
-interface SetupKey {
+export type KeyLocation = "ssh" | "legacy";
+export interface SetupKey {
   keyId: string;
   fingerprint: string;
   algorithm: string;
   encrypted: boolean;
   path: string;
+  location: KeyLocation;
 }
 interface SetupKeyIssue {
   keyId: string | null;
@@ -19,11 +22,16 @@ interface SetupKeyList {
   keys: SetupKey[];
   issues: SetupKeyIssue[];
   storagePath: string;
+  legacyStoragePath: string;
   truncated: boolean;
 }
 interface ExportResult {
   status: "exported" | "canceled";
   path: string | null;
+}
+interface CopyResult {
+  status: "copied" | "already";
+  key: SetupKey;
 }
 
 function passphraseBytes(value: string) {
@@ -33,9 +41,21 @@ function passphraseBytes(value: string) {
 export function QuickSetupKeyManager({
   selectedKeyId,
   onSelectKey,
+  source,
+  connectionId,
+  connected,
+  target,
 }: {
   selectedKeyId?: string;
   onSelectKey: (keyId: string) => void;
+  source: {
+    profileId: string;
+    profileRevision: string;
+    host: string;
+  };
+  connectionId?: string | null;
+  connected: boolean;
+  target: { username: string; port: number };
 }) {
   const id = useId();
   const [keys, setKeys] = useState<SetupKeyList | null>(null);
@@ -43,17 +63,31 @@ export function QuickSetupKeyManager({
   const [loading, setLoading] = useState(false);
   const [passphrase, setPassphrase] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [mutation, setMutation] = useState<"load" | "create" | "export" | null>(
-    null,
-  );
+  const [mutation, setMutation] = useState<
+    "load" | "create" | "copy" | "export" | null
+  >(null);
   const [exporting, setExporting] = useState<string | null>(null);
+  const [copying, setCopying] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [storedOpen, setStoredOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
+  const [accessBusy, setAccessBusy] = useState(false);
   const active = useRef(true);
-  const mutationGate = useRef<"load" | "create" | "export" | null>(null);
+  const accessBusyRef = useRef(false);
+  const mutationGate = useRef<"load" | "create" | "copy" | "export" | null>(
+    null,
+  );
   const createRequest = useRef(0);
+  const copyRequest = useRef(0);
   const exportRequest = useRef(0);
   const loadRequest = useRef(0);
+
+  const handleAccessBusy = useCallback((busy: boolean) => {
+    accessBusyRef.current = busy;
+    setAccessBusy(busy);
+  }, []);
 
   const load = useCallback(async () => {
     if (!desktopAvailable) {
@@ -62,8 +96,9 @@ export function QuickSetupKeyManager({
       );
       return;
     }
-    // One mutation at a time; a reload never queues behind generation/export.
-    if (mutationGate.current) return;
+    // One mutation at a time; a reload never queues behind generation/export
+    // or an active key-login operation.
+    if (mutationGate.current || accessBusyRef.current) return;
     mutationGate.current = "load";
     if (active.current) {
       setMutation("load");
@@ -104,6 +139,7 @@ export function QuickSetupKeyManager({
       canceled = true;
       active.current = false;
       createRequest.current += 1;
+      copyRequest.current += 1;
       exportRequest.current += 1;
       loadRequest.current += 1;
       // Release only the load gate from this effect run. A user mutation's
@@ -130,13 +166,14 @@ export function QuickSetupKeyManager({
     keys !== null &&
     listError.length === 0 &&
     mutation === null &&
+    !accessBusy &&
     measured >= 12 &&
     measured <= 4096 &&
     confirmation === passphrase &&
     passphrase.length > 0;
 
   async function createKey() {
-    if (!canCreate || mutationGate.current) return;
+    if (!canCreate || mutationGate.current || accessBusyRef.current) return;
     // Copy the transient value for this IPC call, then clear the inputs before
     // awaiting so no passphrase lingers in component state.
     const secret = passphrase;
@@ -155,9 +192,8 @@ export function QuickSetupKeyManager({
       if (!active.current || token !== createRequest.current) return;
       // Keep the opaque reference even though the key is not installed.
       onSelectKey(key.keyId);
-      setNotice(
-        `Encrypted key created (${key.fingerprint}). It is selected for this setup draft, but it is not installed on a server and key login is not verified.`,
-      );
+      setCreateOpen(false);
+      setNotice("Key created on this device.");
       refresh = true;
     } catch (failure) {
       if (!active.current || token !== createRequest.current) return;
@@ -176,8 +212,51 @@ export function QuickSetupKeyManager({
     if (refresh && active.current) void load();
   }
 
+  async function copyToSsh(keyId: string) {
+    if (!desktopAvailable || mutationGate.current || accessBusyRef.current)
+      return;
+    setPassphrase("");
+    setConfirmation("");
+    const token = ++copyRequest.current;
+    mutationGate.current = "copy";
+    setMutation("copy");
+    setCopying(keyId);
+    setError("");
+    setNotice("");
+    let refresh = false;
+    try {
+      const result = await invoke<CopyResult>(
+        "app_setup_key_use_ssh_directory",
+        { keyId },
+      );
+      if (!active.current || token !== copyRequest.current) return;
+      setNotice(
+        result.status === "already"
+          ? "This key is already in ~/.ssh."
+          : "Key copied to ~/.ssh. The app vault copy was kept.",
+      );
+      refresh = true;
+    } catch (failure) {
+      if (!active.current || token !== copyRequest.current) return;
+      setError(
+        `${safeError(failure)} The local key and its selection were preserved. Reload local keys to check whether a copy was published; nothing was retried.`,
+      );
+      refresh = true;
+    } finally {
+      if (token === copyRequest.current) {
+        mutationGate.current = null;
+        if (active.current) {
+          setMutation(null);
+          setCopying(null);
+        }
+      }
+    }
+    if (refresh && active.current) void load();
+  }
+
   async function backup(keyId: string) {
-    if (!desktopAvailable || mutationGate.current) return;
+    if (!desktopAvailable || mutationGate.current || accessBusyRef.current)
+      return;
     setPassphrase("");
     setConfirmation("");
     const token = ++exportRequest.current;
@@ -217,122 +296,199 @@ export function QuickSetupKeyManager({
   }
 
   function selectKey(keyId: string) {
-    if (mutationGate.current) return;
+    if (mutationGate.current || accessBusyRef.current) return;
     onSelectKey(keyId);
+    setStoredOpen(false);
   }
 
   const selectedKey =
     keys?.keys.find((key) => key.keyId === selectedKeyId) ?? null;
   const selectedMissing =
-    Boolean(selectedKeyId) && Boolean(keys) && selectedKey === null;
+    Boolean(selectedKeyId) &&
+    Boolean(keys) &&
+    selectedKey === null &&
+    !loading &&
+    mutation === null &&
+    !accessBusy;
   const issueReasons = [...new Set(keys?.issues.map((issue) => issue.reason))];
+  const otherKeys =
+    keys?.keys.filter((key) => key.keyId !== selectedKeyId) ?? [];
+  const showCreateForm = !selectedKey || createOpen;
+
+  const createForm = (
+    <fieldset id={`${id}-create`} className="space-y-3 border-0 p-0">
+      <legend className="text-sm font-medium">Create an encrypted key</legend>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <label htmlFor={`${id}-passphrase`} className="block text-sm">
+            Passphrase
+          </label>
+          <Input
+            id={`${id}-passphrase`}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={passphrase}
+            disabled={mutation !== null || accessBusy}
+            aria-invalid={Boolean(passphraseError)}
+            aria-describedby={
+              passphraseError ? `${id}-passphrase-error` : undefined
+            }
+            onChange={(event) => setPassphrase(event.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label htmlFor={`${id}-confirmation`} className="block text-sm">
+            Confirm passphrase
+          </label>
+          <Input
+            id={`${id}-confirmation`}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={confirmation}
+            disabled={mutation !== null || accessBusy}
+            aria-invalid={Boolean(confirmationError)}
+            aria-describedby={
+              confirmationError ? `${id}-confirmation-error` : undefined
+            }
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+        </div>
+      </div>
+      {passphraseError && (
+        <p
+          id={`${id}-passphrase-error`}
+          role="alert"
+          className="text-xs text-destructive"
+        >
+          {passphraseError}
+        </p>
+      )}
+      {confirmationError && (
+        <p
+          id={`${id}-confirmation-error`}
+          role="alert"
+          className="text-xs text-destructive"
+        >
+          {confirmationError}
+        </p>
+      )}
+      <Button
+        type="button"
+        variant={selectedKey ? "outline" : "default"}
+        disabled={!canCreate}
+        onClick={() => void createKey()}
+      >
+        {mutation === "create"
+          ? "Creating encrypted key…"
+          : "Create encrypted key"}
+      </Button>
+      {!selectedKey && (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          VPS Pilot cannot recover a forgotten passphrase. Back up the encrypted
+          key.
+        </p>
+      )}
+    </fieldset>
+  );
 
   return (
-    <div className="space-y-4 rounded-lg border p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-sm font-medium">Local encrypted keys</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Generated Ed25519 keys are encrypted with your passphrase and stored
-            only on this device as OpenSSH private files. Location:{" "}
-            <span className="break-all">
-              {keys?.storagePath ?? "the app's private key folder"}
-            </span>
-            .
-          </p>
-        </div>
+    <div className="space-y-4 border-t border-border/70 pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium">Local encrypted key</h3>
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           size="sm"
-          disabled={mutation !== null}
+          disabled={mutation !== null || accessBusy}
           onClick={() => void load()}
         >
           {loading ? "Loading keys…" : "Reload keys"}
         </Button>
       </div>
 
-      <fieldset className="space-y-3">
-        <legend className="text-sm font-medium">Create an encrypted key</legend>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Use a passphrase of 12–4096 bytes. VPS Pilot does not save the
-          passphrase and cannot recover a key if you lose it. Create a backup
-          you can store safely.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label htmlFor={`${id}-passphrase`} className="block text-sm">
-            Passphrase
-            <Input
-              id={`${id}-passphrase`}
-              className="mt-2"
-              type="password"
-              autoComplete="new-password"
-              spellCheck={false}
-              value={passphrase}
-              disabled={mutation !== null}
-              aria-invalid={Boolean(passphraseError)}
-              aria-describedby={
-                passphraseError ? `${id}-passphrase-error` : `${id}-hint`
-              }
-              onChange={(event) => setPassphrase(event.target.value)}
-            />
-          </label>
-          <label htmlFor={`${id}-confirmation`} className="block text-sm">
-            Confirm passphrase
-            <Input
-              id={`${id}-confirmation`}
-              className="mt-2"
-              type="password"
-              autoComplete="new-password"
-              spellCheck={false}
-              value={confirmation}
-              disabled={mutation !== null}
-              aria-invalid={Boolean(confirmationError)}
-              aria-describedby={
-                confirmationError ? `${id}-confirmation-error` : `${id}-hint`
-              }
-              onChange={(event) => setConfirmation(event.target.value)}
-            />
-          </label>
-        </div>
-        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-          Passphrase and confirmation stay in memory only and are cleared after
-          creation, failure or leaving this step.
-        </p>
-        {passphraseError && (
-          <p
-            id={`${id}-passphrase-error`}
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {passphraseError}
+      {selectedKey && (
+        <fieldset className="min-w-0 border-0 p-0">
+          <legend className="sr-only">Selected local key</legend>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">Selected key</p>
+              <p className="mt-1 break-all text-sm">
+                {selectedKey.fingerprint}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {selectedKey.algorithm} · Encrypted ·{" "}
+                {selectedKey.location === "ssh"
+                  ? "Stored in ~/.ssh"
+                  : "App vault"}{" "}
+                · Local key
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedKey.location === "legacy" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={mutation !== null || accessBusy}
+                  onClick={() => void copyToSsh(selectedKey.keyId)}
+                >
+                  {copying === selectedKey.keyId
+                    ? "Copying key…"
+                    : "Put in ~/.ssh"}
+                </Button>
+              )}
+              <Button
+                type="button"
+                disabled={mutation !== null || accessBusy}
+                onClick={() => void backup(selectedKey.keyId)}
+              >
+                {exporting === selectedKey.keyId
+                  ? "Saving backup…"
+                  : "Backup encrypted key"}
+              </Button>
+            </div>
+          </div>
+          {selectedKey.location === "legacy" && (
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              This key is in the app vault. Put it in ~/.ssh before verifying
+              key login; the app vault copy is kept.
+            </p>
+          )}
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            VPS Pilot cannot recover a forgotten passphrase. Back up the
+            encrypted key.
           </p>
-        )}
-        {confirmationError && (
-          <p
-            id={`${id}-confirmation-error`}
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {confirmationError}
-          </p>
-        )}
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            type="button"
-            disabled={!canCreate}
-            onClick={() => void createKey()}
-          >
-            {mutation === "create"
-              ? "Creating encrypted key…"
-              : "Create encrypted key"}
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            Creating a key is local only. It does not install a public key or
-            test SSH login.
-          </p>
-        </div>
-      </fieldset>
+        </fieldset>
+      )}
+
+      {selectedKey?.location === "ssh" && (
+        <QuickSetupAccess
+          source={source}
+          connectionId={connectionId}
+          connected={connected}
+          target={target}
+          selectedKey={selectedKey}
+          keyBusy={mutation !== null}
+          onBusyChange={handleAccessBusy}
+        />
+      )}
+
+      {selectedKey && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={createOpen}
+          aria-controls={`${id}-create`}
+          disabled={mutation !== null || accessBusy}
+          onClick={() => setCreateOpen((value) => !value)}
+          className="-ml-2.5 text-muted-foreground"
+        >
+          Create another key
+        </Button>
+      )}
+      {showCreateForm && createForm}
 
       {error && (
         <p
@@ -371,27 +527,6 @@ export function QuickSetupKeyManager({
           </Button>
         </div>
       )}
-
-      {selectedKey && (
-        <fieldset className="space-y-2 rounded-lg border bg-muted/30 p-3">
-          <legend className="text-sm font-medium">Selected local key</legend>
-          <p className="break-all text-sm">{selectedKey.fingerprint}</p>
-          <p className="text-xs text-muted-foreground">
-            {selectedKey.algorithm} · Encrypted · Not installed on a server
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={mutation !== null}
-            onClick={() => void backup(selectedKey.keyId)}
-          >
-            {exporting === selectedKey.keyId
-              ? "Saving backup…"
-              : "Backup encrypted key"}
-          </Button>
-        </fieldset>
-      )}
       {selectedMissing && (
         <p role="status" className="text-sm text-warning">
           The saved key reference is not available in this local vault. The
@@ -399,46 +534,76 @@ export function QuickSetupKeyManager({
         </p>
       )}
 
-      {keys && keys.keys.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-sm font-medium">Stored keys</p>
-          <ul aria-label="Stored encrypted keys" className="space-y-2">
-            {keys.keys.map((key) => {
-              const selected = key.keyId === selectedKeyId;
-              return (
+      {otherKeys.length > 0 && (
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={storedOpen}
+            onClick={() => setStoredOpen((value) => !value)}
+            className="-ml-2.5 text-muted-foreground"
+          >
+            Choose a stored key
+          </Button>
+          {storedOpen && (
+            <ul
+              aria-label="Stored encrypted keys"
+              className="mt-1 divide-y divide-border/70 border-y border-border/70"
+            >
+              {otherKeys.map((key) => (
                 <li
                   key={key.keyId}
-                  className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+                  className="flex min-w-0 flex-wrap items-center justify-between gap-3 py-2.5"
                 >
                   <div className="min-w-0">
                     <p className="break-all text-sm">{key.fingerprint}</p>
                     <p className="text-xs text-muted-foreground">
-                      {key.algorithm} · Encrypted
-                    </p>
-                    <p className="break-all text-xs text-muted-foreground">
-                      {key.path}
+                      {key.algorithm} · Encrypted ·{" "}
+                      {key.location === "ssh" ? "In ~/.ssh" : "App vault"}
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selected ? "secondary" : "outline"}
-                    aria-pressed={selected}
-                    aria-label={`Select key ${key.fingerprint}`}
-                    disabled={mutation !== null}
-                    onClick={() => selectKey(key.keyId)}
-                  >
-                    {selected ? "Selected" : "Use key"}
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {key.location === "legacy" && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Put key ${key.fingerprint} in ~/.ssh`}
+                        disabled={mutation !== null || accessBusy}
+                        onClick={() => void copyToSsh(key.keyId)}
+                      >
+                        {copying === key.keyId
+                          ? "Copying key…"
+                          : "Put in ~/.ssh"}
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Select key ${key.fingerprint}`}
+                      disabled={mutation !== null || accessBusy}
+                      onClick={() => selectKey(key.keyId)}
+                    >
+                      Use key
+                    </Button>
+                  </div>
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </ul>
+          )}
         </div>
       )}
-      {keys && keys.keys.length === 0 && !keys.issues.length && (
+
+      {keys && keys.keys.length === 0 && !keys.issues.length && !listError && (
         <p role="status" className="text-sm text-muted-foreground">
           No generated keys are stored in this app yet.
+        </p>
+      )}
+      {keys && keys.keys.length > 0 && !selectedKeyId && !listError && (
+        <p role="status" className="text-sm text-muted-foreground">
+          No key selected.
         </p>
       )}
       {keys?.issues.length ? (
@@ -455,10 +620,33 @@ export function QuickSetupKeyManager({
           shown.
         </p>
       )}
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Generated keys remain in this local vault after resetting the setup
-        draft. VPS Pilot has no key deletion action.
-      </p>
+      <div className="border-t border-border/70 pt-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={storageOpen}
+          onClick={() => setStorageOpen((value) => !value)}
+          className="-ml-2.5 text-muted-foreground"
+        >
+          Storage details
+        </Button>
+        {storageOpen && (
+          <div className="mt-1 space-y-1 text-xs leading-relaxed text-muted-foreground">
+            <p>
+              Stored at{" "}
+              <span className="break-all">
+                {keys?.storagePath ?? "the app's private key folder"}
+              </span>
+              .
+            </p>
+            <p>
+              Generated keys remain in this local vault after resetting the
+              setup draft. VPS Pilot has no key deletion action.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

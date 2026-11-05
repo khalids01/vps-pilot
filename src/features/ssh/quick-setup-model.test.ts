@@ -8,8 +8,12 @@ import {
   defaultQuickSetupDraft,
   parseQuickSetupPort,
   type QuickSetupDraft,
+  type QuickSetupFirewallRule,
   quickSetupDraftKey,
   quickSetupDraftPrefix,
+  quickSetupFirewallRuleLimit,
+  quickSetupUtilities,
+  resolveQuickSetupFirewallPlan,
   resolveQuickSetupPlan,
   sanitizeQuickSetupDraft,
   validateQuickSetupPort,
@@ -176,7 +180,11 @@ test("quick setup sanitizer rejects duplicate and unknown catalog IDs", () => {
     { ...clone(), tools: { ...clone().tools, utilities: ["git", "git"] } },
     {
       ...clone(),
-      tools: { ...clone().tools, utilities: ["tmux" as never] },
+      tools: { ...clone().tools, utilities: ["vim" as never] },
+    },
+    {
+      ...clone(),
+      tools: { ...clone().tools, utilities: ["tmux", "tmux"] },
     },
     {
       ...clone(),
@@ -200,6 +208,168 @@ test("quick setup sanitizer rejects duplicate and unknown catalog IDs", () => {
     { ...clone(), runtimes: ["bun", "nvm-node", "uv", "bun"] as never },
   ];
   for (const value of cases) expect(sanitizeQuickSetupDraft(value)).toBeNull();
+});
+
+test("older v1 drafts without firewall additions normalize defaults", () => {
+  const legacy = clone();
+  const access = legacy.access as Partial<QuickSetupDraft["access"]>;
+  delete access.allowHttp;
+  delete access.allowHttps;
+  delete access.rules;
+  expect(sanitizeQuickSetupDraft(legacy)).toEqual(clone());
+});
+
+test("firewall choices validate strictly, deduplicate protected SSH and persist the limit", () => {
+  const rules: QuickSetupFirewallRule[] = [
+    { port: 3000, protocol: "tcp" },
+    { port: 53, protocol: "udp" },
+    { port: 53, protocol: "tcp" },
+  ];
+  const draft = requireDraft({
+    ...clone(),
+    access: { ...clone().access, allowHttp: true, allowHttps: true, rules },
+  });
+  expect(draft.access.allowHttp).toBe(true);
+  expect(draft.access.allowHttps).toBe(true);
+  expect(draft.access.rules).toEqual(rules);
+
+  const reject = (access: unknown) =>
+    sanitizeQuickSetupDraft({ ...clone(), access });
+  for (const access of [
+    { ...clone().access, allowHttp: null },
+    { ...clone().access, allowHttps: "yes" },
+    { ...clone().access, rules: null },
+    { ...clone().access, rules: "tcp" },
+    { ...clone().access, rules: [{ port: 0, protocol: "tcp" }] },
+    { ...clone().access, rules: [{ port: 65536, protocol: "tcp" }] },
+    { ...clone().access, rules: [{ port: 22.5, protocol: "tcp" }] },
+    { ...clone().access, rules: [{ port: 3000, protocol: "sctp" }] },
+    {
+      ...clone().access,
+      rules: [{ port: 3000, protocol: "tcp", passphrase: "never" }],
+    },
+    {
+      ...clone().access,
+      rules: [
+        { port: 3000, protocol: "tcp" },
+        { port: 3000, protocol: "tcp" },
+      ],
+    },
+    {
+      ...clone().access,
+      rules: Array.from({ length: 17 }, (_, index) => ({
+        port: index + 1,
+        protocol: "tcp",
+      })),
+    },
+    { ...clone().access, secret: "never" },
+  ])
+    expect(reject(access)).toBeNull();
+
+  const maxRules = Array.from(
+    { length: quickSetupFirewallRuleLimit },
+    (_, index) => ({ port: index + 1, protocol: "tcp" as const }),
+  );
+  expect(
+    requireDraft({ ...clone(), access: { ...clone().access, rules: maxRules } })
+      .access.rules,
+  ).toEqual(maxRules);
+
+  const plan = resolveQuickSetupFirewallPlan(
+    requireDraft({
+      ...clone(),
+      access: {
+        ...clone().access,
+        allowHttp: true,
+        allowHttps: true,
+        rules: [
+          { port: 3000, protocol: "udp" },
+          { port: 52022, protocol: "tcp" },
+        ],
+      },
+    }),
+    22,
+  );
+  expect(plan.rules.map((rule) => `${rule.port}/${rule.protocol}`)).toEqual([
+    "22/tcp",
+    "52022/tcp",
+    "80/tcp",
+    "443/tcp",
+    "3000/udp",
+  ]);
+  expect(
+    plan.rules.filter((rule) => rule.protected).map((rule) => rule.port),
+  ).toEqual([22, 52022]);
+
+  const keep = resolveQuickSetupFirewallPlan(
+    requireDraft({
+      ...clone(),
+      access: {
+        ...clone().access,
+        ufw: "keep-current",
+        allowHttp: true,
+        rules: [{ port: 3000, protocol: "tcp" }],
+      },
+    }),
+    22,
+  );
+  expect(keep.apply).toBe(false);
+  expect(keep.rules).toEqual([]);
+});
+
+test("added optional utilities are off by default and bounded by the catalog", () => {
+  const added = ["tmux", "bat", "eza", "rsync", "direnv"] as const;
+  for (const id of added) {
+    expect(
+      requireDraft({
+        ...clone(),
+        tools: { ...clone().tools, utilities: [id] },
+      }).tools.utilities,
+    ).toEqual([id]);
+  }
+  expect(defaultQuickSetupDraft().tools.utilities).toEqual([
+    "git",
+    "curl",
+    "unzip",
+  ]);
+  const all = [...quickSetupUtilities];
+  expect(
+    requireDraft({
+      ...clone(),
+      tools: { ...clone().tools, utilities: all },
+    }).tools.utilities,
+  ).toEqual(all);
+  expect(
+    sanitizeQuickSetupDraft({
+      ...clone(),
+      tools: { ...clone().tools, utilities: [...all, "vim" as never] },
+    }),
+  ).toBeNull();
+});
+
+test("every catalog entry discloses an official HTTPS source and stays non-executable", () => {
+  for (const entry of Object.values(quickSetupCatalog)) {
+    expect(entry.executable).toBe(false);
+    expect(entry.sourceStatus).toBe("policy-only");
+    expect(entry.plannedSource.length).toBeGreaterThan(0);
+    expect(entry.documentation.length).toBeGreaterThan(0);
+    for (const url of entry.documentation) {
+      expect(url.startsWith("https://")).toBe(true);
+      expect(() => new URL(url)).not.toThrow();
+    }
+  }
+  expect(quickSetupCatalog.herdr.documentation).toEqual([
+    "https://herdr.dev/tui/docs/install/",
+  ]);
+  expect(quickSetupCatalog.neovim.plannedSource).toContain(
+    "not a distro package or nightly build",
+  );
+  expect(quickSetupCatalog["lazyvim-starter"].documentation).toContain(
+    "https://github.com/LazyVim/starter",
+  );
+  expect(quickSetupCatalog.tmux.documentation).toEqual([
+    "https://github.com/tmux/tmux",
+  ]);
 });
 
 test("every stack choice requires an explicit engine key", () => {

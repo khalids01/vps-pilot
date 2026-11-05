@@ -157,11 +157,13 @@ export function ConfigurationWorkspace({
   tool,
   profile,
   connected,
+  active,
   onNavigate,
 }: {
   tool: "quick-setup" | "ssh-access" | "firewall";
   profile: ServerProfile;
   connected: boolean;
+  active: boolean;
   onNavigate: (tool: ToolId) => void;
 }) {
   const [inspectionOpen, setInspectionOpen] = useState(false);
@@ -177,6 +179,7 @@ export function ConfigurationWorkspace({
         key={profile.id}
         profile={profile}
         connected={connected}
+        active={active}
         onOpenInspection={() => setInspectionOpen(true)}
       />
     );

@@ -31,6 +31,11 @@ export const quickSetupUtilities = [
   "btop",
   "unzip",
   "herdr",
+  "tmux",
+  "bat",
+  "eza",
+  "rsync",
+  "direnv",
 ] as const;
 export type QuickSetupUtilityId = (typeof quickSetupUtilities)[number];
 
@@ -49,6 +54,14 @@ export type QuickSetupKeyStrategy = (typeof quickSetupKeyStrategies)[number];
 
 export const quickSetupUfwChoices = ["configure", "keep-current"] as const;
 export type QuickSetupUfwChoice = (typeof quickSetupUfwChoices)[number];
+
+export const quickSetupRuleProtocols = ["tcp", "udp"] as const;
+export type QuickSetupRuleProtocol = (typeof quickSetupRuleProtocols)[number];
+export const quickSetupFirewallRuleLimit = 16;
+export interface QuickSetupFirewallRule {
+  port: number;
+  protocol: QuickSetupRuleProtocol;
+}
 
 export const quickSetupStackChoices = [
   "dokploy",
@@ -79,6 +92,9 @@ export interface QuickSetupDraft {
     port: number;
     ufw: QuickSetupUfwChoice;
     recoveryAcknowledged: boolean;
+    allowHttp: boolean;
+    allowHttps: boolean;
+    rules: QuickSetupFirewallRule[];
   };
   stack: {
     choice: QuickSetupStackChoice;
@@ -97,7 +113,14 @@ export function defaultQuickSetupDraft(): QuickSetupDraft {
     step: 1,
     administrator: { mode: "new", username: "deploy" },
     sshKey: { strategy: "existing" },
-    access: { port: 52022, ufw: "configure", recoveryAcknowledged: false },
+    access: {
+      port: 52022,
+      ufw: "configure",
+      recoveryAcknowledged: false,
+      allowHttp: false,
+      allowHttps: false,
+      rules: [],
+    },
     stack: { choice: "skip", engine: null },
     tools: { editor: "none", utilities: ["git", "curl", "unzip"] },
     runtimes: [],
@@ -160,6 +183,32 @@ function uniqueMembers<T extends string>(
     unique.size === value.length &&
     value.every((item) => (allowed as readonly string[]).includes(item))
   );
+}
+
+function sanitizeFirewallRules(
+  value: unknown,
+): QuickSetupFirewallRule[] | null {
+  if (!Array.isArray(value) || value.length > quickSetupFirewallRuleLimit)
+    return null;
+  const rules: QuickSetupFirewallRule[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (!isRecord(entry) || !hasExactKeys(entry, ["port", "protocol"]))
+      return null;
+    const port = entry.port;
+    if (
+      typeof port !== "number" ||
+      validateQuickSetupPort(port) !== null ||
+      !(quickSetupRuleProtocols as readonly unknown[]).includes(entry.protocol)
+    )
+      return null;
+    const protocol = entry.protocol as QuickSetupRuleProtocol;
+    const key = `${port}/${protocol}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    rules.push({ port, protocol });
+  }
+  return rules;
 }
 
 export function sanitizeQuickSetupDraft(
@@ -225,13 +274,29 @@ export function sanitizeQuickSetupDraft(
     return null;
 
   const access = value.access;
+  if (!isRecord(access)) return null;
+  const optionalAccessKeys = ["allowHttp", "allowHttps", "rules"] as const;
+  const presentOptionalAccessKeys = optionalAccessKeys.filter((key) =>
+    Object.keys(access).includes(key),
+  );
+  const allowHttp = access.allowHttp;
+  const allowHttps = access.allowHttps;
+  const firewallRules =
+    access.rules === undefined ? [] : sanitizeFirewallRules(access.rules);
   if (
-    !isRecord(access) ||
-    !hasExactKeys(access, ["port", "ufw", "recoveryAcknowledged"]) ||
+    !hasExactKeys(access, [
+      "port",
+      "ufw",
+      "recoveryAcknowledged",
+      ...presentOptionalAccessKeys,
+    ]) ||
     typeof access.port !== "number" ||
     validateQuickSetupPort(access.port) !== null ||
     !(quickSetupUfwChoices as readonly unknown[]).includes(access.ufw) ||
-    typeof access.recoveryAcknowledged !== "boolean"
+    typeof access.recoveryAcknowledged !== "boolean" ||
+    (allowHttp !== undefined && typeof allowHttp !== "boolean") ||
+    (allowHttps !== undefined && typeof allowHttps !== "boolean") ||
+    firewallRules === null
   )
     return null;
 
@@ -287,6 +352,9 @@ export function sanitizeQuickSetupDraft(
       port: access.port,
       ufw: access.ufw as QuickSetupUfwChoice,
       recoveryAcknowledged: access.recoveryAcknowledged,
+      allowHttp: allowHttp === true,
+      allowHttps: allowHttps === true,
+      rules: firewallRules,
     },
     stack: {
       choice: stack.choice as QuickSetupStackChoice,
@@ -396,4 +464,65 @@ export function resolveQuickSetupPlan(draft: QuickSetupDraft): QuickSetupPlan {
     duplicateSelections,
     missing,
   };
+}
+
+export interface QuickSetupPlannedFirewallRule extends QuickSetupFirewallRule {
+  protected: boolean;
+  purpose: string;
+}
+export interface QuickSetupFirewallPlan {
+  apply: boolean;
+  inbound: "deny";
+  outbound: "allow";
+  rules: QuickSetupPlannedFirewallRule[];
+}
+export function quickSetupFirewallRuleKey(rule: QuickSetupFirewallRule) {
+  return `${rule.port}/${rule.protocol}`;
+}
+export function resolveQuickSetupFirewallPlan(
+  draft: QuickSetupDraft,
+  currentPort: number,
+): QuickSetupFirewallPlan {
+  const apply = draft.access.ufw === "configure";
+  const rules: QuickSetupPlannedFirewallRule[] = [];
+  const seen = new Set<string>();
+  const add = (
+    rule: QuickSetupFirewallRule,
+    protectedRule: boolean,
+    purpose: string,
+  ) => {
+    const key = quickSetupFirewallRuleKey(rule);
+    if (seen.has(key)) return;
+    seen.add(key);
+    rules.push({ ...rule, protected: protectedRule, purpose });
+  };
+  if (apply) {
+    add({ port: currentPort, protocol: "tcp" }, true, "Current SSH profile");
+    add({ port: draft.access.port, protocol: "tcp" }, true, "Target SSH port");
+    if (draft.access.allowHttp)
+      add({ port: 80, protocol: "tcp" }, false, "HTTP ingress");
+    if (draft.access.allowHttps)
+      add({ port: 443, protocol: "tcp" }, false, "HTTPS ingress");
+    for (const rule of draft.access.rules) add(rule, false, "Custom rule");
+  }
+  return { apply, inbound: "deny", outbound: "allow", rules };
+}
+export function parseQuickSetupCustomRule(
+  portText: string,
+  protocol: QuickSetupRuleProtocol,
+  existing: readonly QuickSetupFirewallRule[],
+): { rule: QuickSetupFirewallRule } | { error: string } {
+  const port = parseQuickSetupPort(portText);
+  if (port === null) return { error: "Use a whole port from 1 to 65535." };
+  if (existing.length >= quickSetupFirewallRuleLimit)
+    return { error: `Up to ${quickSetupFirewallRuleLimit} custom rules.` };
+  const rule = { port, protocol };
+  if (
+    existing.some(
+      (item) =>
+        quickSetupFirewallRuleKey(item) === quickSetupFirewallRuleKey(rule),
+    )
+  )
+    return { error: "That port and protocol is already listed." };
+  return { rule };
 }

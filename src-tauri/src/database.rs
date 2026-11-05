@@ -201,6 +201,18 @@ struct QuickSetupAccess {
     ufw: String,
     #[serde(rename = "recoveryAcknowledged")]
     _recovery_acknowledged: bool,
+    #[serde(default, rename = "allowHttp")]
+    _allow_http: bool,
+    #[serde(default, rename = "allowHttps")]
+    _allow_https: bool,
+    #[serde(default)]
+    rules: Vec<QuickSetupFirewallRule>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuickSetupFirewallRule {
+    port: u16,
+    protocol: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -265,6 +277,14 @@ fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
         }
         _ => false,
     };
+    let firewall_rules_valid = draft.access.rules.len() <= 16
+        && draft.access.rules.iter().enumerate().all(|(index, rule)| {
+            rule.port != 0
+                && matches!(rule.protocol.as_str(), "tcp" | "udp")
+                && !draft.access.rules[..index].iter().any(|previous| {
+                    previous.port == rule.port && previous.protocol == rule.protocol
+                })
+        });
     let generated_key_id_valid = match &draft.ssh_key.generated_key_id {
         None => true,
         Some(id) => {
@@ -282,14 +302,16 @@ fn validate_quick_setup_draft(value: &str) -> Result<(), String> {
         || !generated_key_id_valid
         || draft.access.port == 0
         || !["configure", "keep-current"].contains(&draft.access.ufw.as_str())
+        || !firewall_rules_valid
         || !stack_valid
         || !["none", "neovim", "lazyvim"].contains(&draft.tools.editor.as_str())
         || !unique_allowed(
             &draft.tools.utilities,
             &[
-                "git", "curl", "ripgrep", "fd", "fzf", "jq", "btop", "unzip", "herdr",
+                "git", "curl", "ripgrep", "fd", "fzf", "jq", "btop", "unzip", "herdr", "tmux",
+                "bat", "eza", "rsync", "direnv",
             ],
-            9,
+            14,
         )
         || !unique_allowed(&draft.runtimes, &["bun", "nvm-node", "uv"], 3)
         || (draft.stack.choice == "javascript"
@@ -736,6 +758,92 @@ mod tests {
     }
 
     #[test]
+    fn quick_setup_firewall_fields_are_optional_strict_and_persisted() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
+        let legacy = valid_quick_setup_draft();
+        validate_document(&key, &legacy.to_string()).unwrap();
+
+        let mut draft = valid_quick_setup_draft();
+        draft["access"]["allowHttp"] = serde_json::json!(true);
+        draft["access"]["allowHttps"] = serde_json::json!(true);
+        draft["access"]["rules"] = serde_json::json!([
+            { "port": 3000, "protocol": "tcp" },
+            { "port": 53, "protocol": "udp" },
+            { "port": 53, "protocol": "tcp" }
+        ]);
+        validate_document(&key, &draft.to_string()).unwrap();
+        let serialized = draft.to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite3");
+        let db = LocalDatabase::open(&path).unwrap();
+        db.write(&key, &serialized).unwrap();
+        drop(db);
+        let db = LocalDatabase::open(&path).unwrap();
+        assert_eq!(db.read(&key).unwrap(), Some(serialized));
+
+        let mut base = valid_quick_setup_draft();
+        for field in ["allowHttp", "allowHttps", "rules"] {
+            for value in [serde_json::Value::Null, serde_json::json!("yes")] {
+                let mut rejected = base.clone();
+                rejected["access"][field] = value;
+                assert!(
+                    validate_document(&key, &rejected.to_string()).is_err(),
+                    "{field}"
+                );
+            }
+            base["access"].as_object_mut().unwrap().remove(field);
+        }
+        validate_document(&key, &base.to_string()).unwrap();
+
+        let mut unknown_access = valid_quick_setup_draft();
+        unknown_access["access"]["secret"] = serde_json::json!("never save");
+        assert!(validate_document(&key, &unknown_access.to_string()).is_err());
+        for rule in [
+            serde_json::json!({ "port": 3000, "protocol": "sctp" }),
+            serde_json::json!({ "port": 0, "protocol": "tcp" }),
+            serde_json::json!({ "port": 65536, "protocol": "tcp" }),
+            serde_json::json!({ "port": -1, "protocol": "tcp" }),
+            serde_json::json!({ "port": 22.5, "protocol": "tcp" }),
+            serde_json::json!({ "port": 3000, "protocol": "tcp", "passphrase": "never save" }),
+            serde_json::json!({ "port": null, "protocol": "tcp" }),
+        ] {
+            let mut rejected = valid_quick_setup_draft();
+            rejected["access"]["rules"] = serde_json::json!([rule]);
+            assert!(
+                validate_document(&key, &rejected.to_string()).is_err(),
+                "{rule}"
+            );
+        }
+        let mut duplicate = valid_quick_setup_draft();
+        duplicate["access"]["rules"] = serde_json::json!([
+            { "port": 3000, "protocol": "tcp" },
+            { "port": 3000, "protocol": "tcp" }
+        ]);
+        assert!(validate_document(&key, &duplicate.to_string()).is_err());
+        let mut too_many = valid_quick_setup_draft();
+        too_many["access"]["rules"] = serde_json::Value::Array(
+            (1..=17)
+                .map(|port| serde_json::json!({ "port": port, "protocol": "tcp" }))
+                .collect(),
+        );
+        assert!(validate_document(&key, &too_many.to_string()).is_err());
+
+        let mut utilities = valid_quick_setup_draft();
+        utilities["tools"]["utilities"] = serde_json::json!([
+            "git", "curl", "ripgrep", "fd", "fzf", "jq", "btop", "unzip", "herdr", "tmux", "bat",
+            "eza", "rsync", "direnv"
+        ]);
+        validate_document(&key, &utilities.to_string()).unwrap();
+        let mut unknown_utility = valid_quick_setup_draft();
+        unknown_utility["tools"]["utilities"] = serde_json::json!(["tmux", "vim"]);
+        assert!(validate_document(&key, &unknown_utility.to_string()).is_err());
+        let mut duplicate_utility = valid_quick_setup_draft();
+        duplicate_utility["tools"]["utilities"] = serde_json::json!(["tmux", "tmux"]);
+        assert!(validate_document(&key, &duplicate_utility.to_string()).is_err());
+    }
+
+    #[test]
     fn quick_setup_draft_rejects_unexpected_secrets_freeform_fields_and_versions() {
         let id = "11111111-1111-4111-8111-111111111111";
         let key = format!("{QUICK_SETUP_DRAFT_PREFIX}{id}");
@@ -799,7 +907,7 @@ mod tests {
         }
         for utilities in [
             serde_json::json!(["git", "git"]),
-            serde_json::json!(["tmux"]),
+            serde_json::json!(["vim"]),
             serde_json::json!(["git", "curl", "ripgrep", "fd", "fzf", "jq", "btop", "unzip", "jq"]),
         ] {
             let mut draft = valid.clone();

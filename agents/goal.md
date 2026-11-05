@@ -2,6 +2,14 @@
 
 A separate Tauri 2 desktop application using React and TypeScript for managing multiple Linux VPS servers over SSH.
 
+The intended end state is complete routine VPS management from inside VPS Pilot,
+starting with a fresh server's root login and ending with verified administrator
+access, firewall, application stack and tools. Users should not need an external
+Linux terminal to finish setup or recovery. The built-in terminal remains an
+advanced tool; guided workflows must complete and verify their own work. Standard
+local SSH keys/config, safe access migration and recovery are part of this goal.
+This is the product destination; the milestones below identify current limits.
+
 ## Current milestone
 
 Milestone 2 now includes real SSH PTYs and a native execution/approval foundation.
@@ -22,8 +30,9 @@ before they can be enabled. Keep real workspaces separate from sample fixtures.
 ## Agreed scope
 - Multiple simultaneous SSH connections and interactive terminal tabs per server.
 - Put VPS tabs in the top row. Its plus button offers a connection list (SSH config
-  and app-saved profiles) or a separate form to add a connection. Never modify
-  SSH config when managing app profiles.
+  and app-saved profiles) or a separate form to add a connection. Never implicitly
+  modify SSH config when managing app profiles; reviewed SSH-setup export is a
+  separate explicitly authorized action.
 - Each top-level tab owns one VPS workspace, including its sidebar, content,
   terminal sessions, and command panel. Keep their state isolated per server.
 - Docker containers, Compose projects, images, volumes, and logs.
@@ -371,9 +380,44 @@ Persist only validated non-secret drafts/progress, never key material or secrets
 
 Local generated-key storage is the explicit exception to the general no-key-
 content persistence rule: the approved wizard may create passphrase-encrypted
-OpenSSH key files in its protected app-owned Unix key vault and export encrypted
-copies only through a user-chosen native save destination. Never put key bytes
+OpenSSH key files in the protected Unix `~/.ssh` directory, preserve older
+app-vault keys, and export encrypted copies through a user-chosen native save
+destination. Never put key bytes
 or passphrases in SQLite, preferences, logs, history or CLI prompts. Drafts store
 only opaque key IDs. No overwrite or deletion operation is authorized for keys.
 Key creation/selection is not public-key installation or verified server login.
 Windows vault generation stays unavailable until native ACL protections exist.
+
+## Quick Setup visual refinement — authorized 2026-11-05
+
+The user rejected the wizard's visual density and asked for a clean, simple,
+professional interface that is understandable at a glance. Simplify the current
+wizard and local key UI: quiet step navigation, one focused form, selectable
+rows, short product copy and progressive disclosure. Remove repeated identity,
+warning text, status pills and the permanent summary card. Keep truthful preview
+and access-verification limits, errors, accessibility, existing choices, key
+backup and secret/lifecycle protections. This is a presentation refinement;
+it does not enable provisioning or expand native permissions.
+
+## Standard SSH files and complete in-app management — authorized 2026-11-05
+
+The user clarified that VPS Pilot must handle the complete VPS lifecycle from
+inside the app, including first-time access setup; users should not need an
+external Linux terminal to finish routine provisioning. Built-in workflows must
+handle prompts, keys, host identity, accounts, SSH ports, firewalls, software and
+recovery, with explicit verified outcomes rather than instructions to finish in
+another tool. This is the product goal, not a claim these adapters already exist.
+
+Generated keys now belong in the user's standard `~/.ssh` directory as encrypted
+private keys with matching public-key files. Preserve app-vault keys and saved
+references; migration copies must be explicit, no-overwrite and non-destructive.
+The app must offer a reviewed local `~/.ssh/config` entry using the selected key
+and independently verified target account/port. This is an authorized exception
+to the original read-only local-config policy. Ordinary app profile saves still
+do not modify SSH config. Preserve unrelated aliases/comments/defaults, detect
+conflicts, keep protected backups and require fresh review of local changes.
+
+Never equate key creation, a saved connection or local config export with a
+successful key login. Keep the old working connection until replacement access
+is independently verified. No key overwrite/deletion, unreviewed real-home
+writes by test tools, production-VPS tests or broad mutation-gate changes.

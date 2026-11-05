@@ -375,3 +375,204 @@ clean 64/64 run. Desktop/narrow screenshots were inspected. Codex also disabled
 creation when the vault listing is unavailable, with a focused browser check.
 No important-VPS contact, server mutation or native WebKit certification occurred.
 All task-owned Command Code processes exited; saved chats do not need idle CLIs.
+
+## Visual refinement — 2026-11-05
+
+The user rejected the first wizard presentation as cluttered and asked for a
+clean interface understandable at a glance. This refinement is presentation
+work within the existing implemented feature boundaries:
+
+- Quiet desktop step rail and compact mobile step picker, with one focused form.
+- Plain selectable rows, concise descriptions and a compact engine selector.
+- No permanent draft-summary card, per-step status pills or repeated warnings.
+- Grouped final review; source details and storage paths are disclosed on demand.
+- Selected key and backup are the default post-generation view; another-key
+  creation and other stored keys are explicit disclosures.
+- Existing validation, draft persistence, unavailable execution, secret clearing,
+  mutation gates and pending-operation handling remain mandatory.
+
+Command Code conversation: `vps-pilot-setup-ui-refinement-20261105`. Codex reviews
+actual desktop/mobile screenshots and independently verifies the relevant flows.
+This increment does not change palettes, native permissions, crypto, draft
+schemas or provisioning gates. No commit was requested for this refinement.
+
+Implemented through bounded same-chat Command Code runs, with concrete
+screenshot findings returned for a second pass: shorter copy, flat active-step
+marker, inline engine choice, two-column utilities on wide screens, compact
+selected-key default and clearer radio indicators. Mobile selection returns
+keyboard focus to its trigger. Codex directly scoped form/heading/disclosure IDs
+per mounted workspace and added a two-server label/focus/isolation regression.
+Busy-state tests still cover choosing another stored key during held exports;
+the new disclosures do not weaken secret/persistence/cancellation checks.
+
+Independent verification: `bun run check`, `bun run build`, all 54 frontend unit
+tests and `cargo check --locked` passed. All six focused browser scenarios passed,
+covering the wizard, invalid/legacy draft preservation, key creation/backups and
+existing inspection/navigation with retained shells. Actual desktop, 800px and
+430px layouts were checked, and desktop/narrow screenshots inspected. No native
+code or permission changed; native WebKit accessibility is not newly certified.
+All three task-owned CLI runs reached their finite caps and exited; useful work
+was reviewed and resumed by exact session name. No idle CLI process remains.
+
+## Standard SSH workflow and in-app completion — 2026-11-05
+
+The user clarified the original requirement: keys belong in `~/.ssh`, with a
+matching public file and a reviewed entry in `~/.ssh/config`. Routine VPS
+management must be completable inside VPS Pilot, including prompts and recovery;
+an external Linux terminal must not be a required final step. The existing
+app-owned vault was an implementation increment, not the intended final key
+location. This requirement supersedes that location for newly generated keys.
+
+- New encrypted key pairs use app-owned, collision-resistant filenames in the
+  standard SSH directory; existing user keys are neither enumerated as app-owned
+  nor overwritten. Keep secure permissions and private material out of SQLite.
+- Existing app-vault keys remain discoverable. Explicit copying into `~/.ssh`
+  preserves the old key, fingerprint, key ID and any existing profile references.
+  Never silently move/delete keys or overwrite a conflicting destination.
+- Before treating a target user/port/key as usable, test it through a separate
+  connection with the trusted server identity and exactly the selected key.
+  No password/agent/default-key/none fallback can count as this proof.
+- A local config export must use the verified target and trusted key reference,
+  show the exact app-owned entry for approval, preserve unrelated file bytes,
+  detect alias/source conflicts and keep a protected backup. Normal profile
+  saving still does not implicitly edit the local SSH config.
+- Preserve the original working SSH connection throughout verification. Local
+  export is not server hardening, public-key installation or an SSH/UFW migration.
+- Initial adapters may block unsupported conditional/include configurations
+  rather than risk changing their behavior. Explain the limitation in the app;
+  do not claim a completed workflow or require an external terminal workaround.
+
+Primary implementation conversation: `vps-pilot-standard-ssh-20261105`. Tests
+must inject temporary homes and SSH directories; never inspect credentials or
+write the developer's real SSH directory/config as part of implementation tests.
+
+Standard key storage is implemented by Command Code. New files use
+`~/.ssh/vps-pilot_<UUID>` plus `.pub`; legacy copying retains the original key and
+ID. Root ownership/modes, symlinks, unrelated files, matching public sidecars,
+bounded scans, ciphertext conflicts and partially published keys are covered.
+Codex reviewed the native changes, finished browser-fixture integration and added
+the explicit copy/failure/no-automatic-migration scenario. An older native test
+still expected fallback on a conflicting ID; its assertion was corrected to
+require refusal while preserving the legacy key's visible metadata.
+
+Independent storage-slice checks: build/check, all 54 frontend tests and strict
+all-target Clippy passed. The corrected combined native suite passed 99 cases
+with five opt-in server fixtures excluded before the config adapter. Three
+key-flow browser cases passed, including legacy copy on explicit request and
+saved-reference preservation. No real-home or VPS writes.
+
+Config/proof implementation uses a new bounded conversation,
+`vps-pilot-verified-ssh-config-20261105`, because the native trust/approval boundary
+differs from file storage. The original working SSH connection must stay intact.
+OpenSSH configuration semantics reference: https://man.openbsd.org/ssh_config
+(consulted 2026-11-05); preserve first-value precedence and global directive scope.
+
+The native proof/config adapter is implemented. Proofs use a separate connection
+with the exact selected key, pinned source identity and desired account/port.
+Memory-only proofs and single-use reviews expire after at most 120 seconds and
+bind source profile/revision/connection, key fingerprint/ciphertext/location and
+target. Config export requires a matching protected standard `.pub` sidecar.
+Native preview excludes existing config contents. Writes preserve unrelated
+bytes, validate app-owned block schemas, reject alias collisions and unsupported
+Include/Match/ambiguous syntax, retain private backups and use a cross-process
+file lock plus source checks and staged publication. Arbitrary editors do not
+participate in that advisory lock; do not claim absolute exclusion of them.
+
+Independent native validation after review fixes: `cargo check`, strict
+all-target Clippy and the full suite passed: **115 passed, 5 ignored**. Loopback
+fixtures cover separate account/port, wrong key/passphrase/host identity, source
+session survival, expiry/context/tampering and config backup/preservation,
+collision/stale/reject/replay/public-sidecar cases. Codex completed the small
+indented-marker guard left unfinished at the CLI turn cap and tightened inherited
+host-trust checks, with a regression test. No actual user home or VPS was used.
+
+Frontend implementation conversation: `vps-pilot-ssh-access-ui-20261105`, with
+the native contract handed off explicitly to keep the UI task focused. Account
+creation, public-key installation, SSH/UFW migration and installer/recovery
+adapters remain unavailable; neither local config export nor key-login proof
+completes those security checkpoints.
+
+The frontend flow is implemented under the selected standard key: explicit
+passphrase unlock, separate key-login verification, native config preview,
+cancel/reject and explicit save. Proofs/reviews never enter saved drafts. Key
+operations and access operations exclude each other; context changes invalidate
+late replies, expiry blocks saving, and an approved save is not advertised as
+canceled. A successful save refreshes SSH-config discovery without replacing the
+source profile or disconnecting it. Legacy keys require explicit standard copy.
+
+Final independent checks: `bun run check`, `bun run build`, all **54** frontend
+unit tests, Rust check/strict Clippy/full **115 passed, 5 ignored** native suite,
+and **12** focused browser scenarios passed. Desktop and 430px screenshots were
+reviewed, including the full save dialog. Codex completed a targeted expiry-test
+repair after repeated timing assumptions failed: a clock jump and click in one
+browser task exercises the handler guard before its timer, asserts rejection and
+zero save RPCs, and does not force-enable controls. Command Code wrote the main
+feature/backend/UI and tests; all bounded CLI runs have exited. Tests never used
+the actual SSH directory/config, user agent or important VPS. No commit made in
+this slice; the user's preceding UI refinement remains in the working tree.
+
+## Administrator, firewall and source visibility — 2026-11-05
+
+The user requested visible new/existing administrator password controls, an
+explanation of all three SSH-key strategies, UFW rules, per-package installation
+sources and additional useful developer tools. Keep this increment within the
+existing draft/preview milestone: do not imply that account creation, password
+verification, public-key installation, firewall changes or package installers
+execute today. Never test these against the important VPS.
+
+- New-account password/confirmation and existing-account sudo-password controls
+  are transient preparation only. Explain their purpose and current execution
+  limit. Never reset an existing password or save any secret in a draft, native
+  database, history or IPC. Clear on account/mode/step/server changes and reset.
+- Show a proposed UFW allow table with protected current/target SSH TCP ports,
+  explicit HTTP/HTTPS choices and bounded custom TCP/UDP ports. Preserve older
+  drafts when adding optional rule fields; enforce identical strict validation
+  in TypeScript and Rust. Keep-current means no proposed UFW changes. A plan is
+  neither live UFW state nor provider/IPv6/Docker firewall verification.
+- Every application/engine/editor/utility/runtime needs a reachable planned
+  source disclosure, with official documentation and the intended channel.
+  Resolved-item selection reasons are not installation sources. Official pages
+  were checked on 2026-11-05; runtime versions/checksums/downloads still need
+  verification when executable adapters are implemented. Distinguish signed
+  distribution packages from latest upstream stable releases. Preserve the
+  Neovim official stable-release and LazyVim starter requirements.
+- Add optional tmux, bat, eza, rsync and direnv; leave them unselected by default.
+  Do not auto-authorize direnv or edit shell startup files in this increment.
+
+Official references include [Dokploy installation](https://docs.dokploy.com/docs/core/installation),
+[Docker installation](https://docs.docker.com/engine/install/),
+[Docker/UFW interaction](https://docs.docker.com/engine/network/packet-filtering-firewalls/#docker-and-ufw),
+[Ubuntu firewall guidance](https://ubuntu.com/server/docs/how-to/security/firewalls/),
+[Neovim releases](https://github.com/neovim/neovim/releases),
+[LazyVim installation](https://www.lazyvim.org/installation), and the
+user-confirmed [Herdr TUI installation](https://herdr.dev/tui/docs/install/).
+Do not substitute a different project named Herdr.
+
+Command Code implementation conversation: `vps-pilot-setup-details-20261105`.
+Preserve the preceding uncommitted SSH/storage/UI work; no commit is requested.
+
+Implemented: optional transient new-account password/confirmation and existing
+sudo-password fields; clearing across invalid username edits, mode/step/reset,
+connection and visibility changes (including kept-mounted server tabs, Home and
+Settings); compact SSH strategy explanations; protected current/target SSH rule
+previews, HTTP/HTTPS and 16 bounded custom TCP/UDP rules; per-option source
+disclosures and resolved-source summary; optional tmux/bat/eza/rsync/direnv.
+Older v1 drafts remain valid, with absent rule fields defaulting safely. Secrets
+are not sent or stored. Firewall and package choices persist; actual account,
+UFW and installer execution remains unavailable.
+
+Independent final checks: `bun run check` (zero warnings), `bun run build`, all
+**58** frontend unit tests, **11** native database tests, `cargo check`, strict
+all-target Clippy and **15** relevant browser scenarios passed. Existing SSH key
+generation, copy, proof, config review, expiry and delayed-reply regressions are
+included. Desktop and 430px screenshots reviewed. No real home/VPS/agent access,
+dependency changes, commits or idle Command Code processes. The broader native
+suite was not repeated for this draft/UI increment; prior SSH-native validation
+is recorded above.
+
+Command Code wrote the primary model/catalog/UI/native validation and tests.
+Codex specified and reviewed, added the missed LazyVim source mapping/assertion,
+completed small lint/copy/screenshot repairs, and independently verified. The
+JavaScript/PM2 source mapping and compact source-row layout were returned to the
+same CLI chat for correction; the original Next-in-viewport assertion passed
+without being removed or weakened. Existing uncommitted work remains intact.

@@ -349,6 +349,7 @@ function RemoteWorkspaceContent({
                     tool={selectedTool}
                     profile={profile}
                     connected={connected}
+                    active={active && !settingsOpen}
                     onNavigate={onSelectTool}
                   />
                 </Suspense>
