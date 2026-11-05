@@ -3484,6 +3484,24 @@ test("Quick Setup keeps stack choices source-free and Review shows selected sour
   await expect(setup.getByRole("link",{name:"Go installation",exact:true})).toHaveAttribute("href","https://go.dev/doc/install");
   await expect(setup.getByRole("link",{name:"Official Go downloads",exact:true})).toHaveAttribute("href","https://go.dev/dl/");
   await expect(setup).toContainText("Exact install commands stay unavailable");
+  const scroller=page.getByRole("main",{name:"Fixture Alpha: Connection",exact:true});
+  const steps=setup.getByRole("navigation",{name:"Quick Setup steps",exact:true});
+  await scroller.evaluate(el=>{el.scrollTop=600;});
+  await expect.poll(()=>scroller.evaluate(el=>el.scrollTop)).toBeGreaterThan(500);
+  const pinned=await steps.boundingBox();
+  const viewport=await scroller.boundingBox();
+  expect(pinned).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(pinned!.y).toBeGreaterThanOrEqual(viewport!.y);
+  expect(pinned!.y+pinned!.height).toBeLessThan(viewport!.y+viewport!.height);
+  await scroller.evaluate(el=>{el.scrollTop=900;});
+  await expect.poll(()=>scroller.evaluate(el=>el.scrollTop)).toBeGreaterThan(800);
+  await expect.poll(async()=>{
+    const sidebar=await steps.boundingBox();
+    return sidebar ? Math.abs(sidebar.y-pinned!.y) : 999;
+  }).toBeLessThan(4);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-sticky-steps.png")});
+  await scroller.evaluate(el=>{el.scrollTop=0;});
   await page.clock.fastForward(300);
 
   await page.reload();

@@ -207,7 +207,10 @@ function StepNavigation({
     if (returnFocus) requestAnimationFrame(() => trigger.current?.focus());
   }
   return (
-    <nav aria-label="Quick Setup steps" className="min-w-0">
+    <nav
+      aria-label="Quick Setup steps"
+      className="min-w-0 md:sticky md:top-8 md:self-start"
+    >
       <div className="md:hidden">
         <Button
           ref={trigger}
