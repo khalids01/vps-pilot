@@ -17,6 +17,8 @@ struct TestServer {
     pause: Option<Arc<Notify>>,
     accepted_key: Option<keys::PublicKey>,
     allow_none: bool,
+    explicit_user: Option<String>,
+    explicit_key: Option<keys::PublicKey>,
     sudo_channels: std::collections::HashSet<russh::ChannelId>,
     monitor_channels: std::collections::HashSet<russh::ChannelId>,
     configuration_channels: std::collections::HashSet<russh::ChannelId>,
@@ -190,13 +192,14 @@ impl server::Handler for TestServer {
         key: server::VerifiedPublicKey<'_>,
     ) -> Result<server::Auth, Self::Error> {
         self.auth_count.fetch_add(1, Ordering::SeqCst);
-        Ok(
-            if user == "tester" && self.accepted_key.as_ref() == Some(key.public_key) {
-                server::Auth::Accept
-            } else {
-                server::Auth::reject()
-            },
-        )
+        let tester_key = user == "tester" && self.accepted_key.as_ref() == Some(key.public_key);
+        let explicit_key = self.explicit_user.as_deref() == Some(user)
+            && self.explicit_key.as_ref() == Some(key.public_key);
+        Ok(if tester_key || explicit_key {
+            server::Auth::Accept
+        } else {
+            server::Auth::reject()
+        })
     }
     async fn auth_password(
         &mut self,
@@ -238,6 +241,17 @@ impl Fixture {
         accepted_key: Option<keys::PublicKey>,
         allow_none: bool,
     ) -> Self {
+        Self::start_with_target_key(port, pause, accepted_key, allow_none, None, None, None).await
+    }
+    async fn start_with_target_key(
+        port: u16,
+        pause: Option<Arc<Notify>>,
+        accepted_key: Option<keys::PublicKey>,
+        allow_none: bool,
+        explicit_user: Option<String>,
+        explicit_key: Option<keys::PublicKey>,
+        host_key: Option<PrivateKey>,
+    ) -> Self {
         let socket = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
         let port = socket.local_addr().unwrap().port();
         let auth_count = Arc::new(AtomicUsize::new(0));
@@ -265,11 +279,15 @@ impl Fixture {
             pause,
             accepted_key,
             allow_none,
+            explicit_user,
+            explicit_key,
         };
         let config = Arc::new(server::Config {
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
-            keys: vec![PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()],
+            keys: vec![host_key.unwrap_or_else(|| {
+                PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()
+            })],
             ..Default::default()
         });
         let (sender, receiver) = oneshot::channel();
@@ -1666,6 +1684,416 @@ async fn production_default_blocks_mutations_in_rust_before_network_work() {
     assert!(service.runtime.lock().await.approvals.is_empty());
 }
 
+#[cfg(unix)]
+fn setup_vault(dir: &tempfile::TempDir) -> crate::setup_keys::KeyVault {
+    use std::os::unix::fs::PermissionsExt;
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::setup_keys::KeyVault::new(dir.path().join("legacy-keys"), home.join(".ssh"))
+}
+
+#[cfg(unix)]
+fn setup_public_key(key: &crate::setup_keys::SetupKey) -> keys::PublicKey {
+    let text = std::fs::read_to_string(format!("{}.pub", key.path)).unwrap();
+    keys::PublicKey::from_openssh(&text).unwrap()
+}
+
+#[cfg(unix)]
+fn verify_request(
+    profile: &Profile,
+    connection_id: &str,
+    key_id: &str,
+    username: &str,
+    port: u16,
+    passphrase: &str,
+) -> setup_access::VerifyRequest {
+    setup_access::VerifyRequest {
+        profile_id: profile.id.clone(),
+        connection_id: connection_id.into(),
+        profile_revision: profile.revision.clone(),
+        key_id: key_id.into(),
+        username: username.into(),
+        port,
+        passphrase: Some(passphrase.into()),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_proves_the_selected_key_and_keeps_the_source_session_alive() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fixture = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(host_key),
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"fixture shell ready"
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    let auth_before = fixture.auth_count.load(Ordering::SeqCst);
+    let opens_before = fixture.channel_opens.load(Ordering::SeqCst);
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "deploy",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proof.profile_id, profile.id);
+    assert_eq!(proof.connection_id, connection);
+    assert_eq!(proof.key_id, key.key_id);
+    assert_eq!(proof.key_fingerprint, key.fingerprint);
+    assert_eq!(proof.key_location, crate::setup_keys::KeyLocation::Ssh);
+    assert_eq!(proof.username, "deploy");
+    assert_eq!(proof.host, "127.0.0.1");
+    assert_eq!(proof.port, fixture.port);
+    assert!(proof.expires_at_ms > 0);
+    // Only the selected public-key attempt reached the server. No password,
+    // none, agent or default-key fallback ran, and no channel was opened.
+    assert_eq!(fixture.auth_count.load(Ordering::SeqCst), auth_before + 1);
+    assert_eq!(fixture.channel_opens.load(Ordering::SeqCst), opens_before);
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    // The original password connection and its PTY remain usable.
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"source-still-alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"source-still-alive"
+    ));
+    let checked = service
+        .valid_setup_proof_record(&vault, &proof.proof_id)
+        .await
+        .unwrap();
+    assert_eq!(checked.id, proof.proof_id);
+    service.setup_access.expire_for_test(&proof.proof_id);
+    assert!(service
+        .valid_setup_proof_record(&vault, &proof.proof_id)
+        .await
+        .is_err());
+    // A later source disconnect invalidates an otherwise unexpired proof.
+    let second = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "deploy",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(service
+        .valid_setup_proof_record(&vault, &second.proof_id)
+        .await
+        .is_ok());
+    service.disconnect(&profile.id).await.unwrap();
+    let error = match service
+        .valid_setup_proof_record(&vault, &second.proof_id)
+        .await
+    {
+        Ok(_) => panic!("a disconnected proof must not revalidate"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("connection") || error.contains("Connect"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_verifies_a_second_target_port_and_account_with_the_same_host_identity() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let source =
+        Fixture::start_with_target_key(0, None, None, false, None, None, Some(host_key.clone()))
+            .await;
+    let target = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(host_key),
+    )
+    .await;
+    assert_ne!(source.port, target.port);
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &source).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let source_auth = source.auth_count.load(Ordering::SeqCst);
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "deploy",
+                target.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proof.port, target.port);
+    assert_eq!(proof.username, "deploy");
+    assert_eq!(target.auth_count.load(Ordering::SeqCst), 1);
+    assert_eq!(source.auth_count.load(Ordering::SeqCst), source_auth);
+    assert!(source.commands.lock().unwrap().is_empty());
+    assert!(target.commands.lock().unwrap().is_empty());
+    assert_eq!(service.statuses().await[0].status, "connected");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_rejects_wrong_key_and_passphrase_without_fallback() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let selected = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let other = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fixture = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&selected)),
+        Some(host_key),
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let ops_before = fixture.channel_opens.load(Ordering::SeqCst);
+    let auth_before = fixture.auth_count.load(Ordering::SeqCst);
+    let error = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &other.key_id,
+                "deploy",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("did not accept") || error.contains("authentication failed"),
+        "{error}"
+    );
+    assert_eq!(fixture.auth_count.load(Ordering::SeqCst), auth_before + 1);
+    let auth_after_key = fixture.auth_count.load(Ordering::SeqCst);
+    let error = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &selected.key_id,
+                "deploy",
+                fixture.port,
+                "wrong-fixture-passphrase",
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("passphrase") || error.contains("unlock"),
+        "{error}"
+    );
+    assert_eq!(
+        fixture.auth_count.load(Ordering::SeqCst),
+        auth_after_key,
+        "an unlock failure must not reach the server"
+    );
+    assert_eq!(fixture.channel_opens.load(Ordering::SeqCst), ops_before);
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    assert_eq!(service.statuses().await[0].status, "connected");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_rejects_a_changed_host_identity_without_authenticating() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let source_host = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let target_host = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let source =
+        Fixture::start_with_target_key(0, None, None, false, None, None, Some(source_host)).await;
+    let target = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(target_host),
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &source).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let error = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "deploy",
+                target.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("host identity") || error.contains("verified SSH connection"),
+        "{error}"
+    );
+    assert_eq!(target.auth_count.load(Ordering::SeqCst), 0);
+    assert_eq!(service.statuses().await[0].status, "connected");
+    assert!(source.commands.lock().unwrap().is_empty());
+    assert!(target.commands.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_proof_fails_after_the_selected_key_is_tampered() {
+    use std::os::unix::fs::PermissionsExt;
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fixture = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(host_key),
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "deploy",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap();
+    let original = std::fs::read(&key.path).unwrap();
+    std::fs::write(&key.path, b"tampered fixture key").unwrap();
+    std::fs::set_permissions(&key.path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(service
+        .valid_setup_proof_record(&vault, &proof.proof_id)
+        .await
+        .is_err());
+    std::fs::write(&key.path, original).unwrap();
+    std::fs::set_permissions(&key.path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(service
+        .valid_setup_proof_record(&vault, &proof.proof_id)
+        .await
+        .is_ok());
+}
+
 #[tokio::test]
 async fn live_monitor_is_singleton_server_bound_and_waits_for_ack() {
     let fixture = Fixture::start(0, None).await;
@@ -1723,4 +2151,503 @@ async fn live_monitor_is_singleton_server_bound_and_waits_for_ack() {
         streams::StreamEvent::Closed { .. }
     ));
     assert!(!service.runtime.lock().await.streams.contains_key(&id));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_does_not_account_foreign_or_malformed_profiles() {
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault
+        .generate_async("fixture-key-passphrase".into())
+        .await
+        .unwrap();
+    let (_dir, service) = service();
+    for index in 0..150 {
+        let profile_id = if index % 2 == 0 {
+            format!("foreign-profile-{index}")
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+        let request = setup_access::VerifyRequest {
+            profile_id,
+            connection_id: "connection".into(),
+            profile_revision: uuid::Uuid::new_v4().to_string(),
+            key_id: key.key_id.clone(),
+            username: "deploy".into(),
+            port: 22,
+            passphrase: Some("fixture-key-passphrase".into()),
+        };
+        assert!(service
+            .verify_setup_key_login(&vault, request)
+            .await
+            .is_err());
+    }
+    assert_eq!(service.setup_access.failure_entries_for_test(), 0);
+    assert_eq!(service.setup_access.attempt_entries_for_test(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn setup_key_login_failure_cache_is_bounded() {
+    let (_dir, service) = service();
+    for index in 0..150 {
+        service
+            .setup_access
+            .record_failure_for_test(&format!("profile-{index}"));
+    }
+    assert!(service.setup_access.failure_entries_for_test() <= 100);
+}
+
+#[cfg(unix)]
+struct ConfigExportFixture {
+    _service_dir: tempfile::TempDir,
+    _key_dir: tempfile::TempDir,
+    vault: crate::setup_keys::KeyVault,
+    service: SshService,
+    _fixture: Fixture,
+    profile: Profile,
+    key: crate::setup_keys::SetupKey,
+    proof: setup_access::KeyLoginProof,
+}
+
+#[cfg(unix)]
+async fn config_export_fixture(config_text: Option<&str>) -> ConfigExportFixture {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    if let Some(text) = config_text {
+        use std::os::unix::fs::PermissionsExt;
+        let path = vault.standard_ssh_root().join("config");
+        std::fs::write(&path, text).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let fixture = Fixture::start_with_target_key(
+        0,
+        None,
+        None,
+        false,
+        Some("deploy".into()),
+        Some(setup_public_key(&key)),
+        Some(host_key),
+    )
+    .await;
+    let service_dir = tempfile::tempdir().unwrap();
+    let service = SshService::new(service_dir.path().join("profiles.json"));
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "deploy",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap();
+    ConfigExportFixture {
+        _service_dir: service_dir,
+        _key_dir: key_dir,
+        vault,
+        service,
+        _fixture: fixture,
+        profile,
+        key,
+        proof,
+    }
+}
+
+#[cfg(unix)]
+async fn review_config(
+    fixture: &ConfigExportFixture,
+    alias: &str,
+) -> Result<setup_access::SetupConfigReview, String> {
+    fixture
+        .service
+        .review_setup_config(&fixture.vault, &fixture.proof.proof_id, alias)
+        .await
+}
+
+#[cfg(unix)]
+async fn save_config(
+    fixture: &ConfigExportFixture,
+    review_id: &str,
+) -> Result<setup_access::SetupConfigSave, String> {
+    fixture
+        .service
+        .save_setup_config(&fixture.vault, review_id)
+        .await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_save_preserves_unrelated_bytes_and_keeps_a_protected_backup() {
+    use std::os::unix::fs::PermissionsExt;
+    const ORIGINAL: &str = "# keep this comment\nHost *\n    ServerAliveInterval 30\nHost other\n    HostName other.example.com\n    User ops\n";
+    let fixture = config_export_fixture(Some(ORIGINAL)).await;
+    let review = review_config(&fixture, "fixture-alias").await.unwrap();
+    assert_eq!(review.mode, "create");
+    assert!(review.backup);
+    assert_eq!(review.destination, "~/.ssh/config");
+    assert_eq!(review.key_fingerprint, fixture.key.fingerprint);
+    assert_eq!(review.username, "deploy");
+    assert_eq!(review.host, "127.0.0.1");
+    assert_eq!(review.port, fixture._fixture.port);
+    assert!(review
+        .entry
+        .starts_with(&format!("# vps-pilot:begin {}", fixture.profile.id)));
+    assert!(review.entry.contains("\nHost *\n# vps-pilot:end "));
+    assert!(!review.entry.contains("keep this comment"));
+    let config_path = fixture.vault.standard_ssh_root().join("config");
+    let saved = save_config(&fixture, &review.review_id).await.unwrap();
+    assert_eq!(saved.status, "saved");
+    assert_eq!(saved.alias, "fixture-alias");
+    assert_eq!(saved.destination, "~/.ssh/config");
+    let text = std::fs::read_to_string(&config_path).unwrap();
+    assert!(text.starts_with(review.entry.as_str()));
+    assert_eq!(&text[review.entry.len()..], ORIGINAL);
+    assert_eq!(
+        std::fs::metadata(&config_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert!(!fixture
+        .vault
+        .standard_ssh_root()
+        .join("known_hosts")
+        .exists());
+    let backup = saved
+        .backup_path
+        .expect("existing config must be backed up");
+    assert_eq!(std::fs::read(&backup).unwrap(), ORIGINAL.as_bytes());
+    assert_eq!(
+        std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    // A matching same-content review is a no-op and writes nothing.
+    let again = review_config(&fixture, "fixture-alias").await.unwrap();
+    assert_eq!(again.mode, "noChange");
+    assert!(!again.backup);
+    let before = std::fs::read(&config_path).unwrap();
+    let saved_again = save_config(&fixture, &again.review_id).await.unwrap();
+    assert!(saved_again.backup_path.is_none());
+    assert_eq!(std::fs::read(&config_path).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_update_replaces_only_the_owned_block_with_a_fresh_backup() {
+    use std::os::unix::fs::PermissionsExt;
+    const ORIGINAL: &str = "# keep\nHost *\n    ServerAliveInterval 30\nHost other\n    HostName other.example.com\n    User ops\n";
+    let fixture = config_export_fixture(Some(ORIGINAL)).await;
+    let first = review_config(&fixture, "first-alias").await.unwrap();
+    let first_entry = first.entry.clone();
+    save_config(&fixture, &first.review_id).await.unwrap();
+    let config_path = fixture.vault.standard_ssh_root().join("config");
+    let after_first = std::fs::read(&config_path).unwrap();
+    let second = review_config(&fixture, "second-alias").await.unwrap();
+    assert_eq!(second.mode, "update");
+    assert!(second.backup);
+    assert!(second.entry.contains("Host second-alias"));
+    assert!(!second.entry.contains("Host first-alias"));
+    let saved = save_config(&fixture, &second.review_id).await.unwrap();
+    let backup = saved.backup_path.unwrap();
+    assert_eq!(std::fs::read(&backup).unwrap(), after_first);
+    assert_eq!(
+        std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let text = std::fs::read_to_string(&config_path).unwrap();
+    assert!(text.starts_with(second.entry.as_str()));
+    assert_eq!(&text[second.entry.len()..], ORIGINAL);
+    assert!(!text.contains(&first_entry));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_rejects_alias_collisions_and_injection_without_writing() {
+    const ORIGINAL: &str = "Host taken\n    HostName taken.example.com\n";
+    let fixture = config_export_fixture(Some(ORIGINAL)).await;
+    let config_path = fixture.vault.standard_ssh_root().join("config");
+    for alias in [
+        "taken",
+        "TAKEN",
+        "bad alias",
+        "-oProxyCommand=evil",
+        "foo\nHost evil",
+        "*",
+        "!evil",
+        "alias#comment",
+        "alias;command",
+    ] {
+        assert!(review_config(&fixture, alias).await.is_err(), "{alias}");
+    }
+    let long = "a".repeat(65);
+    assert!(review_config(&fixture, &long).await.is_err());
+    assert_eq!(std::fs::read(&config_path).unwrap(), ORIGINAL.as_bytes());
+    assert!(!fixture
+        .vault
+        .standard_ssh_root()
+        .join(".vps-pilot-config.lock")
+        .exists());
+    assert_eq!(fixture.service.setup_access.review_entries_for_test(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_refuses_include_match_continuations_and_malformed_markers() {
+    let profile_a = uuid::Uuid::new_v4().to_string();
+    let profile_b = uuid::Uuid::new_v4().to_string();
+    let texts = vec![
+        "Include config.d/*\nHost *\n    User root\n".to_string(),
+        "Include=config.d/*\nHost *\n    User root\n".to_string(),
+        "Match exec touch /tmp/vps-pilot-must-not-run\nHost *\n    User root\n".to_string(),
+        "Match=exec touch /tmp/vps-pilot-must-not-run\nHost *\n    User root\n".to_string(),
+        "IgnoreUnknown *\nHost *\n    User root\n".to_string(),
+        "IgnoreUnknown=*\nHost *\n    User root\n".to_string(),
+        "Host *\n    ProxyCommand fixture \\\n        argument\n".to_string(),
+        "Host=taken\n    HostName taken.example.com\n".to_string(),
+        "Host = taken\n    HostName taken.example.com\n".to_string(),
+        "Host \"quoted\"\n    HostName quoted.example.com\n".to_string(),
+        "Host taken#reinterpreted\n    HostName taken.example.com\n".to_string(),
+        "Host taken,other\n    HostName taken.example.com\n".to_string(),
+        format!("# vps-pilot:begin {profile_a}\nHost orphan\n"),
+        format!(
+            "  # vps-pilot:begin {profile_a}\nHost indented\n  # vps-pilot:end {profile_a}\n"
+        ),
+        format!(
+            "# vps-pilot:begin {profile_a}\n# vps-pilot:begin {profile_b}\nHost nested\n# vps-pilot:end {profile_b}\n# vps-pilot:end {profile_a}\n"
+        ),
+        format!(
+            "# vps-pilot:begin {profile_a}\nHost one\n# vps-pilot:end {profile_a}\n# vps-pilot:begin {profile_a}\nHost two\n# vps-pilot:end {profile_a}\n"
+        ),
+        "# vps-pilot:begin not-a-uuid\nHost bad\n# vps-pilot:end not-a-uuid\n".to_string(),
+    ];
+    for text in texts {
+        let fixture = config_export_fixture(Some(&text)).await;
+        assert!(
+            review_config(&fixture, "safe-alias").await.is_err(),
+            "{text}"
+        );
+        assert_eq!(
+            std::fs::read(fixture.vault.standard_ssh_root().join("config")).unwrap(),
+            text.as_bytes()
+        );
+        assert_eq!(fixture.service.setup_access.review_entries_for_test(), 0);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_collision_checks_include_other_managed_blocks() {
+    let other_profile = uuid::Uuid::new_v4().to_string();
+    let other_key = uuid::Uuid::new_v4().to_string();
+    let text = format!(
+        "# vps-pilot:begin {other_profile}\nHost taken\n    HostName taken.example.com\n    User ops\n    Port 22\n    IdentityFile ~/.ssh/vps-pilot_{other_key}\n    IdentitiesOnly yes\n    PreferredAuthentications publickey\nHost *\n# vps-pilot:end {other_profile}\n"
+    );
+    let fixture = config_export_fixture(Some(&text)).await;
+    let error = review_config(&fixture, "taken").await.unwrap_err();
+    assert!(error.contains("alias"), "{error}");
+    assert_eq!(
+        std::fs::read(fixture.vault.standard_ssh_root().join("config")).unwrap(),
+        text.as_bytes()
+    );
+    assert_eq!(fixture.service.setup_access.review_entries_for_test(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_never_reads_include_targets() {
+    let fixture = config_export_fixture(Some("Include config.d/*\nHost *\n    User root\n")).await;
+    let include_dir = fixture.vault.standard_ssh_root().join("config.d");
+    std::fs::create_dir(&include_dir).unwrap();
+    let included = include_dir.join("evil");
+    std::fs::write(&included, "Host included\n").unwrap();
+    let error = review_config(&fixture, "safe-alias").await.unwrap_err();
+    assert!(error.contains("Include"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(&included).unwrap(),
+        "Host included\n"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_rejects_unsafe_paths_and_permissions() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let fixture = config_export_fixture(None).await;
+    let root = fixture.vault.standard_ssh_root().to_path_buf();
+
+    let outside = fixture._key_dir.path().join("outside-config");
+    std::fs::write(&outside, "Host outside\n").unwrap();
+    symlink(&outside, root.join("config")).unwrap();
+    assert!(review_config(&fixture, "safe-alias").await.is_err());
+    std::fs::remove_file(root.join("config")).unwrap();
+
+    std::fs::write(root.join("config"), "Host linked\n").unwrap();
+    std::fs::set_permissions(root.join("config"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::hard_link(
+        root.join("config"),
+        fixture._key_dir.path().join("hardlink"),
+    )
+    .unwrap();
+    assert!(review_config(&fixture, "safe-alias").await.is_err());
+    std::fs::remove_file(root.join("config")).unwrap();
+
+    let path = root.join("config");
+    std::fs::write(&path, "Host insecure\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(review_config(&fixture, "safe-alias").await.is_err());
+    std::fs::remove_file(&path).unwrap();
+
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o775)).unwrap();
+    assert!(review_config(&fixture, "safe-alias").await.is_err());
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(fixture.service.setup_access.review_entries_for_test(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_save_fails_for_stale_expired_replayed_or_rejected_reviews() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = config_export_fixture(None).await;
+    let review = review_config(&fixture, "stale-alias").await.unwrap();
+    assert_eq!(review.mode, "create");
+    let path = fixture.vault.standard_ssh_root().join("config");
+    std::fs::write(&path, "Host external\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let error = save_config(&fixture, &review.review_id).await.unwrap_err();
+    assert!(error.contains("changed"), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "Host external\n");
+
+    let fixture2 = config_export_fixture(None).await;
+    let expired = review_config(&fixture2, "expired-alias").await.unwrap();
+    fixture2
+        .service
+        .setup_access
+        .expire_review_for_test(&expired.review_id);
+    assert!(save_config(&fixture2, &expired.review_id).await.is_err());
+    let path2 = fixture2.vault.standard_ssh_root().join("config");
+    assert!(!path2.exists());
+
+    let fixture3 = config_export_fixture(None).await;
+    let replay = review_config(&fixture3, "replay-alias").await.unwrap();
+    save_config(&fixture3, &replay.review_id).await.unwrap();
+    let path3 = fixture3.vault.standard_ssh_root().join("config");
+    let after_save = std::fs::read(&path3).unwrap();
+    assert!(save_config(&fixture3, &replay.review_id).await.is_err());
+    assert_eq!(std::fs::read(&path3).unwrap(), after_save);
+
+    let fixture4 = config_export_fixture(None).await;
+    let rejected = review_config(&fixture4, "rejected-alias").await.unwrap();
+    fixture4
+        .service
+        .reject_setup_config(&rejected.review_id)
+        .unwrap();
+    assert!(save_config(&fixture4, &rejected.review_id).await.is_err());
+    let path4 = fixture4.vault.standard_ssh_root().join("config");
+    assert!(!path4.exists());
+    assert!(!fixture4
+        .vault
+        .standard_ssh_root()
+        .join(".vps-pilot-config.lock")
+        .exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_requires_a_matching_public_sidecar() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = config_export_fixture(None).await;
+    let public_path = std::path::PathBuf::from(format!("{}.pub", fixture.key.path));
+    let original = std::fs::read(&public_path).unwrap();
+    let other = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    std::fs::write(&public_path, other.public_key().to_openssh().unwrap()).unwrap();
+    std::fs::set_permissions(&public_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let error = review_config(&fixture, "sidecar-alias").await.unwrap_err();
+    assert!(
+        error.contains("public key") || error.contains("does not match"),
+        "{error}"
+    );
+    assert!(!fixture.vault.standard_ssh_root().join("config").exists());
+
+    std::fs::write(&public_path, &original).unwrap();
+    std::fs::set_permissions(&public_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let review = review_config(&fixture, "sidecar-alias").await.unwrap();
+    // Tamper after review: saving must revalidate the pair.
+    std::fs::write(&public_path, other.public_key().to_openssh().unwrap()).unwrap();
+    std::fs::set_permissions(&public_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(save_config(&fixture, &review.review_id).await.is_err());
+    assert!(!fixture.vault.standard_ssh_root().join("config").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_save_keeps_the_original_password_session_alive() {
+    let fixture = config_export_fixture(None).await;
+    let (sink, mut output) = stream_sink();
+    let shell = fixture
+        .service
+        .start_stream(&fixture.profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"fixture shell ready"
+    ));
+    fixture
+        .service
+        .control(&fixture.profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+    let review = review_config(&fixture, "live-alias").await.unwrap();
+    save_config(&fixture, &review.review_id).await.unwrap();
+    fixture
+        .service
+        .control(
+            &fixture.profile.id,
+            &shell,
+            streams::Control::Input(b"config-save-alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"config-save-alive"
+    ));
+    assert!(fixture._fixture.commands.lock().unwrap().is_empty());
+    fixture
+        .service
+        .close_stream(&fixture.profile.id, &shell)
+        .await
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_config_reviews_are_bounded() {
+    let fixture = config_export_fixture(None).await;
+    for index in 0..105 {
+        review_config(&fixture, &format!("bounded-alias-{index}"))
+            .await
+            .unwrap();
+    }
+    assert!(fixture.service.setup_access.review_entries_for_test() <= 100);
 }

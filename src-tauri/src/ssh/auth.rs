@@ -78,6 +78,49 @@ async fn key_auth(
         .map(|result| result.success())
         .map_err(|_| "Private key authentication failed.".into())
 }
+/// Authenticate with exactly one explicitly selected private key. This helper
+/// never attempts none/password/agent/default keys and returns the fingerprint
+/// that was actually presented to the server.
+#[cfg(unix)]
+pub(super) async fn authenticate_selected_key(
+    handle: &mut client::Handle<Client>,
+    user: &str,
+    path: PathBuf,
+    passphrase: Option<Zeroizing<String>>,
+) -> Result<String, String> {
+    let (key, fingerprint) = tokio::task::spawn_blocking(move || {
+        let secret = read_secret(&path).map_err(str::to_owned)?;
+        let key = keys::decode_secret_key(&secret, passphrase.as_ref().map(|value| value.as_str()))
+            .map_err(|_| {
+                "Cannot unlock the selected private key. Check its passphrase.".to_string()
+            })?;
+        if key.is_encrypted() {
+            return Err("The selected private key is still encrypted.".to_string());
+        }
+        let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+        Ok::<_, String>((key, fingerprint))
+    })
+    .await
+    .map_err(|_| "Could not load the selected private key.".to_string())??;
+    let hash = if key.algorithm().is_rsa() {
+        handle
+            .best_supported_rsa_hash()
+            .await
+            .map_err(|_| "Cannot negotiate the key signature.".to_string())?
+            .flatten()
+            .or(Some(HashAlg::Sha256))
+    } else {
+        None
+    };
+    handle
+        .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+        .await
+        .map_err(|_| "Selected key authentication failed.".to_string())?
+        .success()
+        .then_some(fingerprint)
+        .ok_or_else(|| "The server did not accept the selected key.".to_string())
+}
+
 #[cfg(unix)]
 pub(super) async fn agent_auth(
     handle: &mut client::Handle<Client>,

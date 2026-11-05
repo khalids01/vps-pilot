@@ -17,7 +17,11 @@ pub fn run() {
                 db.clone(),
                 config.join("ssh-profiles.json"),
             ));
-            app.manage(setup_keys::KeyVault::new(config.join("setup-keys")));
+            let home = app.path().home_dir()?;
+            app.manage(setup_keys::KeyVault::new(
+                config.join("setup-keys"),
+                home.join(".ssh"),
+            ));
             app.manage(db);
             Ok(())
         })
@@ -28,6 +32,7 @@ pub fn run() {
             database::app_save_document,
             setup_keys::app_setup_keys_list,
             setup_keys::app_setup_key_generate,
+            setup_keys::app_setup_key_use_ssh_directory,
             setup_keys::app_setup_key_export,
             ssh::files::ssh_files_review_operation,
             ssh::files::ssh_files_execute_operation,
@@ -55,6 +60,10 @@ pub fn run() {
             ssh::ssh_trust,
             ssh::ssh_connect,
             ssh::ssh_disconnect,
+            ssh::setup_access::ssh_setup_key_verify,
+            ssh::setup_access::ssh_setup_config_review,
+            ssh::setup_access::ssh_setup_config_save,
+            ssh::setup_access::ssh_setup_config_reject,
             ssh::monitor::ssh_monitor_start,
             ssh::monitor::ssh_monitor_describe,
             ssh::streams::ssh_terminal_open,

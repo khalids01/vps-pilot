@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "setup-access"
+description = "Independent Quick Setup key-login proof and reviewed local SSH config export. Verification opens a separate native SSH connection to the saved profile host and target port, authenticates with exactly the selected protected local key and a transient passphrase, and returns bounded proof metadata. Reviewed export prepares only a new app-owned block for the standard ~/.ssh/config, keeps a protected backup and publishes atomically after revalidation. No password, agent, none or default-key fallback, no remote command execution, no renderer-supplied host/key/trust/config text, and no arbitrary file paths."
+commands.allow = [
+  "ssh_setup_key_verify",
+  "ssh_setup_config_review",
+  "ssh_setup_config_save",
+  "ssh_setup_config_reject",
+]

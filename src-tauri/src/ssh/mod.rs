@@ -9,6 +9,7 @@ pub mod docker;
 pub mod files;
 pub mod monitor;
 mod services;
+pub mod setup_access;
 mod store;
 pub mod streams;
 pub mod structured;
@@ -85,6 +86,7 @@ pub struct SshService {
     configuration: configuration::State,
     files: files::State,
     docker_manager: docker::manager::State,
+    setup_access: setup_access::State,
     store: Mutex<Store>,
     runtime: AsyncMutex<Runtime>,
 }
@@ -112,6 +114,7 @@ impl SshService {
             configuration: configuration::State::default(),
             files: files::State::default(),
             docker_manager: docker::manager::State::default(),
+            setup_access: setup_access::State::default(),
             store: Mutex::new(Store::open(path)),
             runtime: AsyncMutex::new(Runtime {
                 jobs: HashMap::new(),

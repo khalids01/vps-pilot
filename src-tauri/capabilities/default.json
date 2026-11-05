@@ -11,6 +11,7 @@
     "ssh-connection",
     "local-data",
     "setup-keys",
+    "setup-access",
     "remote-files",
     "updater:default",
     "process:allow-restart"
