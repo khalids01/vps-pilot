@@ -383,6 +383,7 @@ fn valid_private_mode(mode: u32) -> bool {
     (permissions == 0o400 || permissions == 0o600) && mode & 0o7000 == 0
 }
 
+#[cfg(unix)]
 fn valid_private_metadata(metadata: &fs::Metadata, owner: u32) -> bool {
     metadata.file_type().is_file()
         && !metadata.file_type().is_symlink()
@@ -1516,7 +1517,14 @@ fn existing_uuid_identity(
 ) -> Option<(String, KeyLocation)> {
     let parent = canonical.parent()?;
     let name = canonical.file_name()?.to_str()?;
-    let (root, id, location, owner) = if parent == legacy_root {
+    // Native fixtures and some macOS homes live below a symlinked ancestor
+    // (`/var` vs `/private/var`). The selected file is already canonical, so
+    // compare canonical roots before reusing an existing UUID identity. No
+    // validation is skipped: the key file is still re-read below.
+    let canonical_parent = fs::canonicalize(parent).ok()?;
+    let canonical_legacy = fs::canonicalize(legacy_root).ok();
+    let canonical_ssh = fs::canonicalize(ssh_root).ok()?;
+    let (root, id, location, owner) = if canonical_legacy.as_deref() == Some(&canonical_parent) {
         let owner = fs::metadata(legacy_root).ok()?.uid();
         (
             legacy_root,
@@ -1524,7 +1532,7 @@ fn existing_uuid_identity(
             KeyLocation::Legacy,
             owner,
         )
-    } else if parent == ssh_root {
+    } else if canonical_parent == canonical_ssh {
         let owner = existing_ssh_owner(ssh_root).ok()??;
         (ssh_root, owned_ssh_id(name)?, KeyLocation::Ssh, owner)
     } else {
@@ -3504,9 +3512,10 @@ mod tests {
         .unwrap();
         fs::set_permissions(&matching_public, fs::Permissions::from_mode(0o644)).unwrap();
         let resolved = restart.resolve_metadata(&selected.key_id).unwrap();
+        let canonical_public = fs::canonicalize(&matching_public).unwrap();
         assert_eq!(
             resolved.public_path.as_deref(),
-            Some(matching_public.as_path())
+            Some(canonical_public.as_path())
         );
 
         fs::remove_file(&matching_public).unwrap();
@@ -3610,18 +3619,21 @@ mod tests {
     fn selecting_an_unchanged_uuid_generated_key_reuses_its_original_identifier() {
         let dir = tempfile::tempdir().unwrap();
         let fixture = Fixture::new(&dir);
-        let original = generate_blocking(&fixture.legacy(), &fixture.ssh(), b"").unwrap();
-        let before_records = references::count_references(&fixture.ssh()).unwrap();
-        let selected = register_selected_blocking(
-            &fixture.legacy(),
-            &fixture.ssh(),
-            Path::new(&original.path),
-        )
-        .unwrap();
+        // Exercise a canonical-path mismatch through a symlinked home ancestor.
+        // macOS `/var` resolves to `/private/var`; this fixture reproduces the
+        // same aliasing on Linux without touching a real home directory.
+        let link_home = dir.path().join("link-home");
+        symlink(&fixture.home, &link_home).unwrap();
+        let ssh_root = link_home.join(".ssh");
+        let original = generate_blocking(&fixture.legacy(), &ssh_root, b"").unwrap();
+        let before_records = references::count_references(&ssh_root).unwrap();
+        let selected =
+            register_selected_blocking(&fixture.legacy(), &ssh_root, Path::new(&original.path))
+                .unwrap();
         assert_eq!(selected.key_id, original.key_id);
         assert_eq!(selected.location, KeyLocation::Ssh);
         assert_eq!(
-            references::count_references(&fixture.ssh()).unwrap(),
+            references::count_references(&ssh_root).unwrap(),
             before_records
         );
         let listed = list_blocking(&fixture.legacy(), &fixture.ssh()).unwrap();
