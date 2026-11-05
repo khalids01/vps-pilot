@@ -135,7 +135,11 @@ jobs:
               });
               const signature = Buffer.from(response.data).toString('utf8').trim();
               if (!signature) throw new Error('Empty signature for ' + artifact.name);
-              return {signature, url: artifact.browser_download_url};
+              // Draft asset URLs may contain an untagged-* placeholder that
+              // stops resolving when the release is published. Bind update
+              // downloads to the immutable final tag instead.
+              const url = `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(artifact.name)}`;
+              return {signature, url};
             };
             const appimage = await entry('_amd64.AppImage');
             const deb = await entry('_amd64.deb');
