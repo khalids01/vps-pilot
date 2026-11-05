@@ -1,11 +1,12 @@
-VPS Pilot 0.2.0
+VPS Pilot 0.2.1
 
-- Manage containers, images, networks and volumes from the Docker workspace.
-- Run applications through a form or Compose editor, with reviewed configuration backups.
-- Check occupied ports, container names, application ownership and shared data before applying changes.
-- Review conservative cleanup candidates; volumes and infrastructure workloads stay protected.
-- Search and pause container logs, open container shells and retain sessions across workspace navigation.
-- Improved form spacing, container filtering, application terminology and sidebar navigation.
-- Removed repeated server details from the workspace header; the top VPS tab keeps its address tooltip.
+- Redesigned Quick Setup as a clear eight-step wizard with a sticky desktop step sidebar.
+- Create named SSH keys in ~/.ssh with optional passphrases, inline filename checks and overwrite protection.
+- Select existing private keys without moving or changing the original files; restore selections after restarting.
+- Verify the selected key independently and review local SSH config changes before saving them.
+- Plan administrator access and protected SSH/firewall rules, choose developer tools and grouped runtime cards, and review official installation sources.
+- Improved dark themes, setup details and transient credential handling.
+
+Quick Setup server provisioning, account creation, SSH/UFW hardening and package installation remain unavailable. Creating a key does not install it on the server.
 
 macOS downloads include separate Apple Silicon and Intel installers. Builds are ad-hoc signed and not notarized. Windows installers are unsigned.
