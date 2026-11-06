@@ -1,6 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {
@@ -45,6 +47,30 @@ interface UpdateState {
 }
 
 let checking: Promise<void> | null = null;
+let versionRequest: Promise<string | null> | null = null;
+
+// Reading the local application version never contacts the release channel.
+export function loadAppVersion() {
+  if (!isTauri()) return Promise.resolve<string | null>(null);
+  versionRequest ??= getVersion().catch(() => null);
+  return versionRequest;
+}
+
+export function useAppVersion() {
+  const currentVersion = useUpdateStore((state) => state.currentVersion);
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (currentVersion) return;
+    let active = true;
+    void loadAppVersion().then((value) => {
+      if (active) setVersion(value);
+    });
+    return () => {
+      active = false;
+    };
+  }, [currentVersion]);
+  return currentVersion ?? version;
+}
 
 export const useUpdateStore = create<UpdateState>()(
   persist(

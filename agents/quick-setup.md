@@ -678,3 +678,48 @@ Implemented and verified for this increment:
   held writes, retry, server isolation, reload, proof expiry and stale reviews.
   Focused recovery cases were rerun after banner fixes. Native cargo check and
   formatting passed; no native behavior changed in this increment.
+
+## Reviewed current-account public-key installation — 2026-11-06
+
+Implement native read-only preparation, explicit review/confirm, single-use
+application and rejection. Only the selected public key and current source
+account may be used; no renderer-supplied paths/commands/key text. Preserve
+existing authorization bytes/options, reject duplicate-key escalation, detect
+stale remote files and unsafe paths, create protected backups, keep current
+session/password/port/UFW unchanged. Follow installation with independent exact-key
+verification; retain honest failure and uncertain-result feedback. Test real file
+operations only in temporary homes and loopback fixtures. Broader provisioning
+adapters remain pending. Named implementation chat:
+`vps-pilot-public-key-install-20261106`.
+
+Implementation verified for the public-key installation/sidebar increment:
+
+- Native review/apply/reject IPC resolves the selected public header locally,
+  derives the current account from the active profile and remote passwd record,
+  and runs the bounded native helper on that existing authenticated channel.
+  No private key or passphrase is uploaded. Reviews are expiring, source/key/host
+  bound, single-use and explicitly confirmed. Existing bytes/options remain;
+  an existing file gets a protected backup. Unsafe/stale files and duplicate-key
+  escalation are refused. Password/port/UFW/daemon settings remain untouched.
+- The GUI exposes installation review, apply result/backup, cancellation, expiry
+  and uncertain outcomes. It locks competing key/config operations and keeps
+  installation separate from the independent selected-key proof. The reviewed
+  mutation and bounded result metadata also appear in the command console.
+- Shared official shadcn/Base UI sidebar composition is container-scoped below
+  the existing tabs/stats headers: 256px expanded, 56px collapsed, reduced-motion
+  support, accessible icon labels/tooltips and mobile disclosure. Collapse is
+  saved in the validated workspace document. The footer shows runtime version
+  and current/new update details without extra update-check polling.
+- Independent checks passed: bun check/build, 68 src unit tests, native 142 passed
+  with 5 intentionally ignored, Rust formatting and strict all-target Clippy.
+  Browser coverage: 33 relevant scenarios passed across the main run and focused
+  reruns; final installation flow passed again after command-console integration.
+- Native fixtures execute the actual installer in private temporary homes and
+  authenticate over real loopback SSH from the resulting authorization file;
+  the original PTY stays alive. No important VPS, real user SSH files or agents
+  were used. Early fixture failures were fixed by explicitly protecting temp
+  ancestors and setting the intended fixture modes, preserving production checks.
+- Command Code wrote native/sidebar/frontend implementation and tests in named
+  sessions. Codex reviewed, integrated and independently verified the result,
+  with focused safety-review requests, fixture/test-selector/lint repairs and
+  command-console integration. CLI processes exited; no idle sessions are needed.

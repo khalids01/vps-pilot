@@ -60,6 +60,22 @@ describe("workspace preference boundaries", () => {
     expect(result).toEqual(defaultPreferences().servers["sample-production"]);
   });
 
+  test("restores the non-secret sidebar collapse preference and defaults missing values", () => {
+    const input = defaultPreferences();
+    expect(input.sidebarCollapsed).toBe(false);
+    expect(
+      sanitizePreferences({ ...input, sidebarCollapsed: true })
+        ?.sidebarCollapsed,
+    ).toBe(true);
+    expect(
+      sanitizePreferences({ ...input, sidebarCollapsed: "yes" })
+        ?.sidebarCollapsed,
+    ).toBe(false);
+    const legacy: Record<string, unknown> = { ...input };
+    delete legacy.sidebarCollapsed;
+    expect(sanitizePreferences(legacy)?.sidebarCollapsed).toBe(false);
+  });
+
   test("rejects invalid or unsupported preference formats", () => {
     expect(sanitizePreferences(null)).toBeNull();
     expect(

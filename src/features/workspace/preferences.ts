@@ -18,6 +18,7 @@ export interface WorkspacePreferences {
   page?: "fleet" | "server";
   openServerIds: string[];
   activeServerId: string | null;
+  sidebarCollapsed: boolean;
   servers: Record<string, ServerPreferences>;
 }
 export const workspacePreferenceKey = "vps-pilot:sample-workspace:v1";
@@ -38,6 +39,7 @@ export function defaultPreferences(): WorkspacePreferences {
     page: "fleet",
     openServerIds: [],
     activeServerId: null,
+    sidebarCollapsed: false,
     servers: Object.fromEntries(
       sampleServers.map((server) => [
         server.id,
@@ -74,6 +76,8 @@ export function sanitizePreferences(
     return null;
   const result = defaultPreferences();
   result.page = value.page === "fleet" ? "fleet" : "server";
+  if (typeof value.sidebarCollapsed === "boolean")
+    result.sidebarCollapsed = value.sidebarCollapsed;
   result.openServerIds = [
     ...new Set(
       value.openServerIds.filter(

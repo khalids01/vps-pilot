@@ -1,11 +1,12 @@
-VPS Pilot 0.2.2
+VPS Pilot 0.2.3
 
-- Test SSH keys against the connected account and port, with planned access shown separately.
-- Explain rejected keys and the public-key installation prerequisite without implying server settings were changed.
-- Show per-VPS draft saving, saved and retry states; retain failed choices for retry and ignore stale save acknowledgements.
-- Restore saved setup choices across navigation and restarts, with independent state for each VPS.
-- Clear recovered document-save warnings without hiding unrelated settings errors.
+- Install the selected public SSH key for the connected account after reviewing and confirming the destination, fingerprint and backup plan.
+- Preserve existing authorized keys and restrictions, keep protected backups, and test key login separately without changing password authentication, ports or firewall settings.
+- Reject expired or stale installation reviews and report uncertain interrupted outcomes without automatically retrying.
+- Expand the tool sidebar to 256px or collapse it to a 56px icon rail, with saved collapse state, accessible labels and mobile navigation below the headers.
+- Keep VPS tabs, stats and terminal sessions in place when toggling the sidebar.
+- Show the running app version and clearer current-to-available update details in the sidebar footer.
 
-Quick Setup does not yet install public keys, create server accounts, change SSH/UFW settings or install packages. A successful current-account key test does not verify planned access.
+Public-key installation requires a supported Linux server with Python 3 and uses the connected account's default ~/.ssh/authorized_keys. Custom AuthorizedKeysFile routes are not detected. Broader account creation, SSH/UFW migration and package provisioning remain unavailable.
 
 macOS downloads include Apple Silicon and Intel installers, ad-hoc signed and not notarized. Windows installers are unsigned.

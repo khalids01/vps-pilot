@@ -458,3 +458,26 @@ succeeds. Keep failed latest writes in memory for explicit retry without silentl
 resetting choices. Passwords/passphrases remain transient; persistence failure
 must not permit secrets or corrupt/future-draft overwrites. No claim of durable
 saving before native acknowledgment. Existing important-VPS restrictions remain.
+
+## Reviewed public-key installation and sidebar — 2026-11-06
+
+The user authorized implementing the missing public-key installation action in
+Quick Setup. This is a narrowly scoped exception to the server credential-file
+write restrictions: append the selected public key for the currently connected
+account only after a fresh native review and explicit in-app confirmation.
+Preserve existing authorized keys, protected backup, original SSH session and
+all password/port/firewall settings. Never upload private key bytes/passphrases.
+Revalidate source connection/revision/host identity/key digest and remote snapshot,
+refuse unsafe permissions/symlinks/hardlinks and stale/replayed reviews. Bound
+operations and make failures/uncertain outcomes explicit. Installation alone is
+not proof; independently test the exact selected key afterward. Validate in
+local temporary homes and disposable loopback SSH fixtures, never important VPS.
+No planned administrator creation or SSH/UFW migration is authorized in this slice.
+
+Use the official shadcn/Base UI sidebar composition, about 256px expanded with an
+icon-only collapsed state and smooth reduced-motion-aware transitions. Keep tabs
+and stats headers in place; put the toggle at the stats bar's left, replacing the
+read-only badge without broadening any native action permissions. Show the actual
+application version in the sidebar footer and improve current/new update details.
+Preserve open sessions/streams, tool state, keyboard/tooltip accessibility and
+mobile navigation. Collapse is a non-secret persisted local preference.

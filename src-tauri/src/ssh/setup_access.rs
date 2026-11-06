@@ -7,6 +7,8 @@
 //! memory-only, bounded, and never contain credentials or key bytes.
 
 #[cfg(unix)]
+pub(super) mod install_key;
+#[cfg(unix)]
 mod local_config;
 
 use super::{auth, client_config, Client, HostKey, Profile, SshService, NETWORK_TIMEOUT};
@@ -65,6 +67,8 @@ impl Inner {
 #[derive(Default)]
 pub struct State {
     inner: Arc<Mutex<Inner>>,
+    #[cfg(unix)]
+    pub(super) install: install_key::State,
 }
 
 struct AttemptGuard {
@@ -206,6 +210,19 @@ impl State {
             Ok(())
         } else {
             Err("The SSH config review expired or is unavailable.".into())
+        }
+    }
+
+    /// A completed remote mutation invalidates prior login proofs and config
+    /// reviews for the affected server only; other servers' evidence is kept.
+    fn clear_setup_evidence(&self, profile_id: &str) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner
+                .proofs
+                .retain(|_, proof| proof.profile_id != profile_id);
+            inner
+                .reviews
+                .retain(|_, review| review.profile_id != profile_id);
         }
     }
 
@@ -404,6 +421,51 @@ pub struct VerifyRequest {
     pub username: String,
     pub port: u16,
     pub passphrase: Option<String>,
+}
+
+/// Native-only request for a reviewed current-account public-key installation.
+/// Every field is revalidated against the saved profile, live connection,
+/// trusted host identity and resolved local key before applying.
+pub struct InstallRequest {
+    pub profile_id: String,
+    pub profile_revision: String,
+    pub connection_id: String,
+    pub key_id: String,
+}
+
+/// Preview for appending the selected public key to the current account's
+/// default `~/.ssh/authorized_keys`. No private path, key bytes, passphrase or
+/// existing authorized-key contents are included.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupKeyInstallReview {
+    pub review_id: String,
+    pub profile_id: String,
+    pub profile_revision: String,
+    pub connection_id: String,
+    pub key_id: String,
+    pub key_fingerprint: String,
+    pub username: String,
+    pub host: String,
+    pub port: u16,
+    pub destination: String,
+    pub command: String,
+    pub purpose: String,
+    pub already_present: bool,
+    pub backup_planned: bool,
+    pub expires_at_ms: u64,
+}
+
+/// Result of a confirmed installation. `installed` means the selected public key
+/// was appended (or written to a new file); `alreadyPresent` means an equivalent
+/// line, including one with restrictive options, already existed.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupKeyInstallResult {
+    pub status: &'static str,
+    pub backup_path: Option<String>,
+    pub username: String,
+    pub port: u16,
 }
 
 fn validate_target_username(value: &str) -> Result<(), String> {
@@ -904,4 +966,71 @@ pub fn ssh_setup_config_reject(
     review_id: String,
 ) -> Result<(), String> {
     service.reject_setup_config(&review_id)
+}
+
+#[tauri::command]
+pub async fn ssh_setup_key_install_review(
+    service: tauri::State<'_, SshService>,
+    vault: tauri::State<'_, KeyVault>,
+    profile_id: String,
+    profile_revision: String,
+    connection_id: String,
+    key_id: String,
+) -> Result<SetupKeyInstallReview, String> {
+    service
+        .review_setup_key_install(
+            vault.inner(),
+            InstallRequest {
+                profile_id,
+                profile_revision,
+                connection_id,
+                key_id,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn ssh_setup_key_install_apply(
+    service: tauri::State<'_, SshService>,
+    vault: tauri::State<'_, KeyVault>,
+    review_id: String,
+) -> Result<SetupKeyInstallResult, String> {
+    service
+        .apply_setup_key_install(vault.inner(), &review_id)
+        .await
+}
+
+#[tauri::command]
+pub fn ssh_setup_key_install_reject(
+    service: tauri::State<'_, SshService>,
+    review_id: String,
+) -> Result<(), String> {
+    service.reject_setup_key_install(&review_id)
+}
+
+#[cfg(not(unix))]
+impl SshService {
+    pub(crate) async fn review_setup_key_install(
+        &self,
+        vault: &KeyVault,
+        request: InstallRequest,
+    ) -> Result<SetupKeyInstallReview, String> {
+        let _ = (vault, request);
+        Err("Reviewed public-key installation is unavailable on this platform.".into())
+    }
+
+    pub(crate) async fn apply_setup_key_install(
+        &self,
+        vault: &KeyVault,
+        review_id: &str,
+    ) -> Result<SetupKeyInstallResult, String> {
+        let _ = (vault, review_id);
+        Err("Reviewed public-key installation is unavailable on this platform.".into())
+    }
+
+    pub(crate) fn reject_setup_key_install(&self, review_id: &str) -> Result<(), String> {
+        let _ = review_id;
+        Err("Reviewed public-key installation is unavailable on this platform.".into())
+    }
 }

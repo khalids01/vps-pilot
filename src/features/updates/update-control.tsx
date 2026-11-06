@@ -1,6 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
 import {
-  BellRingIcon,
   BugIcon,
   CheckCircle2Icon,
   DownloadIcon,
@@ -20,8 +19,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useSidebarOptional } from "@/components/ui/sidebar";
+import { Tooltip } from "@/components/ui/tooltip";
 import { parseReleaseNotes, type ReleaseNoteCategory } from "./release-notes";
-import { type UpdateStatus, useUpdateStore } from "./update-store";
+import {
+  type UpdateStatus,
+  useAppVersion,
+  useUpdateStore,
+} from "./update-store";
 
 export function UpdateControl() {
   const status = useUpdateStore((state) => state.status);
@@ -43,6 +48,8 @@ export function UpdateControl() {
 
 export function UpdateSidebarNotice() {
   const state = useUpdateStore();
+  const sidebar = useSidebarOptional();
+  const appVersion = useAppVersion();
   const isHiddenForVersion =
     state.version === state.skippedVersion ||
     state.version === state.deferredVersion;
@@ -55,51 +62,110 @@ export function UpdateSidebarNotice() {
   if (!visible) return null;
 
   const percent = getPercent(state.downloadedBytes, state.totalBytes);
+  const current = state.currentVersion ?? appVersion;
+  const versionPair =
+    current && state.version
+      ? `v${current} \u2192 v${state.version}`
+      : state.version
+        ? `v${state.version}`
+        : null;
+  const title =
+    state.status === "downloading"
+      ? "Installing update"
+      : state.status === "restartRequired" || state.status === "installed"
+        ? "Restart required"
+        : "Update available";
+  const detail =
+    state.status === "downloading"
+      ? percent === null
+        ? `${formatBytes(state.downloadedBytes)} downloaded`
+        : `${percent}% downloaded`
+      : (versionPair ?? "View update details");
+  const accessibleLabel =
+    state.status === "downloading"
+      ? `${title}: ${detail}`
+      : state.status === "restartRequired" || state.status === "installed"
+        ? `${title}: ${versionPair ?? "Restart VPS Pilot to finish updating"}`
+        : `${title}: ${versionPair ?? "View update details"}`;
+  const Icon =
+    state.status === "restartRequired" || state.status === "installed"
+      ? RotateCcwIcon
+      : DownloadIcon;
+  const collapsed = sidebar?.state === "collapsed" && !sidebar?.isMobile;
+
+  if (collapsed) {
+    return (
+      <div className="flex shrink-0 justify-center px-1 pb-1">
+        <Tooltip content={accessibleLabel}>
+          <button
+            type="button"
+            onClick={() => state.setDialogOpen(true)}
+            aria-label={accessibleLabel}
+            data-update-status={state.status}
+            data-current-version={current ?? ""}
+            data-available-version={state.version ?? ""}
+            className="relative grid size-8 place-items-center rounded-md border border-primary/30 bg-primary/10 text-primary outline-none transition-colors hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          >
+            <Icon className="size-4" aria-hidden="true" />
+            {state.status === "downloading" && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-1 bottom-1 h-0.5 overflow-hidden rounded-full bg-primary/20"
+              >
+                <span
+                  className={`block h-full rounded-full bg-primary ${percent === null ? "w-1/3 animate-pulse" : "transition-[width]"}`}
+                  style={
+                    percent === null ? undefined : { width: `${percent}%` }
+                  }
+                />
+              </span>
+            )}
+          </button>
+        </Tooltip>
+      </div>
+    );
+  }
+
   return (
-    <div className="shrink-0 border-t border-border p-3">
+    <div className="shrink-0 px-2 pb-1">
       <button
         type="button"
         onClick={() => state.setDialogOpen(true)}
-        className="group w-full rounded-xl border border-primary/25 bg-primary/8 p-3 text-left transition-colors hover:border-primary/45 hover:bg-primary/12 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        aria-label={accessibleLabel}
+        data-update-status={state.status}
+        data-current-version={current ?? ""}
+        data-available-version={state.version ?? ""}
+        className="group w-full rounded-lg border border-primary/25 bg-primary/8 p-2.5 text-left transition-colors hover:border-primary/45 hover:bg-primary/12 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        <div className="flex items-start gap-2.5">
-          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-            {state.status === "restartRequired" ? (
-              <RotateCcwIcon className="size-4" />
-            ) : (
-              <DownloadIcon className="size-4" />
-            )}
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground shadow-sm">
+            <Icon className="size-4" aria-hidden="true" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold">
-              {state.status === "downloading"
-                ? "Installing update"
-                : state.status === "restartRequired"
-                  ? "Restart required"
-                  : "Update available"}
-            </span>
-            <span className="mt-0.5 block text-xs text-muted-foreground">
-              {state.status === "downloading"
-                ? percent === null
-                  ? `${formatBytes(state.downloadedBytes)} downloaded`
-                  : `${percent}% downloaded`
-                : state.version
-                  ? `VPS Pilot ${state.version}`
-                  : "View update details"}
+            <span className="block text-xs font-semibold">{title}</span>
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              {detail}
             </span>
           </span>
-          <BellRingIcon className="mt-1 size-4 shrink-0 text-primary" />
+          <span className="shrink-0 rounded-md bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            {state.status === "restartRequired" || state.status === "installed"
+              ? "Restart"
+              : state.status === "downloading"
+                ? "Installing"
+                : "Update"}
+          </span>
         </div>
-        {state.status === "downloading" && (
-          <ProgressBar percent={percent} className="mt-3" />
-        )}
       </button>
+      {state.status === "downloading" && (
+        <ProgressBar percent={percent} className="mt-1.5" />
+      )}
     </div>
   );
 }
 
 export function UpdateDialog() {
   const state = useUpdateStore();
+  const appVersion = useAppVersion();
   const percent = getPercent(state.downloadedBytes, state.totalBytes);
 
   function handleOpenChange(open: boolean) {
@@ -132,6 +198,7 @@ export function UpdateDialog() {
 
         <UpdateBody
           status={state.status}
+          currentVersion={state.currentVersion ?? appVersion}
           version={state.version}
           notes={state.notes}
           error={state.error}
@@ -211,6 +278,7 @@ function UpdateActions({ status }: { status: UpdateStatus }) {
 
 function UpdateBody({
   status,
+  currentVersion,
   version,
   notes,
   error,
@@ -219,6 +287,7 @@ function UpdateBody({
   total,
 }: {
   status: UpdateStatus;
+  currentVersion: string | null;
   version: string | null;
   notes: string | null;
   error: string | null;
@@ -267,7 +336,9 @@ function UpdateBody({
           <div>
             <p className="font-semibold">Version {version} is ready</p>
             <p className="text-sm text-muted-foreground">
-              Review the changes before installing.
+              {currentVersion
+                ? `v${currentVersion} \u2192 v${version}. Review the changes before installing.`
+                : "Review the changes before installing."}
             </p>
           </div>
         </div>

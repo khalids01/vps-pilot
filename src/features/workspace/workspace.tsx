@@ -32,6 +32,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { HelperWorkspace } from "@/features/helper/helper-workspace";
 import { SettingsPage } from "@/features/settings/settings-page";
@@ -47,7 +61,10 @@ import {
 } from "@/features/ssh/api";
 import { ProfileManager } from "@/features/ssh/profile-manager";
 import { RemoteWorkspace } from "@/features/ssh/remote-workspace";
-import { SidebarFooter } from "@/features/updates/sidebar-footer";
+import {
+  SidebarFooter as AppSidebarFooter,
+  SidebarVersion,
+} from "@/features/updates/sidebar-footer";
 import {
   UpdateManager,
   UpdateSidebarNotice,
@@ -266,12 +283,16 @@ function ServerWorkspace({
   onPreferencesChange,
   onSettings,
   settingsOpen,
+  sidebarCollapsed,
+  onSidebarCollapsedChange,
 }: {
   server: SampleServer;
   preferences: ServerPreferences;
   onPreferencesChange: (patch: Partial<ServerPreferences>) => void;
   onSettings: () => void;
   settingsOpen: boolean;
+  sidebarCollapsed: boolean;
+  onSidebarCollapsedChange: (collapsed: boolean) => void;
 }) {
   const selectedTool = preferences.tool;
   const [terminalOpened, setTerminalOpened] = useState(
@@ -282,45 +303,70 @@ function ServerWorkspace({
     onPreferencesChange({ tool: id });
   }
   const tool = tools.find((item) => item.id === selectedTool) ?? tools[0];
+  const sidebarTools = tools.filter(
+    ({ id }) => id !== "software" && id !== "storage",
+  );
+  const sidebarGroups = [
+    { label: "Workspace", items: sidebarTools.slice(0, 2) },
+    { label: "Manage", items: sidebarTools.slice(2) },
+  ];
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <SidebarProvider
+      open={!sidebarCollapsed}
+      onOpenChange={(open) => onSidebarCollapsedChange(!open)}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${server.name} tools`}
-          className="sidebar-scroll flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
+          className="sidebar-scroll flex min-h-0 shrink-0"
         >
-          <div className="sidebar-scroll flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
-            <p className="hidden px-3 pt-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
-              Workspace
-            </p>
-            {tools
-              .filter(({ id }) => id !== "software" && id !== "storage")
-              .map(({ id, label, icon: Icon }, index) => (
-                <div key={id} className={id === "helper" ? "md:pt-5" : ""}>
-                  {index === 2 && (
-                    <p className="mt-4 hidden border-t px-3 pt-4 pb-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground md:block">
-                      Manage
-                    </p>
-                  )}
-                  <Button
-                    variant="ghost"
-                    aria-current={
-                      !settingsOpen && selectedTool === id ? "page" : undefined
-                    }
-                    onClick={() => navigateToTool(id)}
-                    className={`h-10 w-full justify-start gap-3 px-3 ${!settingsOpen && selectedTool === id ? "bg-sidebar-accent text-primary hover:bg-sidebar-accent hover:text-primary" : "text-muted-foreground"}`}
-                  >
-                    <Icon className="size-4" aria-hidden="true" />
+          <Sidebar collapsible="icon">
+            <SidebarContent className="px-2 py-2">
+              {sidebarGroups.map(({ label, items }) => (
+                <SidebarGroup key={label} className="p-0">
+                  <SidebarGroupLabel className="px-3 text-[10px] tracking-[0.18em] uppercase">
                     {label}
-                  </Button>
-                </div>
+                  </SidebarGroupLabel>
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {items.map(({ id, label, icon: Icon }) => {
+                        const active = !settingsOpen && selectedTool === id;
+                        return (
+                          <SidebarMenuItem
+                            key={id}
+                            className={id === "helper" ? "mt-4" : undefined}
+                          >
+                            <SidebarMenuButton
+                              isActive={active}
+                              aria-current={active ? "page" : undefined}
+                              aria-label={label}
+                              tooltip={label}
+                              onClick={() => navigateToTool(id)}
+                              className={`h-10 gap-3 px-3 data-active:text-primary! ${active ? "" : "text-muted-foreground"}`}
+                            >
+                              <Icon className="size-4" aria-hidden="true" />
+                              <span className="truncate transition-opacity duration-200 group-data-[collapsible=icon]:opacity-0">
+                                {label}
+                              </span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
               ))}
-            <SidebarFooter
-              settingsOpen={settingsOpen}
-              onSettings={onSettings}
-            />
-          </div>
-          <UpdateSidebarNotice />
+            </SidebarContent>
+            <SidebarFooter>
+              <AppSidebarFooter
+                settingsOpen={settingsOpen}
+                onSettings={onSettings}
+              />
+              <UpdateSidebarNotice />
+              <SidebarVersion />
+            </SidebarFooter>
+          </Sidebar>
         </nav>
         {settingsOpen && <SettingsPage />}
         <main
@@ -331,20 +377,26 @@ function ServerWorkspace({
             className={`mx-auto w-full max-w-6xl ${selectedTool === "terminal" ? "flex min-h-full flex-col" : ""}`}
           >
             <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
-                  {server.name} / {tool.label}
-                </p>
-                <h1 className="text-2xl font-medium tracking-tight sm:text-3xl">
-                  {selectedTool === "overview"
-                    ? "Your server, at a glance."
-                    : tool.label}
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {selectedTool === "overview"
-                    ? server.description
-                    : tool.description}
-                </p>
+              <div className="flex min-w-0 items-start gap-3">
+                <SidebarTrigger
+                  aria-label="Toggle tool sidebar"
+                  className="mt-1 shrink-0"
+                />
+                <div>
+                  <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-primary">
+                    {server.name} / {tool.label}
+                  </p>
+                  <h1 className="text-2xl font-medium tracking-tight sm:text-3xl">
+                    {selectedTool === "overview"
+                      ? "Your server, at a glance."
+                      : tool.label}
+                  </h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {selectedTool === "overview"
+                      ? server.description
+                      : tool.description}
+                  </p>
+                </div>
               </div>
               <span className="rounded-lg border bg-card px-3 py-2">
                 <SampleStatus available={server.available} />
@@ -410,7 +462,7 @@ function ServerWorkspace({
         </span>
         <span>No SSH connection · sample workspace</span>
       </footer>
-    </div>
+    </SidebarProvider>
   );
 }
 
@@ -426,6 +478,8 @@ function WorkspaceContent() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { preferences, setPreferences, notice } = useWorkspacePreferences();
   const { openServerIds, activeServerId } = preferences;
+  const setSidebarCollapsed = (sidebarCollapsed: boolean) =>
+    setPreferences((current) => ({ ...current, sidebarCollapsed }));
   const fleetOpen = preferences.page === "fleet" || !openServerIds.length;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -704,6 +758,8 @@ function WorkspaceContent() {
                         },
                       }));
                     }}
+                    sidebarCollapsed={preferences.sidebarCollapsed}
+                    onSidebarCollapsedChange={setSidebarCollapsed}
                     status={statuses.data?.find(
                       (status) => status.profileId === profile.id,
                     )}
@@ -742,6 +798,8 @@ function WorkspaceContent() {
                   settingsOpen && !fleetOpen && activeServerId === id
                 }
                 preferences={preferences.servers[server.id]}
+                sidebarCollapsed={preferences.sidebarCollapsed}
+                onSidebarCollapsedChange={setSidebarCollapsed}
                 onPreferencesChange={(patch) => {
                   if (patch.tool) setSettingsOpen(false);
                   setPreferences((current) => ({
@@ -757,42 +815,59 @@ function WorkspaceContent() {
           ) : null;
         })}
         {fleetOpen && (
-          <div className="flex min-h-0 flex-1">
+          <SidebarProvider
+            open={!preferences.sidebarCollapsed}
+            onOpenChange={(open) => setSidebarCollapsed(!open)}
+            className="flex min-h-0 flex-1 flex-col md:flex-row"
+          >
+            <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2 md:hidden">
+              <SidebarTrigger aria-label="Toggle navigation sidebar" />
+              <span className="text-xs text-muted-foreground">Navigation</span>
+            </div>
             <nav
               aria-label="Application navigation"
-              className="flex w-48 shrink-0 flex-col border-r bg-sidebar p-3"
+              className="sidebar-scroll order-2 flex min-h-0 shrink-0 md:order-none"
             >
-              <SidebarFooter
-                settingsOpen={settingsOpen}
-                onSettings={() => setSettingsOpen(true)}
-              />
-              <div className="mt-auto">
-                <UpdateSidebarNotice />
-              </div>
+              <Sidebar collapsible="icon">
+                <SidebarHeader className="hidden md:flex">
+                  <SidebarTrigger aria-label="Toggle navigation sidebar" />
+                </SidebarHeader>
+                <SidebarContent />
+                <SidebarFooter>
+                  <AppSidebarFooter
+                    settingsOpen={settingsOpen}
+                    onSettings={() => setSettingsOpen(true)}
+                  />
+                  <UpdateSidebarNotice />
+                  <SidebarVersion />
+                </SidebarFooter>
+              </Sidebar>
             </nav>
-            {settingsOpen ? (
-              <SettingsPage />
-            ) : (
-              <FleetHome
-                profiles={profiles.data ?? []}
-                statuses={statuses.data ?? []}
-                onOpen={openRemote}
-                onAdd={() => setManagerOpen(true)}
-                onRefresh={() => {
-                  void profiles.refetch();
-                  void statuses.refetch();
-                }}
-                loading={profiles.isFetching}
-                error={
-                  profiles.error
-                    ? safeError(profiles.error)
-                    : statuses.error
-                      ? safeError(statuses.error)
-                      : ""
-                }
-              />
-            )}
-          </div>
+            <div className="order-3 flex min-h-0 flex-1 flex-col md:order-none">
+              {settingsOpen ? (
+                <SettingsPage />
+              ) : (
+                <FleetHome
+                  profiles={profiles.data ?? []}
+                  statuses={statuses.data ?? []}
+                  onOpen={openRemote}
+                  onAdd={() => setManagerOpen(true)}
+                  onRefresh={() => {
+                    void profiles.refetch();
+                    void statuses.refetch();
+                  }}
+                  loading={profiles.isFetching}
+                  error={
+                    profiles.error
+                      ? safeError(profiles.error)
+                      : statuses.error
+                        ? safeError(statuses.error)
+                        : ""
+                  }
+                />
+              )}
+            </div>
+          </SidebarProvider>
         )}
       </Tabs>
       {paletteOpen && (

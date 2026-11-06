@@ -35,6 +35,12 @@ it. Both use port 1430.
 Run `bun run tauri dev` from this repository for real SSH testing. Browser preview
 has no native SSH bridge; automated browser scenarios supply their own fixtures.
 
+The tool sidebar uses the shared shadcn/Base UI sidebar components. It is 256 px
+wide when expanded and collapses to a 56 px icon rail using the button at the
+left of the stats bar. Collapse state survives restarts; tabs, terminal sessions
+and stats stay in place. Mobile navigation opens below the headers. The footer
+shows the running app version and, when available, the current/new update versions.
+
 Quick Setup now opens an eight-step wizard. Choose an administrator, key strategy,
 SSH/firewall preferences, application stack, editor and runtimes, then inspect the
 final summary. Draft choices are saved per server across restarts; the header
@@ -96,6 +102,20 @@ The server must already accept the public key for that account/port. A rejection
 does not change server settings or disable password authentication. A successful
 current-access test does not verify planned access, establish sudo access,
 disable passwords, or verify firewall recovery.
+
+If the selected public key is not installed yet, choose **Install public key**.
+Review the connected account, destination, fingerprint and backup plan, then
+confirm. On supported Linux servers with Python 3, this appends only the public
+key to that account's default `~/.ssh/authorized_keys`. Existing keys/options and
+file permissions are preserved, with a protected backup of an existing file.
+Unsafe files or changed review evidence are refused. An existing restricted key
+is not duplicated as an unrestricted entry. Custom `AuthorizedKeysFile` routes
+are not detected. Private keys and passphrases stay on your computer.
+
+Installation uses the existing authenticated connection and does not change
+password authentication, ports, the SSH daemon or firewall. Run **Test key on
+current connection** afterward; installation alone does not prove login.
+Application of the reviewed command and its result appear in the command console.
 
 After verification, choose an alias and **Review SSH config**, then explicitly
 **Save to SSH config**. The native preview contains only the proposed app-owned

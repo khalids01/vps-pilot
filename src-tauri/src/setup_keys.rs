@@ -167,6 +167,20 @@ pub struct ResolvedConfigKey {
     pub origin: KeyOrigin,
 }
 
+/// Safe, renderer-independent resolved public identity for the reviewed
+/// current-account public-key installation. The private path and key bytes stay
+/// native; only the canonical public line is used remotely.
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedInstallKey {
+    pub key_id: String,
+    pub path: PathBuf,
+    pub fingerprint: String,
+    pub digest: [u8; 32],
+    pub location: KeyLocation,
+    pub public_line: String,
+}
+
 pub struct KeyVault {
     legacy_root: PathBuf,
     ssh_root: PathBuf,
@@ -2050,6 +2064,60 @@ fn resolve_metadata_blocking(
 }
 
 #[cfg(unix)]
+fn resolve_install_key_blocking(
+    legacy_root: &Path,
+    ssh_root: &Path,
+    key_id: &str,
+) -> Result<ResolvedInstallKey, String> {
+    let id = canonical_id(key_id)?;
+    let metadata = resolve_metadata_blocking(legacy_root, ssh_root, &id)?;
+    if metadata.origin == KeyOrigin::Legacy {
+        return Err(
+            "This key is in the app vault. Put it in ~/.ssh before installing its public key."
+                .into(),
+        );
+    }
+    if let Some(reason) = &metadata.public_issue {
+        return Err(format!(
+            "The selected local key cannot be installed. {reason}"
+        ));
+    }
+    if metadata.origin == KeyOrigin::Generated && metadata.public_path.is_none() {
+        return Err(
+            "The matching public key file is missing. Generated key pairs require it before the public key can be installed."
+                .into(),
+        );
+    }
+    let owner = path_owner(&metadata.path)?;
+    let (private, bytes) = read_private_file(&metadata.path, owner)?;
+    let fingerprint = private.fingerprint(HashAlg::Sha256).to_string();
+    if fingerprint != metadata.fingerprint || private_digest(bytes.as_slice()) != metadata.digest {
+        return Err("The selected local key changed while it was being read. Try again.".into());
+    }
+    if let Some(public_path) = &metadata.public_path {
+        let public = read_public_sidecar(public_path, owner)?;
+        if public.fingerprint(HashAlg::Sha256).to_string() != fingerprint {
+            return Err(
+                "The matching public key file does not match the selected private key. Nothing was changed."
+                    .into(),
+            );
+        }
+    }
+    let public_line = private
+        .public_key()
+        .to_openssh()
+        .map_err(|_| "The selected public key could not be encoded.".to_string())?;
+    Ok(ResolvedInstallKey {
+        key_id: id,
+        path: metadata.path,
+        fingerprint,
+        digest: metadata.digest,
+        location: metadata.location,
+        public_line,
+    })
+}
+
+#[cfg(unix)]
 fn path_owner(path: &Path) -> Result<u32, String> {
     let parent = path
         .parent()
@@ -2275,6 +2343,23 @@ impl KeyVault {
             location: metadata.location,
             origin: metadata.origin,
         })
+    }
+
+    /// Resolve a selected key to its canonical public line for the reviewed
+    /// current-account installation. Encrypted private keys are parsed for public
+    /// identity only; no passphrase or private material leaves this call.
+    pub(crate) async fn resolve_install_key_async(
+        &self,
+        key_id: &str,
+    ) -> Result<ResolvedInstallKey, String> {
+        let legacy = self.legacy_root.clone();
+        let ssh = self.ssh_root.clone();
+        let key_id = key_id.to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            resolve_install_key_blocking(&legacy, &ssh, &key_id)
+        })
+        .await
+        .map_err(|_| "The selected local key could not be prepared.".to_string())?
     }
 
     pub(crate) fn standard_ssh_root(&self) -> &Path {

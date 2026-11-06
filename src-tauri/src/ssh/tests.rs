@@ -3,6 +3,9 @@ use russh::{
     keys::{self, Algorithm, PrivateKey},
     server::{self, Server as _},
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::{
     net::TcpListener,
@@ -22,6 +25,12 @@ struct TestServer {
     sudo_channels: std::collections::HashSet<russh::ChannelId>,
     monitor_channels: std::collections::HashSet<russh::ChannelId>,
     configuration_channels: std::collections::HashSet<russh::ChannelId>,
+    install_channels: std::collections::HashSet<russh::ChannelId>,
+    install_input: std::collections::HashMap<russh::ChannelId, Vec<u8>>,
+    install_home: Option<std::path::PathBuf>,
+    install_wrapper: Option<std::path::PathBuf>,
+    install_requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    gate_explicit_key_on_install: bool,
     channels_closed: Arc<AtomicUsize>,
     open_pause: Arc<Mutex<Option<Arc<Notify>>>>,
     channel_opens: Arc<AtomicUsize>,
@@ -35,6 +44,25 @@ impl server::Server for TestServer {
     type Handler = Self;
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
         self.clone()
+    }
+}
+impl TestServer {
+    fn authorized_key_present(&self, public: &keys::PublicKey) -> bool {
+        let Some(home) = &self.install_home else {
+            return false;
+        };
+        let Ok(text) = std::fs::read_to_string(home.join(".ssh/authorized_keys")) else {
+            return false;
+        };
+        let Ok(wanted) = public.to_openssh() else {
+            return false;
+        };
+        let parts: Vec<&str> = wanted.split_whitespace().collect();
+        if parts.len() < 2 {
+            return false;
+        }
+        let needle = format!("{} {}", parts[0], parts[1]);
+        text.lines().any(|line| line.contains(&needle))
     }
 }
 impl server::Handler for TestServer {
@@ -83,6 +111,54 @@ impl server::Handler for TestServer {
         data: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if self.install_channels.contains(&channel) {
+            let complete = {
+                let buffer = self.install_input.entry(channel).or_default();
+                if buffer.len() + data.len() > 65536 {
+                    return Ok(());
+                }
+                buffer.extend_from_slice(data);
+                if serde_json::from_slice::<serde_json::Value>(buffer).is_ok() {
+                    Some(buffer.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(request) = complete {
+                self.install_input.remove(&channel);
+                self.install_requests.lock().unwrap().push(request.clone());
+                let output = self.install_wrapper.as_ref().map(|wrapper| {
+                    std::process::Command::new("python3")
+                        .arg(wrapper)
+                        .stdin(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .and_then(|mut child| {
+                            use std::io::Write as _;
+                            child.stdin.take().unwrap().write_all(&request)?;
+                            child.wait_with_output()
+                        })
+                });
+                match output {
+                    Some(Ok(output)) => {
+                        if !output.stdout.is_empty() {
+                            session.data(channel, output.stdout)?;
+                        }
+                        session.exit_status_request(
+                            channel,
+                            output.status.code().unwrap_or(1) as u32,
+                        )?;
+                    }
+                    _ => {
+                        session.data(channel, br#"{"ok":false,"reason":"io_error"}"#.to_vec())?;
+                        session.exit_status_request(channel, 1)?;
+                    }
+                }
+                session.close(channel)?;
+            }
+            return Ok(());
+        }
         if self.configuration_channels.contains(&channel) {
             // Keep the read pending until the client cancels; never execute Python.
             return Ok(());
@@ -141,6 +217,11 @@ impl server::Handler for TestServer {
             self.configuration_channels.insert(channel);
             return Ok(());
         }
+        #[cfg(unix)]
+        if data == setup_access::install_key::command().as_bytes() {
+            self.install_channels.insert(channel);
+            return Ok(());
+        }
         if data == monitor::command().as_bytes() {
             self.monitor_channels.insert(channel);
             return Ok(());
@@ -176,6 +257,8 @@ impl server::Handler for TestServer {
         _: &mut server::Session,
     ) -> Result<(), Self::Error> {
         self.configuration_channels.remove(&channel);
+        self.install_channels.remove(&channel);
+        self.install_input.remove(&channel);
         self.channels_closed.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -194,7 +277,8 @@ impl server::Handler for TestServer {
         self.auth_count.fetch_add(1, Ordering::SeqCst);
         let tester_key = user == "tester" && self.accepted_key.as_ref() == Some(key.public_key);
         let explicit_key = self.explicit_user.as_deref() == Some(user)
-            && self.explicit_key.as_ref() == Some(key.public_key);
+            && self.explicit_key.as_ref() == Some(key.public_key)
+            && (!self.gate_explicit_key_on_install || self.authorized_key_present(key.public_key));
         Ok(if tester_key || explicit_key {
             server::Auth::Accept
         } else {
@@ -217,6 +301,11 @@ impl server::Handler for TestServer {
         })
     }
 }
+struct InstallFixture {
+    home: PathBuf,
+    wrapper: PathBuf,
+    requests: Arc<Mutex<Vec<Vec<u8>>>>,
+}
 struct Fixture {
     port: u16,
     monitor_requests: Arc<AtomicUsize>,
@@ -230,6 +319,7 @@ struct Fixture {
     sizes: Arc<Mutex<Vec<(u32, u32)>>>,
     sudo_inputs: Arc<AtomicUsize>,
     service_snapshot: Arc<Mutex<String>>,
+    install_requests: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 impl Fixture {
     async fn start(port: u16, pause: Option<Arc<Notify>>) -> Self {
@@ -252,6 +342,65 @@ impl Fixture {
         explicit_key: Option<keys::PublicKey>,
         host_key: Option<PrivateKey>,
     ) -> Self {
+        Self::start_with_options(
+            port,
+            pause,
+            accepted_key,
+            allow_none,
+            explicit_user,
+            explicit_key,
+            host_key,
+            false,
+            None,
+        )
+        .await
+    }
+    #[cfg(unix)]
+    async fn start_for_install(
+        port: u16,
+        user: String,
+        key: keys::PublicKey,
+        host_key: Option<PrivateKey>,
+        home: PathBuf,
+    ) -> Self {
+        let parent = home.parent().unwrap().to_path_buf();
+        let script = parent.join("install_key.py");
+        std::fs::write(&script, setup_access::install_key::SCRIPT).unwrap();
+        let wrapper = parent.join("install-wrapper.py");
+        std::fs::write(
+            &wrapper,
+            setup_access::install_key::test_wrapper_source(&home, &user, &script),
+        )
+        .unwrap();
+        Self::start_with_options(
+            port,
+            None,
+            None,
+            false,
+            Some(user),
+            Some(key),
+            host_key,
+            true,
+            Some(InstallFixture {
+                home,
+                wrapper,
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn start_with_options(
+        port: u16,
+        pause: Option<Arc<Notify>>,
+        accepted_key: Option<keys::PublicKey>,
+        allow_none: bool,
+        explicit_user: Option<String>,
+        explicit_key: Option<keys::PublicKey>,
+        host_key: Option<PrivateKey>,
+        gate_explicit_key_on_install: bool,
+        install: Option<InstallFixture>,
+    ) -> Self {
         let socket = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
         let port = socket.local_addr().unwrap().port();
         let auth_count = Arc::new(AtomicUsize::new(0));
@@ -263,6 +412,12 @@ impl Fixture {
         let channels_closed = Arc::new(AtomicUsize::new(0));
         let open_pause = Arc::new(Mutex::new(None));
         let channel_opens = Arc::new(AtomicUsize::new(0));
+        let install_requests = install
+            .as_ref()
+            .map(|install| install.requests.clone())
+            .unwrap_or_default();
+        let install_home = install.as_ref().map(|install| install.home.clone());
+        let install_wrapper = install.as_ref().map(|install| install.wrapper.clone());
         let mut server = TestServer {
             configuration_channels: Default::default(),
             channels_closed: channels_closed.clone(),
@@ -271,6 +426,12 @@ impl Fixture {
             monitor_channels: Default::default(),
             monitor_requests: monitor_requests.clone(),
             sudo_channels: Default::default(),
+            install_channels: Default::default(),
+            install_input: Default::default(),
+            install_home: install_home.clone(),
+            install_wrapper,
+            install_requests: install_requests.clone(),
+            gate_explicit_key_on_install,
             service_snapshot: service_snapshot.clone(),
             sudo_inputs: sudo_inputs.clone(),
             commands: commands.clone(),
@@ -309,6 +470,7 @@ impl Fixture {
             sizes,
             sudo_inputs,
             service_snapshot,
+            install_requests,
         }
     }
     async fn stop(&mut self) {
@@ -2864,4 +3026,294 @@ async fn selected_external_space_key_proves_login_and_saves_a_quoted_config_entr
         streams::StreamEvent::Data { data, .. } if data == b"selected-source-alive"
     ));
     assert!(fixture.commands.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reviewed_public_key_install_enables_the_selected_key_and_keeps_the_source_pty_alive() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(
+        home_dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let home = home_dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::set_permissions(&home, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let home = std::fs::canonicalize(&home).unwrap();
+    let ssh_dir = home.join(".ssh");
+    std::fs::create_dir(&ssh_dir).unwrap();
+    std::fs::set_permissions(
+        &ssh_dir,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let original = format!(
+        "# keep existing key\nssh-ed25519 {} existing\n",
+        "B".repeat(43) + "="
+    );
+    std::fs::write(ssh_dir.join("authorized_keys"), original.as_bytes()).unwrap();
+    std::fs::set_permissions(
+        ssh_dir.join("authorized_keys"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let public_line = setup_public_key(&key).to_openssh().unwrap();
+    let fixture = Fixture::start_for_install(
+        0,
+        "tester".into(),
+        setup_public_key(&key),
+        Some(host_key),
+        home.clone(),
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"fixture shell ready"
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+
+    let request = || setup_access::InstallRequest {
+        profile_id: profile.id.clone(),
+        profile_revision: profile.revision.clone(),
+        connection_id: connection.clone(),
+        key_id: key.key_id.clone(),
+    };
+    let review = service
+        .review_setup_key_install(&vault, request())
+        .await
+        .unwrap();
+    assert_eq!(review.profile_id, profile.id);
+    assert_eq!(review.profile_revision, profile.revision);
+    assert_eq!(review.connection_id, connection);
+    assert_eq!(review.key_id, key.key_id);
+    assert_eq!(review.key_fingerprint, key.fingerprint);
+    assert_eq!(review.username, "tester");
+    assert_eq!(review.host, "127.0.0.1");
+    assert_eq!(review.port, fixture.port);
+    assert_eq!(
+        review.destination,
+        home.join(".ssh/authorized_keys").to_string_lossy()
+    );
+    assert!(!review.already_present);
+    assert!(review.backup_planned);
+    assert!(review.expires_at_ms > 0);
+    assert_eq!(review.command, setup_access::install_key::command());
+    let projected = serde_json::to_string(&review).unwrap();
+    assert!(!projected.contains("PRIVATE KEY"));
+    assert!(!projected.contains(&key.path));
+    assert!(!projected.contains(PASSPHRASE));
+
+    // The fixture only accepts the selected key after the reviewed install.
+    assert!(service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "tester",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .is_err());
+
+    let result = service
+        .apply_setup_key_install(&vault, &review.review_id)
+        .await
+        .unwrap();
+    assert_eq!(result.status, "installed");
+    assert_eq!(result.username, "tester");
+    assert_eq!(result.port, fixture.port);
+    let backup_path = PathBuf::from(result.backup_path.expect("existing file needs a backup"));
+    assert!(backup_path.starts_with(home.join(".ssh")));
+    assert_eq!(std::fs::read(&backup_path).unwrap(), original.as_bytes());
+    assert_eq!(
+        std::fs::metadata(&backup_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let installed = std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap();
+    assert!(installed.starts_with(original.as_str()));
+    assert!(installed.contains(public_line.as_str()));
+
+    // Only the selected public line crossed the IPC/command boundary; no
+    // private key, passphrase or renderer-supplied path appears.
+    let requests = fixture.install_requests.lock().unwrap().clone();
+    assert!(requests
+        .iter()
+        .any(|request| String::from_utf8_lossy(request).contains(&public_line)));
+    for request in &requests {
+        let text = String::from_utf8_lossy(request);
+        assert!(!text.contains(PASSPHRASE), "{text}");
+        assert!(!text.contains("PRIVATE KEY"), "{text}");
+        assert!(!text.contains(&key.path), "{text}");
+    }
+
+    let proof = service
+        .verify_setup_key_login(
+            &vault,
+            verify_request(
+                &profile,
+                &connection,
+                &key.key_id,
+                "tester",
+                fixture.port,
+                PASSPHRASE,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(proof.key_fingerprint, key.fingerprint);
+    assert_eq!(proof.username, "tester");
+
+    // Single-use: a replay never executes another remote command.
+    let commands = fixture.commands.lock().unwrap().len();
+    assert!(service
+        .apply_setup_key_install(&vault, &review.review_id)
+        .await
+        .is_err());
+    assert_eq!(fixture.commands.lock().unwrap().len(), commands);
+
+    // The original password-authenticated PTY remains usable.
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"install-source-alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"install-source-alive"
+    ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn install_reviews_are_rejectable_expiring_and_bound_to_the_source_and_key() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(
+        home_dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let home = home_dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::set_permissions(&home, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let home = std::fs::canonicalize(&home).unwrap();
+    let fixture = Fixture::start_for_install(
+        0,
+        "tester".into(),
+        setup_public_key(&key),
+        Some(host_key),
+        home,
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let request = || setup_access::InstallRequest {
+        profile_id: profile.id.clone(),
+        profile_revision: profile.revision.clone(),
+        connection_id: connection.clone(),
+        key_id: key.key_id.clone(),
+    };
+
+    let rejected = service
+        .review_setup_key_install(&vault, request())
+        .await
+        .unwrap();
+    service
+        .reject_setup_key_install(&rejected.review_id)
+        .unwrap();
+    assert!(service
+        .apply_setup_key_install(&vault, &rejected.review_id)
+        .await
+        .is_err());
+
+    let expired = service
+        .review_setup_key_install(&vault, request())
+        .await
+        .unwrap();
+    service
+        .setup_access
+        .install
+        .expire_for_test(&expired.review_id);
+    let error = service
+        .apply_setup_key_install(&vault, &expired.review_id)
+        .await
+        .unwrap_err();
+    assert!(error.contains("expired"), "{error}");
+
+    let mut wrong_revision = request();
+    wrong_revision.profile_revision = "not-the-current-revision".into();
+    assert!(service
+        .review_setup_key_install(&vault, wrong_revision)
+        .await
+        .is_err());
+    let mut wrong_connection = request();
+    wrong_connection.connection_id = "not-the-current-connection".into();
+    assert!(service
+        .review_setup_key_install(&vault, wrong_connection)
+        .await
+        .is_err());
+
+    let changed = service
+        .review_setup_key_install(&vault, request())
+        .await
+        .unwrap();
+    // Replace the selected private key with unrelated bytes.
+    std::fs::write(&key.path, b"not an OpenSSH private key").unwrap();
+    let commands = fixture.commands.lock().unwrap().len();
+    assert!(service
+        .apply_setup_key_install(&vault, &changed.review_id)
+        .await
+        .is_err());
+    assert_eq!(
+        fixture.commands.lock().unwrap().len(),
+        commands,
+        "a changed key must be refused before any remote mutation"
+    );
 }

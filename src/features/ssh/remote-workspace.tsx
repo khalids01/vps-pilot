@@ -13,8 +13,12 @@ import {
   Workflow,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import { SettingsPage } from "@/features/settings/settings-page";
-import { SidebarFooter } from "@/features/updates/sidebar-footer";
+import {
+  SidebarFooter as AppSidebarFooter,
+  SidebarVersion,
+} from "@/features/updates/sidebar-footer";
 import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
 import { CommandActivityProvider } from "./command-activity";
@@ -56,6 +60,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+} from "@/components/ui/sidebar";
+import {
   address,
   type ConnectionStatus,
   type Inspection,
@@ -73,6 +86,8 @@ interface RemoteWorkspaceProps {
   onSelectTool: (tool: ToolId) => void;
   onSettings: () => void;
   settingsOpen: boolean;
+  sidebarCollapsed: boolean;
+  onSidebarCollapsedChange: (collapsed: boolean) => void;
 }
 export function RemoteWorkspace(props: RemoteWorkspaceProps) {
   return (
@@ -104,6 +119,8 @@ function RemoteWorkspaceContent({
   onSelectTool,
   onSettings,
   settingsOpen,
+  sidebarCollapsed,
+  onSidebarCollapsedChange,
 }: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
   const labels: Record<ToolId, string> = {
@@ -191,16 +208,14 @@ function RemoteWorkspaceContent({
     }
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <SidebarProvider
+      open={!sidebarCollapsed}
+      onOpenChange={(open) => onSidebarCollapsedChange(!open)}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-sidebar/40 px-4 py-3 sm:px-6">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
-            {tool === "Files"
-              ? "Reviewed file writes"
-              : tool === "Docker"
-                ? "Reviewed Docker actions"
-                : "Read-only actions"}
-          </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <SidebarTrigger aria-label="Toggle tool sidebar" />
         </div>
         <LiveMetricsBar />
         <div className="flex shrink-0 items-center gap-2">
@@ -254,48 +269,61 @@ function RemoteWorkspaceContent({
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <nav
           aria-label={`${profile.name} tools`}
-          className="sidebar-scroll flex shrink-0 gap-1 overflow-x-auto border-b bg-sidebar p-2 md:w-48 md:flex-col md:overflow-hidden md:border-r md:border-b-0 md:p-3"
+          className="sidebar-scroll flex min-h-0 shrink-0"
         >
-          <div className="sidebar-scroll flex min-h-0 gap-1 overflow-auto md:flex-1 md:flex-col">
-            {[
-              { label: "Overview", icon: LayoutDashboard },
-              { label: "Quick Setup", icon: ListChecks },
-              { label: "SSH Access", icon: KeyRound },
-              { label: "Terminal", icon: Terminal },
-              { label: "Files", icon: Folder },
-              { label: "Docker", icon: Container },
-              { label: "Proxy", icon: Network },
-              { label: "Services", icon: Workflow },
-              { label: "Firewall", icon: Shield },
-              { label: "Network", icon: Network },
-              { label: "Processes", icon: Workflow },
-              { label: "Server helper", icon: Plug },
-            ].map(({ label, icon: Icon }) => (
-              <Button
-                key={label}
-                variant="ghost"
-                onClick={() => {
-                  const id = (Object.keys(labels) as ToolId[]).find(
-                    (key) => labels[key] === label,
+          <Sidebar collapsible="icon">
+            <SidebarContent className="px-2 py-2">
+              <SidebarMenu>
+                {[
+                  { label: "Overview", icon: LayoutDashboard },
+                  { label: "Quick Setup", icon: ListChecks },
+                  { label: "SSH Access", icon: KeyRound },
+                  { label: "Terminal", icon: Terminal },
+                  { label: "Files", icon: Folder },
+                  { label: "Docker", icon: Container },
+                  { label: "Proxy", icon: Network },
+                  { label: "Services", icon: Workflow },
+                  { label: "Firewall", icon: Shield },
+                  { label: "Network", icon: Network },
+                  { label: "Processes", icon: Workflow },
+                  { label: "Server helper", icon: Plug },
+                ].map(({ label, icon: Icon }) => {
+                  const active = !settingsOpen && label === tool;
+                  return (
+                    <SidebarMenuItem key={label}>
+                      <SidebarMenuButton
+                        isActive={active}
+                        aria-current={active ? "page" : undefined}
+                        aria-label={label}
+                        tooltip={label}
+                        onClick={() => {
+                          const id = (Object.keys(labels) as ToolId[]).find(
+                            (key) => labels[key] === label,
+                          );
+                          if (id) onSelectTool(id);
+                          if (label === "Terminal") setTerminalOpened(true);
+                        }}
+                        className={`h-10 gap-3 px-3 data-active:text-primary! ${active ? "" : "text-muted-foreground"}`}
+                      >
+                        <Icon className="size-4" aria-hidden="true" />
+                        <span className="truncate transition-opacity duration-200 group-data-[collapsible=icon]:opacity-0">
+                          {label}
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
                   );
-                  if (id) onSelectTool(id);
-                  if (label === "Terminal") setTerminalOpened(true);
-                }}
-                aria-current={
-                  !settingsOpen && label === tool ? "page" : undefined
-                }
-                className={`h-10 justify-start gap-3 px-3 ${!settingsOpen && label === tool ? "bg-sidebar-accent text-primary" : "text-muted-foreground"}`}
-              >
-                <Icon className="size-4" aria-hidden="true" />
-                {label}
-              </Button>
-            ))}
-            <SidebarFooter
-              settingsOpen={settingsOpen}
-              onSettings={onSettings}
-            />
-          </div>
-          <UpdateSidebarNotice />
+                })}
+              </SidebarMenu>
+            </SidebarContent>
+            <SidebarFooter>
+              <AppSidebarFooter
+                settingsOpen={settingsOpen}
+                onSettings={onSettings}
+              />
+              <UpdateSidebarNotice />
+              <SidebarVersion />
+            </SidebarFooter>
+          </Sidebar>
         </nav>
         {settingsOpen && <SettingsPage />}
         <main
@@ -679,6 +707,6 @@ function RemoteWorkspaceContent({
           </DialogContent>
         )}
       </Dialog>
-    </div>
+    </SidebarProvider>
   );
 }

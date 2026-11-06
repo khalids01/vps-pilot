@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { safeError } from "./api";
+import { QuickSetupKeyInstall } from "./quick-setup-key-install";
 import type { SetupKey } from "./quick-setup-keys";
 
 interface KeyLoginProof {
@@ -133,6 +134,7 @@ export function QuickSetupAccess({
   const [saveError, setSaveError] = useState("");
   const [saveResult, setSaveResult] = useState<SetupConfigSave | null>(null);
   const [notice, setNotice] = useState("");
+  const [installationBusy, setInstallationBusy] = useState(false);
   const active = useRef(true);
   const epoch = useRef(0);
   const verifySequence = useRef(0);
@@ -242,7 +244,7 @@ export function QuickSetupAccess({
     invalidate("The server, key, or target changed. Verify key login again.");
   }, [contextKey, invalidate]);
 
-  const busy = verifying || reviewPending || saving;
+  const busy = verifying || reviewPending || saving || installationBusy;
   useEffect(() => {
     onBusyChange(busy);
   }, [busy, onBusyChange]);
@@ -594,6 +596,19 @@ export function QuickSetupAccess({
           connection.
         </p>
       ) : null}
+
+      <QuickSetupKeyInstall
+        source={source}
+        connectionId={connectionId}
+        connected={connected}
+        keyId={selectedKey.keyId}
+        keyFingerprint={selectedKey.fingerprint}
+        controlsBusy={
+          keyBusy || verifying || reviewPending || reviewOpen || saving
+        }
+        onInstallationBusyChange={setInstallationBusy}
+        onInvalidate={invalidate}
+      />
 
       <div className="space-y-1.5 border-t border-border/70 pt-3">
         <p className="text-xs text-muted-foreground">Planned access</p>

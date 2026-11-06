@@ -120,6 +120,19 @@
   height: 0;
 }
 
+/* Sidebar width, label and disclosure motion respects the OS preference. */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="sidebar-gap"],
+  [data-slot="sidebar-container"],
+  [data-slot="sidebar-menu-button"],
+  [data-slot="sidebar-group-label"],
+  [data-slot="sidebar"],
+  [data-slot="sidebar"] * {
+    transition-duration: 0ms;
+    animation-duration: 0ms;
+  }
+}
+
 /* Preserve VS Code workbench fills instead of tinting controls with border colors.
    Scope to these two palettes: GitHub Dark and Forest Mint retain their appearance. */
 :root:is([data-theme="tokyo-night"], [data-theme="one-dark-pro"]) {
