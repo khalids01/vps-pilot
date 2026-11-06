@@ -440,3 +440,21 @@ Review should show selected sources clearly and only claim exact executable
 commands when the native installer/preflight has actually produced them; no
 invented final commands or credential-containing shell previews. These changes
 do not enable the pending remote account/firewall/install adapters.
+
+## Quick Setup current access and save feedback — 2026-11-06
+
+The user authorized correcting premature verification against the planned account
+and port. In the key step test the selected key only against the current source
+profile account/port. Show the exact target and explain that the public key must
+already be installed for that account. A successful current-access proof must
+never certify planned new access. New-access verification remains unavailable
+until native provisioning adapters actually apply the changes. Config export
+must remain bound to the exact independently verified target.
+
+Retain validated per-VPS setup choices and opaque key references through step,
+tool, tab, connection and application lifetimes. Show per-document saving/saved/
+failure status with retry; acknowledge persistence only after the latest write
+succeeds. Keep failed latest writes in memory for explicit retry without silently
+resetting choices. Passwords/passphrases remain transient; persistence failure
+must not permit secrets or corrupt/future-draft overwrites. No claim of durable
+saving before native acknowledgment. Existing important-VPS restrictions remain.

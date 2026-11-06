@@ -641,3 +641,40 @@ Implementation and verification completed for this scope:
   and its focused rerun passed without weakening the collision assertions.
 - Native tests used temporary homes and loopback fixtures; browser tests used
   mocked IPC. No actual user keys, agent, SSH config or important VPS was touched.
+
+## Current connection verification and durable save feedback — 2026-11-06
+
+Authorized correction: the SSH key step tests the selected key on the currently
+connected profile account and port, not the planned administrator/port. Clearly
+separate actual proof from planned access. Explain public-key installation is a
+prerequisite; keep future-access verification disabled until provisioning exists.
+Retain exact native proof/review bindings, original session and expiry guards.
+
+Expose per-VPS document save status and retry. Keep current pending choices on
+failure; serialize writes and ignore stale acknowledgments for newer values.
+Persist valid choices and current step promptly to existing SQLite documents;
+never persist temporary secrets or fabricate success. Verify per-server isolation,
+rapid edits, failure/retry, navigation and restart hydration with mocked IPC.
+
+Command Code implementation conversation:
+`vps-pilot-current-access-draft-saving-20261106`.
+
+Implemented and verified for this increment:
+
+- Key tests now use the connected profile account/port and show planned access
+  separately with verification disabled. Native proof and config review still
+  bind the exact independently tested target. Rejection explains public-key
+  installation is a prerequisite and does not pretend to confirm a diagnosis.
+  This increment does not install public keys, create accounts or harden SSH/UFW.
+- Immediate per-document writes expose saving/saved/error state, retain failed
+  latest values for retry, ignore stale acknowledgments and hydrate saved state.
+  Document recovery clears only the corresponding persistence warning after all
+  failed documents recover. Temporary passwords/passphrases remain unsaved.
+- Command Code wrote implementation and regression coverage. Codex specified and
+  independently reviewed/verified it, with small product-copy and recovery-banner
+  integration repairs. No VPS or actual user SSH files/agent were contacted.
+- Validation: bun check/build and 67 src unit tests passed; all 23 relevant browser
+  scenarios passed, including current tester:22 vs planned deploy:52022, rejection,
+  held writes, retry, server isolation, reload, proof expiry and stale reviews.
+  Focused recovery cases were rerun after banner fixes. Native cargo check and
+  formatting passed; no native behavior changed in this increment.

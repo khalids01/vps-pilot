@@ -37,7 +37,10 @@ has no native SSH bridge; automated browser scenarios supply their own fixtures.
 
 Quick Setup now opens an eight-step wizard. Choose an administrator, key strategy,
 SSH/firewall preferences, application stack, editor and runtimes, then inspect the
-final summary. Draft choices are saved per server across restarts; they do not
+final summary. Draft choices are saved per server across restarts; the header
+shows Saving, Saved or a retryable save error. Saved means the latest document
+write was acknowledged. Failed writes retain the latest choices in memory for
+retry; unsaved choices cannot be guaranteed after a crash. Draft choices do not
 verify access or authorize provisioning. Invalid username/port fields block
 forward navigation. A corrupt/newer saved draft requires an explicit reset.
 Dokploy requires Docker; JavaScript/PM2 requires NVM/Node; LazyVim adds its shared
@@ -83,11 +86,15 @@ Key generation is unavailable on Windows until native ACL support is implemented
 Creating or selecting a local key does not install it on the server or prove
 SSH login works. Fully restart the desktop development app after native changes.
 
-For a selected key, **Verify key login** tests the chosen administrator and port
-in a separate SSH connection using that key alone. Encrypted keys prompt for
+For a selected key, **Test key on current connection** tests the current saved
+profile account and port in a separate SSH connection using that key alone.
+The planned administrator and port appear separately; **Verify new access**
+remains unavailable until provisioning adapters can apply those changes.
+Encrypted keys prompt for
 their passphrase; unencrypted keys do not. The original connection stays open.
-The server must already accept
-the key for that account/port. A successful test does not establish sudo access,
+The server must already accept the public key for that account/port. A rejection
+does not change server settings or disable password authentication. A successful
+current-access test does not verify planned access, establish sudo access,
 disable passwords, or verify firewall recovery.
 
 After verification, choose an alias and **Review SSH config**, then explicitly

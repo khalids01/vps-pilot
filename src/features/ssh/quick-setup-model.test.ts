@@ -15,6 +15,7 @@ import {
   quickSetupFirewallRuleLimit,
   quickSetupKeyNameMaxLength,
   quickSetupUtilities,
+  resolveQuickSetupAccessTargets,
   resolveQuickSetupFirewallPlan,
   resolveQuickSetupPlan,
   sanitizeQuickSetupDraft,
@@ -40,6 +41,23 @@ test("quick setup draft keys require a real server UUID", () => {
   expect(quickSetupDraftKey("not-a-uuid")).toBeNull();
   expect(quickSetupDraftKey("11111111-1111-4111-8111")).toBeNull();
   expect(quickSetupDraftKey("")).toBeNull();
+});
+
+test("key-login verification targets the connected profile, not planned access", () => {
+  const draft = requireDraft({
+    ...clone(),
+    administrator: { mode: "new", username: "deploy" },
+    access: { ...clone().access, port: 52022 },
+  });
+  expect(
+    resolveQuickSetupAccessTargets({ username: "root", port: 22 }, draft),
+  ).toEqual({
+    current: { username: "root", port: 22 },
+    planned: { username: "deploy", port: 52022 },
+  });
+  // The draft itself is never rewritten to the connected endpoint.
+  expect(draft.administrator.username).toBe("deploy");
+  expect(draft.access.port).toBe(52022);
 });
 
 test("quick setup sanitizer accepts only typed, validated draft choices", () => {

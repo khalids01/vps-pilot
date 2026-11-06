@@ -1,12 +1,11 @@
-VPS Pilot 0.2.1
+VPS Pilot 0.2.2
 
-- Redesigned Quick Setup as a clear eight-step wizard with a sticky desktop step sidebar.
-- Create named SSH keys in ~/.ssh with optional passphrases, inline filename checks and overwrite protection.
-- Select existing private keys without moving or changing the original files; restore selections after restarting.
-- Verify the selected key independently and review local SSH config changes before saving them.
-- Plan administrator access and protected SSH/firewall rules, choose developer tools and grouped runtime cards, and review official installation sources.
-- Improved dark themes, setup details and transient credential handling.
+- Test SSH keys against the connected account and port, with planned access shown separately.
+- Explain rejected keys and the public-key installation prerequisite without implying server settings were changed.
+- Show per-VPS draft saving, saved and retry states; retain failed choices for retry and ignore stale save acknowledgements.
+- Restore saved setup choices across navigation and restarts, with independent state for each VPS.
+- Clear recovered document-save warnings without hiding unrelated settings errors.
 
-Quick Setup server provisioning, account creation, SSH/UFW hardening and package installation remain unavailable. Creating a key does not install it on the server.
+Quick Setup does not yet install public keys, create server accounts, change SSH/UFW settings or install packages. A successful current-account key test does not verify planned access.
 
-macOS downloads include separate Apple Silicon and Intel installers. Builds are ad-hoc signed and not notarized. Windows installers are unsigned.
+macOS downloads include Apple Silicon and Intel installers, ad-hoc signed and not notarized. Windows installers are unsigned.

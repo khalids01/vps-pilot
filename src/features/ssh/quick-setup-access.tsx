@@ -55,9 +55,11 @@ interface SourceSelection {
   profileId: string;
   profileRevision: string;
   host: string;
+  username: string;
+  port: number;
 }
 
-interface TargetSelection {
+interface PlannedTarget {
   username: string;
   port: number;
 }
@@ -98,17 +100,17 @@ function rejectReview(reviewId: string) {
 
 export function QuickSetupAccess({
   source,
+  plannedTarget,
   connectionId,
   connected,
-  target,
   selectedKey,
   keyBusy,
   onBusyChange,
 }: {
   source: SourceSelection;
+  plannedTarget: PlannedTarget;
   connectionId?: string | null;
   connected: boolean;
-  target: TargetSelection;
   selectedKey: SetupKey;
   keyBusy: boolean;
   onBusyChange: (busy: boolean) => void;
@@ -222,11 +224,13 @@ export function QuickSetupAccess({
     source.profileId,
     source.profileRevision,
     source.host,
+    source.username,
+    source.port,
     connectionId ?? "",
     selectedKey.keyId,
     selectedKey.fingerprint,
-    target.username,
-    target.port,
+    plannedTarget.username,
+    plannedTarget.port,
     connected ? "connected" : "disconnected",
   ].join("\u0000");
   const contextRef = useRef(contextKey);
@@ -263,8 +267,8 @@ export function QuickSetupAccess({
       result.keyId === selectedKey.keyId &&
       result.keyFingerprint === selectedKey.fingerprint &&
       result.host === source.host &&
-      result.username === target.username &&
-      result.port === target.port &&
+      result.username === source.username &&
+      result.port === source.port &&
       result.expiresAtMs > Date.now()
     );
   }
@@ -279,8 +283,8 @@ export function QuickSetupAccess({
         result.profileId === source.profileId &&
         result.alias === alias &&
         result.host === source.host &&
-        result.username === target.username &&
-        result.port === target.port &&
+        result.username === source.username &&
+        result.port === source.port &&
         result.keyFingerprint === selectedKey.fingerprint &&
         result.expiresAtMs > Date.now(),
     );
@@ -307,7 +311,8 @@ export function QuickSetupAccess({
   function closeUnlock() {
     epoch.current += 1;
     setPassphrase("");
-    setVerifyError("");
+    // Keep the last failure visible in the access section; opening the dialog
+    // again still starts from a clean error.
     setUnlockOpen(false);
   }
 
@@ -337,8 +342,8 @@ export function QuickSetupAccess({
         profileRevision: source.profileRevision,
         connectionId,
         keyId: selectedKey.keyId,
-        username: target.username,
-        port: target.port,
+        username: source.username,
+        port: source.port,
         passphrase: secret,
       });
       if (
@@ -371,7 +376,9 @@ export function QuickSetupAccess({
         !contextMatches(startingContext)
       )
         return;
-      setVerifyError(safeError(failure));
+      setVerifyError(
+        `${safeError(failure)} Key login was not verified for ${source.username}@${source.host}:${source.port}. The public key may not be installed for this account; creating or choosing a local key does not install it. The current session and saved connection are unchanged. The exact cause is not confirmed.`,
+      );
     } finally {
       if (request === verifySequence.current) {
         verifyActive.current = false;
@@ -547,11 +554,18 @@ export function QuickSetupAccess({
             aria-label="Key login status"
             className="text-sm font-medium"
           >
-            {proof ? "Key login verified" : "Key login not verified"}
+            {proof
+              ? "Current connection key login verified"
+              : "Current connection key login not verified"}
           </p>
           <p className="mt-0.5 text-xs leading-relaxed break-all text-muted-foreground">
-            {target.username}@{source.host}:{target.port} ·{" "}
+            Current account: {source.username}@{source.host}:{source.port} ·{" "}
             {selectedKey.fingerprint}
+          </p>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            The selected public key must already be installed for{" "}
+            {source.username} on this server. Creating or choosing a local key
+            does not install it.
           </p>
           {proof && verifiedAt !== null && (
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -567,16 +581,34 @@ export function QuickSetupAccess({
             disabled={verifyDisabled}
             onClick={startVerify}
           >
-            {verifying ? "Verifying key login…" : "Verify key login"}
+            {verifying
+              ? "Testing key on current connection…"
+              : "Test key on current connection"}
           </Button>
         )}
       </div>
 
       {!connected || !connectionId ? (
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Connect to this server before verifying key login.
+          Connect to this server before testing the key on the current
+          connection.
         </p>
       ) : null}
+
+      <div className="space-y-1.5 border-t border-border/70 pt-3">
+        <p className="text-xs text-muted-foreground">Planned access</p>
+        <p className="break-all text-sm">
+          {plannedTarget.username}@{source.host}:{plannedTarget.port}
+        </p>
+        <Button type="button" variant="outline" disabled>
+          Verify new access
+        </Button>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Available after the new account, public key, SSH port and firewall
+          changes have been applied. Testing the current connection does not
+          verify these planned changes.
+        </p>
+      </div>
 
       {verifyError && !unlockOpen && (
         <p role="alert" className="text-sm leading-relaxed text-destructive">
@@ -621,6 +653,10 @@ export function QuickSetupAccess({
           >
             {reviewPending ? "Preparing review…" : "Review SSH config"}
           </Button>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            An SSH config entry is created only for this verified current
+            account and port: {source.username}@{source.host}:{source.port}.
+          </p>
           {saveResult && (
             <p
               role="status"
@@ -708,7 +744,9 @@ export function QuickSetupAccess({
               disabled={verifying || !passphrase}
               onClick={() => void submitVerify(passphrase)}
             >
-              {verifying ? "Verifying key login…" : "Verify key login"}
+              {verifying
+                ? "Testing key on current connection…"
+                : "Test key on current connection"}
             </Button>
           </DialogFooter>
         </DialogContent>

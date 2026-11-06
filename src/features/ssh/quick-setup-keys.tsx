@@ -66,9 +66,9 @@ export function QuickSetupKeyManager({
   selectedKeyId,
   onSelectKey,
   source,
+  plannedTarget,
   connectionId,
   connected,
-  target,
 }: {
   strategy: "existing" | "generate";
   selectedKeyId?: string;
@@ -77,10 +77,12 @@ export function QuickSetupKeyManager({
     profileId: string;
     profileRevision: string;
     host: string;
+    username: string;
+    port: number;
   };
+  plannedTarget: { username: string; port: number };
   connectionId?: string | null;
   connected: boolean;
-  target: { username: string; port: number };
 }) {
   const id = useId();
   const [keys, setKeys] = useState<SetupKeyList | null>(null);
@@ -761,9 +763,9 @@ export function QuickSetupKeyManager({
       {selectedKey && selectedKey.location !== "legacy" && (
         <QuickSetupAccess
           source={source}
+          plannedTarget={plannedTarget}
           connectionId={connectionId}
           connected={connected}
-          target={target}
           selectedKey={selectedKey}
           keyBusy={mutation !== null}
           onBusyChange={handleAccessBusy}

@@ -61,6 +61,7 @@ test.beforeEach(async ({ page }) => {
       verify:new Map<string,{resolve:(value:any)=>void;reject:(reason:any)=>void;build:()=>any}>(),
       review:new Map<string,{resolve:(value:any)=>void;reject:(reason:any)=>void;build:()=>any}>(),
     };
+    const documentSaveReleases:(()=>void)[]=[];
     const setupAccessMeta={proofs:0,reviews:0,saves:0,rejects:0,verifyPassphraseState:"none" as "none"|"provided",savedAliases:[] as string[],savedReviewIds:[] as string[],rejectedReviewIds:[] as string[]};
     const pruneSetupAccess=()=>{
       const now=Date.now();
@@ -243,6 +244,23 @@ test.beforeEach(async ({ page }) => {
         keys: () => storedSetupKeys().map((key:any)=>({...key})),
         files: () => fixtureKeyFiles(),
       },
+      __documentSaves: {
+        held: () => documentSaveReleases.length,
+        release: () => {
+          const release = documentSaveReleases.shift();
+          if (!release) return false;
+          release();
+          return true;
+        },
+        releaseAll: () => {
+          let released = 0;
+          while (documentSaveReleases.length) {
+            documentSaveReleases.shift()?.();
+            released += 1;
+          }
+          return released;
+        },
+      },
       __TAURI_INTERNALS__: {
         transformCallback: () => ++next,
         unregisterCallback: () => {},
@@ -262,6 +280,13 @@ test.beforeEach(async ({ page }) => {
             return args.settings;
           }
           if (cmd === "app_save_document") {
+            if ((window as any).__holdDocumentSave)
+              await new Promise<void>(resolve=>{documentSaveReleases.push(resolve);});
+            if ((window as any).__documentSaveFailures > 0) {
+              (window as any).__documentSaveFailures -= 1;
+              throw new Error("Fixture document save failure");
+            }
+            if ((window as any).__documentSaveFailure) throw new Error("Fixture document save failure");
             const docs = JSON.parse(localStorage.getItem("__fixture_documents") ?? "{}");
             if (!args.import || docs[args.key] === undefined) docs[args.key] = args.value;
             localStorage.setItem("__fixture_documents", JSON.stringify(docs));
@@ -2484,6 +2509,98 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   expect(await remoteCalls()).toHaveLength(0);
 });
 
+test("Quick Setup reports a failed draft write, keeps choices and retries the latest draft",async({page},testInfo)=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const stored=()=>page.evaluate(k=>{
+    const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+    const raw=docs[k];
+    return typeof raw==="string"?JSON.parse(raw):null;
+  },draftKey);
+  const saves=()=>page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,draftKey);
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  const status=setup.getByRole("status",{name:"Draft save status"});
+  await expect(status).toContainText("Saved");
+  await page.evaluate(()=>{(window as any).__documentSaveFailures=1;});
+  await setup.getByLabel("Administrator username").fill("retry-user");
+  await expect(status).toContainText("Could not save");
+  await expect(page.getByText("Workspace changes could not be saved to this device.",{exact:true})).toBeVisible();
+  await expect(status.getByRole("button",{name:"Retry",exact:true})).toBeVisible();
+  await expect(setup.getByLabel("Administrator username")).toHaveValue("retry-user");
+  // The step change above was acknowledged; the failed username write must not
+  // overwrite that stored draft.
+  expect((await stored()).administrator.username).toBe("deploy");
+  await page.mouse.move(0,0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-draft-error-desktop.png")});
+  await page.setViewportSize({width:430,height:900});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-draft-error-narrow.png")});
+  await page.setViewportSize({width:1366,height:900});
+  await status.getByRole("button",{name:"Retry",exact:true}).click();
+  await expect(status).toContainText("Saved");
+  await expect.poll(stored).toMatchObject({step:2,administrator:{username:"retry-user"}});
+  await expect(page.getByText("Workspace changes could not be saved to this device.",{exact:true})).toHaveCount(0);
+  expect(await saves()).toBeGreaterThanOrEqual(2);
+});
+
+test("Quick Setup held draft acknowledgements never show Saved early and the newest draft wins",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await page.evaluate(()=>{(window as any).__holdDocumentSave=true;});
+  const username=setup.getByLabel("Administrator username");
+  await username.fill("rapid-one");
+  await expect.poll(()=>page.evaluate(()=>(window as any).__documentSaves.held())).toBeGreaterThan(0);
+  await username.fill("rapid-two");
+  const status=setup.getByRole("status",{name:"Draft save status"});
+  await expect(status).toContainText("Saving…");
+  await expect(status).not.toContainText("Saved");
+  await page.evaluate(()=>(window as any).__documentSaves.release());
+  await expect(status).toContainText("Saving…");
+  await expect(status).not.toContainText("Saved");
+  await page.evaluate(()=>{(window as any).__holdDocumentSave=false;(window as any).__documentSaves.releaseAll();});
+  await expect(status).toContainText("Saved");
+  const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
+  expect(stored.administrator.username).toBe("rapid-two");
+});
+
+test("Quick Setup draft save state is isolated per VPS and hydrated saved state survives reload",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  const alphaKey=`vps-pilot:quick-setup-draft:v1:${first}`;
+  const alphaSaves=()=>page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,alphaKey);
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const alpha=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await alpha.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await alpha.getByLabel("Administrator username").fill("alpha-user");
+  await expect(alpha.getByRole("status",{name:"Draft save status"})).toContainText("Saved");
+
+  await page.getByRole("tab",{name:/Fixture Beta/}).click();
+  await page.getByRole("navigation",{name:"Fixture Beta tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const beta=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(beta.getByRole("status",{name:"Draft save status"})).toHaveCount(0);
+  await beta.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await beta.getByLabel("Administrator username").fill("beta-user");
+  await expect(beta.getByRole("status",{name:"Draft save status"})).toContainText("Saved");
+
+  await page.getByRole("tab",{name:/Fixture Alpha/}).click();
+  await expect(alpha.getByLabel("Administrator username")).toHaveValue("alpha-user");
+  await expect(alpha.getByRole("status",{name:"Draft save status"})).toContainText("Saved");
+  await page.reload();
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(reloaded.getByRole("status",{name:"Draft save status"})).toContainText("Saved");
+  // Hydration restores Saved without issuing another write.
+  expect(await alphaSaves()).toBe(0);
+  await page.clock.fastForward(300);
+  expect(await alphaSaves()).toBe(0);
+  const betaDraft=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),`vps-pilot:quick-setup-draft:v1:${second}`);
+  expect(betaDraft.administrator.username).toBe("beta-user");
+});
+
 test("invalid saved Quick Setup drafts warn, are not imported or overwritten, and reset explicitly",async({page},testInfo)=>{
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
@@ -2932,9 +3049,9 @@ test("Quick Setup creates an unencrypted named key and verifies it without an un
   await page.setViewportSize({width:1366,height:900});
 
   const access=setup.getByRole("region",{name:"Key login access",exact:true});
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   await expect(page.getByRole("dialog",{name:"Unlock selected key",exact:true})).toHaveCount(0);
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.proofs)).toBe(1);
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.verifyPassphraseState)).toBe("none");
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_setup_key_verify").length)).toBe(1);
@@ -3014,9 +3131,9 @@ test("Quick Setup existing-key picking preserves selection, persists only an opa
   await expect(reloaded.getByRole("group",{name:"Selected local key"})).toContainText("/fixture/keys/external key");
   expect(await readDraftSsh()).toEqual({strategy:"existing",existingKeyId:externalId});
   const access=reloaded.getByRole("region",{name:"Key login access",exact:true});
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   await expect(page.getByRole("dialog",{name:"Unlock selected key",exact:true})).toHaveCount(0);
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.verifyPassphraseState)).toBe("none");
 
   await access.getByRole("button",{name:"Review SSH config",exact:true}).click();
@@ -3028,12 +3145,12 @@ test("Quick Setup existing-key picking preserves selection, persists only an opa
   await page.evaluate(()=>{(window as any).__keySelectFixture={keyId:"55555555-5555-4555-8555-555555555555",fingerprint:"SHA256:fixtureExternalEncrypted",algorithm:"ssh-ed25519",encrypted:true,path:"/fixture/keys/encrypted key",location:"external"};});
   await reloaded.getByRole("button",{name:"Choose a different private key",exact:true}).click();
   await expect(reloaded.getByRole("group",{name:"Selected local key"})).toContainText("Encrypted");
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
   await expect(unlock).toBeVisible();
   await unlock.getByLabel("Key passphrase").fill("short");
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.verifyPassphraseState)).toBe("provided");
 
   const heldId="66666666-6666-4666-8666-666666666666";
@@ -3068,23 +3185,30 @@ async function openStandardKeyAccess(page:import("@playwright/test").Page,passph
 test("Quick Setup proves key login explicitly and saves only a reviewed SSH config entry",async({page},testInfo)=>{
   const passphrase="access fixture passphrase";
   const {setup,selectedCard,access}=await openStandardKeyAccess(page,passphrase);
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login not verified");
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
+  await expect(access).toContainText("Current account: tester@alpha.invalid:22");
   await expect(access).toContainText("deploy@alpha.invalid:52022");
+  await expect(access.getByRole("button",{name:"Verify new access",exact:true})).toBeDisabled();
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd.startsWith("ssh_setup_")))).toHaveLength(0);
 
   await page.evaluate(()=>{(window as any).__holdKeyExport=true;});
   await selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true}).click();
-  await expect(access.getByRole("button",{name:"Verify key login",exact:true})).toBeDisabled();
+  await expect(access.getByRole("button",{name:"Test key on current connection",exact:true})).toBeDisabled();
   await page.evaluate(()=>{(window as any).__releaseKeyExport?.();(window as any).__holdKeyExport=false;});
-  await expect(access.getByRole("button",{name:"Verify key login",exact:true})).toBeEnabled();
+  await expect(access.getByRole("button",{name:"Test key on current connection",exact:true})).toBeEnabled();
 
   await page.evaluate(()=>{(window as any).__setupVerifyFailure=true;});
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
   const wrong="wrong access fixture secret";
   await unlock.getByLabel("Key passphrase").fill(wrong);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   await expect(unlock.getByRole("alert")).toContainText("rejected the selected key");
+  await expect(unlock.getByRole("alert")).toContainText("tester@alpha.invalid:22");
+  await expect(unlock.getByRole("alert")).toContainText("may not be installed");
+  await expect(unlock.getByRole("alert")).toContainText("does not install it");
+  await expect(unlock.getByRole("alert")).toContainText("session and saved connection are unchanged");
+  await expect(unlock.getByRole("alert")).toContainText("exact cause is not confirmed");
   await expect(unlock.getByLabel("Key passphrase")).toHaveValue("");
   expect(await page.evaluate(secret=>JSON.stringify(localStorage).includes(secret),wrong)).toBe(false);
   expect(await page.evaluate(secret=>JSON.stringify((window as any).__calls).includes(secret),wrong)).toBe(false);
@@ -3093,14 +3217,18 @@ test("Quick Setup proves key login explicitly and saves only a reviewed SSH conf
   await expect(unlock).toHaveCount(0);
 
   await page.evaluate(()=>{(window as any).__setupVerifyFailure=false;});
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   await unlock.getByLabel("Key passphrase").fill(passphrase);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
   await expect(access).toContainText("proof valid until");
   await expect(access).toContainText("SHA256:fixture");
   await expect(unlock).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.proofs)).toBe(1);
+  const verifyCall=await page.evaluate(()=>(window as any).__calls.find((call:any)=>call.cmd==="ssh_setup_key_verify"));
+  expect(verifyCall).toMatchObject({username:"tester",port:22});
+  expect(verifyCall?.port).not.toBe(52022);
+  expect(verifyCall?.username).not.toBe("deploy");
   expect(await page.evaluate(secret=>JSON.stringify(localStorage).includes(secret),passphrase)).toBe(false);
   expect(await page.evaluate(secret=>JSON.stringify((window as any).__calls).includes(secret),passphrase)).toBe(false);
 
@@ -3122,7 +3250,9 @@ test("Quick Setup proves key login explicitly and saves only a reviewed SSH conf
   const review=page.getByRole("dialog",{name:"Review SSH config",exact:true});
   await expect(review).toContainText("Host fixture-alpha");
   await expect(review).toContainText("HostName alpha.invalid");
-  await expect(review).toContainText("Port 52022");
+  await expect(review).toContainText("User tester");
+  await expect(review).toContainText("Port 22");
+  await expect(review).not.toContainText("Port 52022");
   const selectedKeyPath=await page.evaluate(()=>((window as any).__setupKeys.keys()[0]?.path as string)??"");
   const selectedKeyName=selectedKeyPath.split("/").pop()??"";
   expect(selectedKeyName).toBeTruthy();
@@ -3187,21 +3317,57 @@ test("Quick Setup proves key login explicitly and saves only a reviewed SSH conf
   await page.screenshot({path:testInfo.outputPath("quick-setup-access-saved.png")});
 });
 
+test("Quick Setup key-login rejection names the current tester:22 account and offers no planned access or mutation",async({page},testInfo)=>{
+  const passphrase="rejected current fixture passphrase";
+  const {access}=await openStandardKeyAccess(page,passphrase);
+  await expect(access).toContainText("Current account: tester@alpha.invalid:22");
+  await expect(access).toContainText("deploy@alpha.invalid:52022");
+  await page.evaluate(()=>{(window as any).__setupVerifyFailure=true;});
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
+  await unlock.getByLabel("Key passphrase").fill(passphrase);
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  const alert=unlock.getByRole("alert");
+  await expect(alert).toContainText("rejected the selected key");
+  await expect(alert).toContainText("tester@alpha.invalid:22");
+  await expect(alert).toContainText("may not be installed");
+  await expect(alert).toContainText("does not install it");
+  await expect(alert).toContainText("session and saved connection are unchanged");
+  await expect(alert).toContainText("exact cause is not confirmed");
+  await unlock.getByRole("button",{name:"Cancel",exact:true}).click();
+  await expect(unlock).toHaveCount(0);
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
+  await expect(access.getByRole("alert")).toContainText("tester@alpha.invalid:22");
+  await expect(access.getByRole("button",{name:"Review SSH config",exact:true})).toHaveCount(0);
+  await expect(access.getByRole("button",{name:"Verify new access",exact:true})).toBeDisabled();
+  const verify=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_setup_key_verify"));
+  expect(verify).toHaveLength(1);
+  expect(verify[0]).toMatchObject({username:"tester",port:22});
+  expect(verify[0]?.port).not.toBe(52022);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_setup_config_review","ssh_setup_config_save","ssh_action_execute","ssh_terminal_input","ssh_connect","ssh_disconnect"].includes(call.cmd)))).toHaveLength(0);
+  await page.mouse.move(0,0);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-current-rejected.png")});
+  await page.setViewportSize({width:430,height:900});
+  await access.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("quick-setup-current-rejected-narrow.png")});
+});
+
 test("Quick Setup key-login expiry clears an open SSH config review without saving",async({page})=>{
   await page.evaluate(()=>{(window as any).__setupAccessExpiryMs=2000;});
   const passphrase="expiry fixture passphrase";
   const {access}=await openStandardKeyAccess(page,passphrase);
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
   await unlock.getByLabel("Key passphrase").fill(passphrase);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
   await access.getByRole("button",{name:"Review SSH config",exact:true}).click();
   const review=page.getByRole("dialog",{name:"Review SSH config",exact:true});
   await expect(review.getByRole("button",{name:"Save to SSH config",exact:true})).toBeEnabled();
   await page.clock.fastForward(2500);
   await expect(review).toHaveCount(0);
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login not verified");
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
   await expect(access.getByRole("button",{name:"Review SSH config",exact:true})).toHaveCount(0);
   await expect(access.getByRole("status",{name:"Key login activity"})).toContainText("expired");
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.saves)).toBe(0);
@@ -3212,10 +3378,10 @@ test("held key-login verification is discarded on disconnect without leaving the
   const passphrase="held verify fixture passphrase";
   const {access}=await openStandardKeyAccess(page,passphrase);
   await page.evaluate(()=>{(window as any).__holdSetupVerify=true;});
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
   await unlock.getByLabel("Key passphrase").fill(passphrase);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>(window as any).__setupAccess.verifyHeld().length)).toBe(1);
   // The unlock dialog makes the background inert, so match those controls in the DOM.
   await expect(page.locator("button",{hasText:"Reload keys"})).toBeDisabled();
@@ -3223,29 +3389,29 @@ test("held key-login verification is discarded on disconnect without leaving the
   await expect(page.locator("button",{hasText:"Create another key"})).toBeDisabled();
   await page.evaluate(()=>{(window as any).__configurationDisconnected=true;});
   await page.clock.fastForward(2100);
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login not verified");
-  await expect(access.getByRole("button",{name:"Verify key login",exact:true})).toBeDisabled();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
+  await expect(access.getByRole("button",{name:"Test key on current connection",exact:true})).toBeDisabled();
   await page.evaluate(()=>(window as any).__setupAccess.releaseVerify());
   await page.clock.fastForward(1000);
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login not verified");
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
   expect(await page.evaluate(()=>(window as any).__setupAccess.meta.proofs)).toBe(1);
   await page.evaluate(()=>{(window as any).__configurationDisconnected=false;(window as any).__connectionGeneration=2;(window as any).__holdSetupVerify=false;});
   await page.clock.fastForward(2100);
-  await expect(access.getByRole("button",{name:"Verify key login",exact:true})).toBeEnabled();
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await expect(access.getByRole("button",{name:"Test key on current connection",exact:true})).toBeEnabled();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   await unlock.getByLabel("Key passphrase").fill(passphrase);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
 });
 
 test("dismissing or invalidating a pending SSH config review rejects its late native reply",async({page})=>{
   const passphrase="held review fixture passphrase";
   const {access}=await openStandardKeyAccess(page,passphrase);
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
   await unlock.getByLabel("Key passphrase").fill(passphrase);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
 
   await page.evaluate(()=>{(window as any).__holdSetupReview=true;});
   await access.getByRole("button",{name:"Review SSH config",exact:true}).click();
@@ -3276,11 +3442,11 @@ test("dismissing or invalidating a pending SSH config review rejects its late na
 test("expired SSH config review cannot save before its timer fires",async({page})=>{
   const passphrase="stale save fixture passphrase";
   const {access}=await openStandardKeyAccess(page,passphrase);
-  await access.getByRole("button",{name:"Verify key login",exact:true}).click();
+  await access.getByRole("button",{name:"Test key on current connection",exact:true}).click();
   const unlock=page.getByRole("dialog",{name:"Unlock selected key",exact:true});
   await unlock.getByLabel("Key passphrase").fill(passphrase);
-  await unlock.getByRole("button",{name:"Verify key login",exact:true}).click();
-  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Key login verified");
+  await unlock.getByRole("button",{name:"Test key on current connection",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login verified");
   await access.getByRole("button",{name:"Review SSH config",exact:true}).click();
   const review=page.getByRole("dialog",{name:"Review SSH config",exact:true});
   const saveButton=review.getByRole("button",{name:"Save to SSH config",exact:true});

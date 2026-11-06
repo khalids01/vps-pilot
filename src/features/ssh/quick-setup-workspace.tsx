@@ -1,14 +1,21 @@
 import {
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { ConfigurationNotice } from "@/components/configuration-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  getPreferenceSaveState,
+  retryPreference,
+  subscribePreferenceSaveState,
+} from "@/features/settings/persistence";
 import type { ServerProfile } from "./api";
 import { useConfiguration } from "./configuration-context";
 import {
@@ -37,6 +44,7 @@ import {
   quickSetupUtilities,
   readQuickSetupDraft,
   requiredQuickSetupRuntimes,
+  resolveQuickSetupAccessTargets,
   resolveQuickSetupFirewallPlan,
   resolveQuickSetupPlan,
   sanitizeQuickSetupDraft,
@@ -131,7 +139,52 @@ function keySelectionSummary(draft: QuickSetupDraft) {
   return keyStrategyLabels[draft.sshKey.strategy];
 }
 
-function QuickSetupHeader({ step }: { step?: number }) {
+function DraftSaveStatus({ draftKey }: { draftKey: string | null }) {
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      draftKey ? subscribePreferenceSaveState(draftKey, listener) : () => {},
+    [draftKey],
+  );
+  const getSnapshot = useCallback(
+    () => (draftKey ? getPreferenceSaveState(draftKey).status : "idle"),
+    [draftKey],
+  );
+  const status = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  if (!draftKey || status === "idle") return null;
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      aria-label="Draft save status"
+      className="inline-flex items-center gap-2 text-xs text-muted-foreground"
+    >
+      {status === "saving"
+        ? "Saving…"
+        : status === "saved"
+          ? "Saved"
+          : "Could not save"}
+      {status === "error" && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="-my-1 h-6 px-2 text-xs"
+          onClick={() => void retryPreference(draftKey)}
+        >
+          Retry
+        </Button>
+      )}
+    </span>
+  );
+}
+
+function QuickSetupHeader({
+  step,
+  draftKey,
+}: {
+  step?: number;
+  draftKey?: string | null;
+}) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-x-8 gap-y-2">
       <div className="min-w-0">
@@ -143,12 +196,15 @@ function QuickSetupHeader({ step }: { step?: number }) {
         )}
       </div>
       {step !== undefined && (
-        <aside
-          aria-label="Setup preview"
-          className="max-w-md text-xs leading-relaxed text-muted-foreground sm:text-right"
-        >
-          Choices save on this device. Server changes are unavailable.
-        </aside>
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <DraftSaveStatus draftKey={draftKey ?? null} />
+          <aside
+            aria-label="Setup preview"
+            className="max-w-md text-xs leading-relaxed text-muted-foreground sm:text-right"
+          >
+            Choices save on this device. Server changes are unavailable.
+          </aside>
+        </div>
       )}
     </header>
   );
@@ -525,9 +581,11 @@ export function QuickSetupWorkspace({
       ? "Use a whole port from 1 to 65535."
       : null;
   const plan = resolveQuickSetupPlan(draft);
+  const accessTargets = resolveQuickSetupAccessTargets(profile, draft);
   const requiredRuntimes = requiredQuickSetupRuntimes(draft);
   const forwardBlocked = Boolean(usernameError || portError);
-  const noDraftStorage = quickSetupDraftKey(profile.id) === null;
+  const draftKey = quickSetupDraftKey(profile.id);
+  const noDraftStorage = draftKey === null;
   const firewallPlan = resolveQuickSetupFirewallPlan(draft, profile.port);
   const newPasswordTooLong =
     passwordBytes(newAdminPassword) > quickSetupPasswordByteLimit;
@@ -817,13 +875,12 @@ export function QuickSetupWorkspace({
               profileId: profile.id,
               profileRevision: profile.revision,
               host: profile.host,
+              username: accessTargets.current.username,
+              port: accessTargets.current.port,
             }}
+            plannedTarget={accessTargets.planned}
             connectionId={connectionId}
             connected={connected}
-            target={{
-              username: draft.administrator.username,
-              port: draft.access.port,
-            }}
           />
         )}
       </StepSection>
@@ -1248,7 +1305,7 @@ export function QuickSetupWorkspace({
       aria-label="Quick Setup"
       className="mx-auto w-full max-w-[1000px] space-y-7"
     >
-      <QuickSetupHeader step={draft.step} />
+      <QuickSetupHeader draftKey={draftKey} step={draft.step} />
       {noDraftStorage && (
         <p role="status" className="text-xs text-warning">
           This profile has no usable server UUID, so draft choices stay in

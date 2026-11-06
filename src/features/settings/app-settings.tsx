@@ -15,6 +15,7 @@ import {
   flushPreferences,
   hydratePreferences,
   storageErrorEvent,
+  storageRecoveredEvent,
 } from "./persistence";
 
 import { applyTheme, defaultTheme, isThemeId, type ThemeId } from "./themes";
@@ -59,6 +60,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [attempt, setAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const current = useRef(defaultSettings);
+  const persistenceError = useRef<string | null>(null);
   const writes = useRef(Promise.resolve());
   const saveGeneration = useRef(0);
   useEffect(() => {
@@ -125,6 +127,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     current.current = next;
     setSettings(next);
     setSaving(true);
+    persistenceError.current = null;
     setError("");
     const generation = ++saveGeneration.current;
     writes.current = writes.current.then(async () => {
@@ -138,6 +141,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       } catch {
         if (generation === saveGeneration.current) {
           setSaving(false);
+          persistenceError.current = null;
           setError(
             "Settings could not be saved. Changes are active for this session only.",
           );
@@ -146,13 +150,28 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
   useEffect(() => {
-    const onError = (event: Event) =>
-      setError((event as CustomEvent<string>).detail);
+    const onError = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      persistenceError.current = message;
+      setError(message);
+    };
+    const onRecovered = () => {
+      // Clear only the shared-document persistence banner after its last
+      // failed document is acknowledged. Settings/bootstrap errors are kept.
+      const recoveredMessage = persistenceError.current;
+      if (!recoveredMessage) return;
+      persistenceError.current = null;
+      setError((currentError) =>
+        currentError === recoveredMessage ? "" : currentError,
+      );
+    };
     const flush = () => void flushPreferences();
     window.addEventListener(storageErrorEvent, onError);
+    window.addEventListener(storageRecoveredEvent, onRecovered);
     window.addEventListener("pagehide", flush);
     return () => {
       window.removeEventListener(storageErrorEvent, onError);
+      window.removeEventListener(storageRecoveredEvent, onRecovered);
       window.removeEventListener("pagehide", flush);
     };
   }, []);

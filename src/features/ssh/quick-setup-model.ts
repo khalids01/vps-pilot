@@ -446,7 +446,27 @@ export function writeQuickSetupDraft(serverId: string, draft: QuickSetupDraft) {
   const key = quickSetupDraftKey(serverId);
   const clean = sanitizeQuickSetupDraft(draft);
   if (!key || !clean) return;
-  writePreference(key, JSON.stringify(clean));
+  // Enqueue immediately so the visible Saving/Saved state tracks this write,
+  // and never report saved before the native acknowledgement arrives.
+  writePreference(key, JSON.stringify(clean), { immediate: true });
+}
+
+export interface QuickSetupAccessTargets {
+  current: { username: string; port: number };
+  planned: { username: string; port: number };
+}
+
+export function resolveQuickSetupAccessTargets(
+  profile: { username: string; port: number },
+  draft: QuickSetupDraft,
+): QuickSetupAccessTargets {
+  return {
+    current: { username: profile.username, port: profile.port },
+    planned: {
+      username: draft.administrator.username,
+      port: draft.access.port,
+    },
+  };
 }
 
 export function requiredQuickSetupRuntimes(
