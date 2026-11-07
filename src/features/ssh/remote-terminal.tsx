@@ -56,14 +56,17 @@ function LivePanel({
 }: IDockviewPanelProps<{ serverId: string; kind: "shell"; start?: boolean }>) {
   const context = useContext(ServerContext);
   const profile = context?.profile;
+  const serverId = profile?.id;
+  const nameRef = useRef(profile?.name ?? "Server");
+  nameRef.current = profile?.name ?? nameRef.current;
   const [requested, setRequested] = useState(params.start === true);
   const host = useRef<HTMLDivElement>(null);
   const [message, setMessage] = useState("Opening SSH terminal…");
   useEffect(() => {
     if (
       !host.current ||
-      !profile ||
-      profile.id !== params.serverId ||
+      !serverId ||
+      serverId !== params.serverId ||
       !requested
     )
       return;
@@ -88,7 +91,7 @@ function LivePanel({
     const stopThemeObserver = observeTerminalTheme(terminal, element);
     terminal.textarea?.setAttribute(
       "aria-label",
-      `${profile.name} interactive terminal`,
+      `${nameRef.current} interactive terminal`,
     );
     const fail = (error: unknown) => {
       if (!disposed) setMessage(safeError(error));
@@ -105,7 +108,7 @@ function LivePanel({
       if (id && active)
         void streamApi
           .resize(
-            profile.id,
+            serverId,
             id,
             Math.min(500, terminal.cols),
             Math.min(300, terminal.rows),
@@ -119,12 +122,12 @@ function LivePanel({
       .then(() => {
         if (disposed) return null;
         return streamApi.terminal(
-          profile.id,
+          serverId,
           Math.max(2, Math.min(500, terminal.cols)),
           Math.max(1, Math.min(300, terminal.rows)),
           (event) => {
             if (disposed) {
-              void streamApi.close(profile.id, event.id).catch(() => {});
+              void streamApi.close(serverId, event.id).catch(() => {});
               return;
             }
             if (ended) return;
@@ -132,7 +135,7 @@ function LivePanel({
               terminal.write(new Uint8Array(event.data), () => {
                 if (!disposed)
                   void streamApi
-                    .ack(profile.id, event.id, event.sequence)
+                    .ack(serverId, event.id, event.sequence)
                     .catch(fail);
               });
             } else if (event.type === "closed") {
@@ -142,7 +145,7 @@ function LivePanel({
                 `${event.message}${event.code !== null ? ` Exit ${event.code}.` : ""}`,
               );
               terminal.options.disableStdin = true;
-              void streamApi.close(profile.id, event.id).catch(() => {});
+              void streamApi.close(serverId, event.id).catch(() => {});
             }
           },
           context?.container,
@@ -152,7 +155,7 @@ function LivePanel({
         if (!opened) return;
         id = opened;
         if (disposed) {
-          void streamApi.close(profile.id, opened).catch(() => {});
+          void streamApi.close(serverId, opened).catch(() => {});
           return;
         }
         if (ended) return;
@@ -180,7 +183,7 @@ function LivePanel({
       inputQueue = inputQueue
         .then(() => {
           if (!disposed && active)
-            return streamApi.input(profile.id, session, data);
+            return streamApi.input(serverId, session, data);
         })
         .catch(fail)
         .finally(() => inputPending--);
@@ -205,17 +208,9 @@ function LivePanel({
       binary.dispose();
       stopThemeObserver();
       terminal.dispose();
-      if (id) void streamApi.close(profile.id, id).catch(() => {});
+      if (id) void streamApi.close(serverId, id).catch(() => {});
     };
-  }, [
-    api,
-    profile?.id,
-    profile?.name,
-    profile,
-    params.serverId,
-    requested,
-    context?.container,
-  ]);
+  }, [api, serverId, params.serverId, requested, context?.container]);
   if (!requested)
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">

@@ -18,7 +18,7 @@ const reports = {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(({ first, second, reports }) => {
-    const profiles = [
+    const profiles: any[] = [
       { id: first, revision: "a", name: "Fixture Alpha", host: "alpha.invalid", username: "tester", port: 22 },
       { id: second, revision: "b", name: "Fixture Beta", host: "beta.invalid", username: "tester", port: 2222 },
     ];
@@ -580,6 +580,18 @@ test.beforeEach(async ({ page }) => {
           if(cmd==="ssh_file_reject"){fileReviews.delete(args.token);return;}
           if(cmd==="ssh_file_download")return true;
           if (cmd === "ssh_profiles") return profiles;
+          if (cmd === "ssh_save_profile") {
+            const input=args.input;
+            const existing=profiles.find(profile=>profile.id===input.id);
+            if(!existing)throw "Server profile no longer exists.";
+            existing.name=input.name;
+            existing.host=input.host;
+            existing.username=input.username;
+            existing.port=input.port;
+            existing.identityFile=input.identityFile??null;
+            existing.passwordAllowed=input.passwordAllowed!==false;
+            return {...existing};
+          }
           if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, connectionId: (window as any).__configurationDisconnected && profile.id===first ? null : `connection-${profile.id}-${(window as any).__connectionGeneration??1}`, status: (window as any).__configurationDisconnected && profile.id===first ? "disconnected" : "connected", error: null }));
           if(cmd === "ssh_configuration_describe") {
             if((window as any).__holdConfigurationDescribe) await new Promise(resolve=>{(window as any).__releaseConfigurationDescribe=resolve;});
@@ -1237,7 +1249,7 @@ test("fleet organization and ordering persist and are searchable in the connecti
   await expect(page.getByRole("main",{name:"Server fleet"}).getByRole("article").first()).toHaveAttribute("aria-label","Fixture Beta server");
   await page.getByRole("button",{name:"Organize Fixture Alpha",exact:true}).click();
   const editor=page.getByRole("dialog",{name:"Organize Fixture Alpha"});
-  await editor.getByLabel("Project",{exact:true}).fill("Portal");
+  await editor.getByLabel("Project grouping",{exact:true}).fill("Portal");
   await editor.getByLabel("Tags",{exact:true}).fill("api, eu-west");
   await editor.getByRole("combobox",{name:"Environment",exact:true}).click();
   await page.getByRole("option",{name:"Production",exact:true}).click();
@@ -1262,6 +1274,66 @@ test("fleet organization and ordering persist and are searchable in the connecti
   await expect(page.getByRole("button",{name:"Open Fixture Alpha",exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"Open Fixture Beta",exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_save_profile","ssh_inspection_run"].includes(call.cmd)))).toBe(false);
+});
+
+test("renaming a server updates fleet cards and VPS tabs without reconnecting or remounting sessions",async({page})=>{
+  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+  await nav.getByRole("button",{name:"Terminal",exact:true}).click();
+  await page.getByRole("button",{name:"New shell",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  const terminalOpens=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_terminal_open").length);
+  const opened=await terminalOpens();
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  const fleet=page.getByRole("main",{name:"Server fleet"});
+  await fleet.getByRole("button",{name:"Organize Fixture Alpha",exact:true}).click();
+  const editor=page.getByRole("dialog",{name:"Organize Fixture Alpha"});
+  const name=editor.getByLabel("Server name",{exact:true});
+  await expect(name).toHaveValue("Fixture Alpha");
+  await name.fill("Production Web");
+  await editor.getByRole("button",{name:"Save organization",exact:true}).click();
+  await expect(editor).toHaveCount(0);
+  await expect(fleet.getByRole("article",{name:"Production Web server",exact:true})).toBeVisible();
+  await expect(page.getByRole("tab",{name:/Production Web/})).toBeVisible();
+  await expect(page.getByRole("tab",{name:/Fixture Alpha/})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_save_profile"))).toHaveLength(1);
+  await fleet.getByRole("article",{name:"Production Web server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
+  await expect(page.getByText(/Connected · normal shell/)).toBeVisible();
+  expect(await terminalOpens()).toBe(opened);
+  expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_disconnect"].includes(call.cmd)))).toBe(false);
+  await page.getByRole("tab",{name:/Production Web/}).getByText("Production Web",{exact:true}).hover();
+  await expect(page.getByRole("tooltip")).toContainText("tester@alpha.invalid:22");
+});
+
+test("fleet project groups flow side by side and wrap without horizontal overflow",async({page},testInfo)=>{
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  const fleet=page.getByRole("main",{name:"Server fleet"});
+  const assign=async(name:string,project:string)=>{
+    await fleet.getByRole("button",{name:`Organize ${name}`,exact:true}).click();
+    const editor=page.getByRole("dialog",{name:`Organize ${name}`});
+    await editor.getByLabel("Project grouping",{exact:true}).fill(project);
+    await editor.getByRole("button",{name:"Save organization",exact:true}).click();
+    await expect(editor).toHaveCount(0);
+  };
+  await assign("Fixture Alpha","Alpha group");
+  await assign("Fixture Beta","Beta group");
+  const alpha=fleet.getByRole("region",{name:"Project Alpha group"});
+  const beta=fleet.getByRole("region",{name:"Project Beta group"});
+  await expect(alpha).toBeVisible();
+  await expect(beta).toBeVisible();
+  const wideAlpha=await alpha.boundingBox();
+  const wideBeta=await beta.boundingBox();
+  expect(wideAlpha&&wideBeta).toBeTruthy();
+  expect(Math.abs(wideAlpha!.y-wideBeta!.y)).toBeLessThan(2);
+  expect(wideBeta!.x).toBeGreaterThan(wideAlpha!.x+wideAlpha!.width-1);
+  await page.screenshot({path:testInfo.outputPath("fleet-groups-wide.png")});
+  await page.setViewportSize({width:520,height:900});
+  await expect.poll(async()=>{
+    const a=await alpha.boundingBox();
+    const b=await beta.boundingBox();
+    return a&&b?Math.round(b.y-(a.y+a.height)):-1;
+  }).toBeGreaterThanOrEqual(0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("fleet-groups-narrow.png")});
 });
 
 test("fleet home preserves terminals, sampler identity and continuously advancing history",async({page})=>{

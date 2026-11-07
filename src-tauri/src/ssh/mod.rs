@@ -154,33 +154,42 @@ impl SshService {
         let existing = input.id.is_some();
         let profile = input.validate()?;
         let mut runtime = self.runtime.lock().await;
-        if runtime.jobs.contains_key(&profile.id)
-            || runtime
-                .connections
-                .get(&profile.id)
-                .is_some_and(|handle| !handle.is_closed())
-        {
-            return Err("Disconnect this server before editing its profile.".into());
-        }
         let mut store = self.store()?;
         let mut next = store.database()?.clone();
+        let mut saved = profile.clone();
         if existing {
             let item = next
                 .profiles
                 .iter_mut()
                 .find(|item| item.id == profile.id)
                 .ok_or("Server profile no longer exists.")?;
-            *item = profile.clone();
+            let connection_unchanged = item.host == profile.host
+                && item.port == profile.port
+                && item.username == profile.username
+                && item.identity_file == profile.identity_file
+                && item.password_allowed == profile.password_allowed;
+            let in_use = runtime.jobs.contains_key(&profile.id)
+                || runtime
+                    .connections
+                    .get(&profile.id)
+                    .is_some_and(|handle| !handle.is_closed());
+            if in_use && !connection_unchanged {
+                return Err("Disconnect this server before editing its connection details.".into());
+            }
+            if connection_unchanged {
+                saved.revision = item.revision.clone();
+            }
+            *item = saved.clone();
         } else {
             if next.profiles.len() >= 100 {
                 return Err("The maximum of 100 saved server profiles has been reached.".into());
             }
-            next.profiles.push(profile.clone());
+            next.profiles.push(saved.clone());
         }
         store.commit(next)?;
-        runtime.challenges.remove(&profile.id);
-        runtime.errors.remove(&profile.id);
-        Ok(profile)
+        runtime.challenges.remove(&saved.id);
+        runtime.errors.remove(&saved.id);
+        Ok(saved)
     }
     pub async fn delete_profile(&self, id: &str) -> Result<(), String> {
         let mut runtime = self.runtime.lock().await;

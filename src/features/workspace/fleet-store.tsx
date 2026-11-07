@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
@@ -28,7 +29,12 @@ import {
   readPreference,
   writePreference,
 } from "@/features/settings/persistence";
-import type { ServerProfile } from "@/features/ssh/api";
+import {
+  profileQueryKey,
+  type ServerProfile,
+  safeError,
+  sshApi,
+} from "@/features/ssh/api";
 import {
   type Environment,
   emptyOrganization,
@@ -71,6 +77,7 @@ function load() {
   }
 }
 export function FleetProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [initial] = useState(load);
   const [data, setData] = useState<FleetData>(initial.data);
   const [dirty, setDirty] = useState(false);
@@ -79,6 +86,23 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     if (dirty) writePreference(fleetKey, JSON.stringify(data));
   }, [data, dirty]);
   const metadata = (id: string) => data.servers[id] ?? emptyOrganization();
+  const rename = async (profile: ServerProfile, name: string) => {
+    const trimmed = name.trim();
+    if (trimmed === profile.name) return;
+    const updated = await sshApi.saveProfile({
+      id: profile.id,
+      name: trimmed,
+      host: profile.host,
+      port: profile.port,
+      username: profile.username,
+      identityFile: profile.identityFile ?? null,
+      passwordAllowed: profile.passwordAllowed !== false,
+    });
+    queryClient.setQueryData<ServerProfile[]>(profileQueryKey, (profiles) =>
+      profiles?.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    await queryClient.invalidateQueries({ queryKey: profileQueryKey });
+  };
   const update = (id: string, patch: Partial<Organization>) => {
     setDirty(true);
     setData((old) => ({
@@ -128,7 +152,10 @@ export function FleetProvider({ children }: { children: ReactNode }) {
           key={editing.id}
           profile={editing}
           value={metadata(editing.id)}
-          onSave={(patch) => update(editing.id, patch)}
+          onSave={async (patch, name) => {
+            await rename(editing, name);
+            update(editing.id, patch);
+          }}
           onClose={() => setEditing(null)}
         />
       )}
@@ -154,6 +181,31 @@ export function EnvironmentBadge({
     </span>
   );
 }
+function OrganizationField({
+  id,
+  label,
+  help,
+  children,
+}: {
+  id: string;
+  label: string;
+  help?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <label htmlFor={id} className="block text-sm font-medium">
+        {label}
+      </label>
+      {children}
+      {help && (
+        <p id={`${id}-help`} className="text-xs text-muted-foreground">
+          {help}
+        </p>
+      )}
+    </div>
+  );
+}
 function OrganizationEditor({
   profile,
   value,
@@ -162,17 +214,19 @@ function OrganizationEditor({
 }: {
   profile: ServerProfile;
   value: Organization;
-  onSave: (metadata: Organization) => void;
+  onSave: (metadata: Organization, name: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(value);
+  const [name, setName] = useState(profile.name);
   const [tags, setTags] = useState(value.tags.join(", "));
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && !saving) onClose();
       }}
     >
       <DialogContent className="sm:max-w-md">
@@ -183,9 +237,22 @@ function OrganizationEditor({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="space-y-4"
-          onSubmit={(event) => {
+          className="space-y-5"
+          onSubmit={async (event) => {
             event.preventDefault();
+            const serverName = name.trim();
+            const invalidName = Array.from(serverName).some((character) => {
+              const code = character.charCodeAt(0);
+              return code < 32 || (code >= 127 && code <= 159);
+            });
+            if (
+              !serverName ||
+              Array.from(serverName).length > 80 ||
+              invalidName
+            ) {
+              setError("Use a server name between 1 and 80 characters.");
+              return;
+            }
             const next = {
               ...draft,
               project: draft.project.trim(),
@@ -206,43 +273,74 @@ function OrganizationEditor({
               );
               return;
             }
-            onSave(next);
-            onClose();
+            setError("");
+            setSaving(true);
+            try {
+              await onSave(next, serverName);
+              onClose();
+            } catch (saveError) {
+              setError(safeError(saveError));
+            } finally {
+              setSaving(false);
+            }
           }}
         >
-          <label htmlFor="fleet-project" className="block space-y-2 text-sm">
-            <span>Project</span>
+          <OrganizationField
+            id="fleet-name"
+            label="Server name"
+            help="Shown in fleet cards and VPS tabs. The address stays as connection detail."
+          >
+            <Input
+              id="fleet-name"
+              aria-describedby="fleet-name-help"
+              value={name}
+              required
+              maxLength={80}
+              disabled={saving}
+              placeholder="e.g. Production web"
+              onChange={(event) => setName(event.target.value)}
+            />
+          </OrganizationField>
+          <OrganizationField
+            id="fleet-project"
+            label="Project grouping"
+            help="Optional. Groups this server with related servers in Fleet."
+          >
             <Input
               id="fleet-project"
+              aria-describedby="fleet-project-help"
               value={draft.project}
               maxLength={80}
+              disabled={saving}
               placeholder="e.g. Customer portal"
               onChange={(event) =>
                 setDraft({ ...draft, project: event.target.value })
               }
             />
-          </label>
-          <label htmlFor="fleet-tags" className="block space-y-2 text-sm">
-            <span>Tags</span>
+          </OrganizationField>
+          <OrganizationField
+            id="fleet-tags"
+            label="Tags"
+            help="Separate tags with commas."
+          >
             <Input
               id="fleet-tags"
               aria-describedby="fleet-tags-help"
               value={tags}
               maxLength={395}
+              disabled={saving}
               placeholder="api, database, eu-west"
               onChange={(event) => setTags(event.target.value)}
             />
-          </label>
-          <p id="fleet-tags-help" className="text-xs text-muted-foreground">
-            Separate tags with commas.
-          </p>
+          </OrganizationField>
           <div className="space-y-2">
-            <span className="text-sm">Environment</span>
+            <span className="block text-sm font-medium">Environment</span>
             <Select
               value={draft.environment}
               onValueChange={(environment) => {
                 if (environment) setDraft({ ...draft, environment });
               }}
+              disabled={saving}
             >
               <SelectTrigger aria-label="Environment" className="w-full">
                 <SelectValue>
@@ -270,6 +368,7 @@ function OrganizationEditor({
             <Checkbox
               id="fleet-favorite"
               checked={draft.favorite}
+              disabled={saving}
               onCheckedChange={(favorite) => setDraft({ ...draft, favorite })}
             />
             Favorite server
@@ -280,10 +379,14 @@ function OrganizationEditor({
             </p>
           )}
           <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
+            <DialogClose
+              render={<Button variant="outline" disabled={saving} />}
+            >
               Cancel
             </DialogClose>
-            <Button type="submit">Save organization</Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save organization"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

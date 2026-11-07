@@ -594,6 +594,11 @@ async fn unknown_hosts_require_trust_and_authentication_is_isolated_per_profile(
     assert_eq!(service.statuses().await[0].status, "connected");
     let mut edit = input(fixture.port);
     edit.id = Some(profile.id.clone());
+    edit.port = if fixture.port == u16::MAX {
+        1
+    } else {
+        fixture.port + 1
+    };
     assert!(service.save_profile(edit).await.is_err());
     assert!(service.delete_profile(&profile.id).await.is_err());
     let second = service.save_profile(input(fixture.port)).await.unwrap();
@@ -628,6 +633,43 @@ async fn unknown_hosts_require_trust_and_authentication_is_isolated_per_profile(
             .status,
         "disconnected"
     );
+}
+
+#[tokio::test]
+async fn renaming_a_connected_profile_preserves_its_identity_and_connection() {
+    let fixture = Fixture::start(0, None).await;
+    let (dir, service) = service();
+    let profile = service.save_profile(input(fixture.port)).await.unwrap();
+    let inspection = service.inspect(&profile.id).await.unwrap();
+    service
+        .trust(&profile.id, &inspection.challenge_id)
+        .await
+        .unwrap();
+    service
+        .connect(
+            &profile.id,
+            &inspection.challenge_id,
+            FIXTURE_PASSWORD.into(),
+        )
+        .await
+        .unwrap();
+    let mut rename = input(fixture.port);
+    rename.id = Some(profile.id.clone());
+    rename.name = "Renamed VPS".into();
+    let renamed = service.save_profile(rename).await.unwrap();
+    assert_eq!(renamed.id, profile.id);
+    assert_eq!(renamed.revision, profile.revision);
+    assert_eq!(renamed.name, "Renamed VPS");
+    assert_eq!(service.profiles().unwrap()[0].name, "Renamed VPS");
+    assert_eq!(service.statuses().await[0].status, "connected");
+    let stored = std::fs::read_to_string(dir.path().join("profiles.json")).unwrap();
+    assert!(stored.contains("\"name\": \"Renamed VPS\""));
+    let mut endpoint_change = input(fixture.port);
+    endpoint_change.id = Some(profile.id.clone());
+    endpoint_change.host = "127.0.0.2".into();
+    assert!(service.save_profile(endpoint_change).await.is_err());
+    assert_eq!(service.statuses().await[0].status, "connected");
+    service.disconnect(&profile.id).await.unwrap();
 }
 
 #[tokio::test]
