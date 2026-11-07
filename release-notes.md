@@ -1,7 +1,6 @@
-# VPS Pilot 0.2.5
+# VPS Pilot 0.2.6
 
-- Guide SSH setup through local key selection, administrator preparation, public-key installation, verification and switching, with clear progress and next actions.
-- Fix password and review dialog overflow on smaller screens and improve sidebar item spacing.
-- Preserve completed setup progress across navigation while requiring fresh verification when login proof expires.
+- Fix immediate SSH-config review rejection after successful key-login verification by keeping proof and review expiry timestamps consistent.
+- Clarify the action for creating a fresh SSH-config review.
 
-Existing root access stays available. SSH-port, UFW and login-policy migration remain pending.
+Native proof expiration, identity checks and protected SSH-config writes remain enforced.
