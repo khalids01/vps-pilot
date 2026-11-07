@@ -1,7 +1,6 @@
 import {
   type ReactNode,
   useCallback,
-  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -202,7 +201,8 @@ function QuickSetupHeader({
             aria-label="Setup preview"
             className="max-w-md text-xs leading-relaxed text-muted-foreground sm:text-right"
           >
-            Choices save on this device. Server changes are unavailable.
+            Choices save on this device. Administrator access uses a separate
+            review.
           </aside>
         </div>
       )}
@@ -379,11 +379,6 @@ function TechnicalDetails({ children }: { children?: ReactNode }) {
   );
 }
 
-const quickSetupPasswordByteLimit = 4096;
-function passwordBytes(value: string) {
-  return new TextEncoder().encode(value).length;
-}
-
 function ExpandableExplanation({
   label,
   children,
@@ -429,15 +424,17 @@ function DetailRow({
 }
 
 export function QuickSetupWorkspace({
+  visible = true,
   profile,
   connected,
-  active,
   onOpenInspection,
+  onOpenProfile,
 }: {
   profile: ServerProfile;
   connected: boolean;
-  active: boolean;
+  visible?: boolean;
   onOpenInspection: () => void;
+  onOpenProfile?: (profileId: string) => void;
 }) {
   const fieldPrefix = useId();
   const { connectionId } = useConfiguration();
@@ -457,33 +454,10 @@ export function QuickSetupWorkspace({
     initial.draft.administrator.username,
   );
   const [portText, setPortText] = useState(String(initial.draft.access.port));
-  const [newAdminPassword, setNewAdminPassword] = useState("");
-  const [newAdminPasswordConfirm, setNewAdminPasswordConfirm] = useState("");
-  const [existingSudoPassword, setExistingSudoPassword] = useState("");
   const page = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     page.current?.closest("main")?.scrollTo({ top: 0 });
   }, []);
-  const adminMode = draft?.administrator.mode;
-  const draftStep = draft?.step;
-  const secretScope = [
-    active,
-    adminMode,
-    draftStep,
-    profile.id,
-    usernameText,
-    connectionId,
-    connected,
-  ].join("|");
-  const lastSecretScope = useRef(secretScope);
-  useEffect(() => {
-    if (lastSecretScope.current === secretScope) return;
-    lastSecretScope.current = secretScope;
-    setNewAdminPassword("");
-    setNewAdminPasswordConfirm("");
-    setExistingSudoPassword("");
-  }, [secretScope]);
-
   function commit(next: QuickSetupDraft) {
     const clean = sanitizeQuickSetupDraft(next);
     if (!clean) return;
@@ -503,9 +477,6 @@ export function QuickSetupWorkspace({
   }
   function resetDraft() {
     const next = defaultQuickSetupDraft();
-    setNewAdminPassword("");
-    setNewAdminPasswordConfirm("");
-    setExistingSudoPassword("");
     setDraft(next);
     setUsernameText(next.administrator.username);
     setPortText(String(next.access.port));
@@ -587,15 +558,6 @@ export function QuickSetupWorkspace({
   const draftKey = quickSetupDraftKey(profile.id);
   const noDraftStorage = draftKey === null;
   const firewallPlan = resolveQuickSetupFirewallPlan(draft, profile.port);
-  const newPasswordTooLong =
-    passwordBytes(newAdminPassword) > quickSetupPasswordByteLimit;
-  const confirmationTooLong =
-    passwordBytes(newAdminPasswordConfirm) > quickSetupPasswordByteLimit;
-  const existingPasswordTooLong =
-    passwordBytes(existingSudoPassword) > quickSetupPasswordByteLimit;
-  const passwordMismatch =
-    newAdminPasswordConfirm.length > 0 &&
-    newAdminPassword !== newAdminPasswordConfirm;
 
   let stepContent: ReactNode;
   if (draft.step === 1) {
@@ -686,134 +648,26 @@ export function QuickSetupWorkspace({
             {usernameError}
           </p>
         )}
-        <div className="space-y-4 border-t border-border/70 pt-4">
+        <div className="space-y-2 border-t border-border/70 pt-4">
           {draft.administrator.mode === "new" ? (
-            <div className="max-w-sm space-y-4">
-              <div className="space-y-1.5">
-                <label
-                  htmlFor={`${fieldPrefix}-new-password`}
-                  className="block text-sm"
-                >
-                  New administrator password
-                </label>
-                <Input
-                  id={`${fieldPrefix}-new-password`}
-                  type="password"
-                  autoComplete="new-password"
-                  maxLength={quickSetupPasswordByteLimit}
-                  value={newAdminPassword}
-                  aria-invalid={newPasswordTooLong}
-                  aria-describedby={
-                    newPasswordTooLong
-                      ? `${fieldPrefix}-new-password-error`
-                      : undefined
-                  }
-                  onChange={(event) => setNewAdminPassword(event.target.value)}
-                />
-                {newPasswordTooLong && (
-                  <p
-                    id={`${fieldPrefix}-new-password-error`}
-                    role="alert"
-                    className="text-xs text-destructive"
-                  >
-                    Use at most {quickSetupPasswordByteLimit} bytes.
-                  </p>
-                )}
-              </div>
-              <div className="space-y-1.5">
-                <label
-                  htmlFor={`${fieldPrefix}-new-password-confirm`}
-                  className="block text-sm"
-                >
-                  Confirm administrator password
-                </label>
-                <Input
-                  id={`${fieldPrefix}-new-password-confirm`}
-                  type="password"
-                  autoComplete="new-password"
-                  maxLength={quickSetupPasswordByteLimit}
-                  value={newAdminPasswordConfirm}
-                  aria-invalid={confirmationTooLong || passwordMismatch}
-                  aria-describedby={
-                    confirmationTooLong
-                      ? `${fieldPrefix}-new-password-confirm-error`
-                      : passwordMismatch
-                        ? `${fieldPrefix}-new-password-mismatch`
-                        : undefined
-                  }
-                  onChange={(event) =>
-                    setNewAdminPasswordConfirm(event.target.value)
-                  }
-                />
-                {confirmationTooLong && (
-                  <p
-                    id={`${fieldPrefix}-new-password-confirm-error`}
-                    role="alert"
-                    className="text-xs text-destructive"
-                  >
-                    Use at most {quickSetupPasswordByteLimit} bytes.
-                  </p>
-                )}
-              </div>
-              {passwordMismatch && (
-                <p
-                  id={`${fieldPrefix}-new-password-mismatch`}
-                  role="alert"
-                  className="text-xs text-destructive"
-                >
-                  Passwords do not match.
-                </p>
-              )}
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                This password is planned for the new local account and its sudo
-                access. SSH password login is a separate setting. Account
-                creation and sudo verification are unavailable today.
-              </p>
-            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              The sudo password for this new account is entered in the SSH key
+              step's Apply and verify access review, where it is used once and
+              never saved. A new account is created on supported Debian 12+ or
+              Ubuntu 22.04+ servers.
+            </p>
           ) : (
-            <div className="max-w-sm space-y-1.5">
-              <label
-                htmlFor={`${fieldPrefix}-sudo-password`}
-                className="block text-sm"
-              >
-                Existing administrator sudo password
-              </label>
-              <Input
-                id={`${fieldPrefix}-sudo-password`}
-                type="password"
-                autoComplete="current-password"
-                maxLength={quickSetupPasswordByteLimit}
-                value={existingSudoPassword}
-                aria-invalid={existingPasswordTooLong}
-                aria-describedby={
-                  existingPasswordTooLong
-                    ? `${fieldPrefix}-sudo-password-error`
-                    : undefined
-                }
-                onChange={(event) =>
-                  setExistingSudoPassword(event.target.value)
-                }
-              />
-              {existingPasswordTooLong && (
-                <p
-                  id={`${fieldPrefix}-sudo-password-error`}
-                  role="alert"
-                  className="text-xs text-destructive"
-                >
-                  Use at most {quickSetupPasswordByteLimit} bytes.
-                </p>
-              )}
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                This password is planned for sudo only. It does not reset or
-                change the account password. Account actions and sudo
-                verification are unavailable today.
-              </p>
-            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              The existing account is adopted only after an explicit review. Its
+              password, groups, sudoers and existing keys are never reset or
+              overwritten. Its sudo password is entered in the Apply and verify
+              access review.
+            </p>
           )}
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Secrets stay only while this step is open. They are not saved, sent,
-            verified or reused, and must be reentered when applying becomes
-            available.
+            Account creation, adoption, public-key installation and
+            key-plus-sudo verification are in the SSH key step. SSH port, sshd
+            key-only policy and firewall changes are not applied.
           </p>
         </div>
       </StepSection>
@@ -849,6 +703,7 @@ export function QuickSetupWorkspace({
         {(draft.sshKey.strategy === "existing" ||
           draft.sshKey.strategy === "generate") && (
           <QuickSetupKeyManager
+            visible={visible}
             key={draft.sshKey.strategy}
             strategy={draft.sshKey.strategy}
             selectedKeyId={
@@ -879,8 +734,12 @@ export function QuickSetupWorkspace({
               port: accessTargets.current.port,
             }}
             plannedTarget={accessTargets.planned}
+            adminMode={draft.administrator.mode}
+            adminUsername={draft.administrator.username}
+            plannedPort={draft.access.port}
             connectionId={connectionId}
             connected={connected}
+            onOpenProfile={onOpenProfile ?? (() => {})}
           />
         )}
       </StepSection>
@@ -1292,8 +1151,8 @@ export function QuickSetupWorkspace({
           role="status"
           className="text-sm leading-relaxed text-muted-foreground"
         >
-          Server changes remain unavailable. SSH and UFW hardening has not been
-          applied; key login verification is a separate test.
+          Administrator access is applied and verified separately in the SSH key
+          step. SSH port, login-policy and UFW changes remain pending.
         </p>
       </StepSection>
     );

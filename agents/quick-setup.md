@@ -723,3 +723,32 @@ Implementation verified for the public-key installation/sidebar increment:
   sessions. Codex reviewed, integrated and independently verified the result,
   with focused safety-review requests, fixture/test-selector/lint repairs and
   command-console integration. CLI processes exited; no idle sessions are needed.
+
+
+## Staged administrator access increment — 2026-11-07
+
+Implemented reviewed root-to-administrator creation/adoption, selected public-key
+installation under the target account via runuser, independent pinned-host key
+SSH and explicit sudo-to-root verification, and promotion of the retained live
+connection into a separate profile. Original root access remains available;
+nonsecret wizard choices carry over, progress survives restart and requires a
+fresh live proof. New/existing mode is enforced; existing passwords/groups and
+keys are preserved. Fresh-home collision checks run before useradd, sudoers is
+validated, native reviews bind connection/host/key/file evidence and expire.
+
+Native helper tests use temporary account-command fixtures; loopback SSH tests
+gate actual selected-key authentication on the installed authorized_keys file.
+No host users, real SSH files or production VPS are changed. SSH port, password
+or root-login restrictions, UFW recovery and application installers remain
+pending; supported execution is limited to Debian 12+ and Ubuntu 22.04+ with the
+required tools already installed. No reboot or automatic replay occurs.
+
+Validation for this increment: `bun run check`, `bun run build`, release-version
+validation, 69 Bun tests, Cargo fmt and Clippy with warnings denied passed. The
+full native library suite passed 149 tests (5 intentionally ignored); the staged
+access and helper fixtures were rechecked after review fixes. Thirty relevant
+browser scenarios passed across the main run and focused reruns, including
+root-to-administrator handoff, no automatic promotion retry, transient credential
+clearing on hidden workspaces, draft persistence and existing key-install guards.
+These are temporary-home/loopback and mocked-browser checks, not a claim of
+full-VM SSH/UFW recovery validation.

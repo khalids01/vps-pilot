@@ -7,6 +7,8 @@
 //! memory-only, bounded, and never contain credentials or key bytes.
 
 #[cfg(unix)]
+pub(super) mod admin;
+#[cfg(unix)]
 pub(super) mod install_key;
 #[cfg(unix)]
 mod local_config;
@@ -47,6 +49,8 @@ pub(crate) struct SourceSnapshot {
 #[derive(Default)]
 struct Inner {
     proofs: HashMap<String, Proof>,
+    admin_proofs: HashMap<String, AdminProof>,
+    admin_handles: HashMap<String, super::client::Handle<super::Client>>,
     reviews: HashMap<String, Review>,
     attempts: HashMap<String, Instant>,
     failures: HashMap<String, Vec<Instant>>,
@@ -55,6 +59,9 @@ struct Inner {
 impl Inner {
     fn prune(&mut self, now: Instant) {
         self.proofs.retain(|_, proof| proof.deadline > now);
+        self.admin_proofs.retain(|_, proof| proof.deadline > now);
+        self.admin_handles
+            .retain(|id, _| self.admin_proofs.contains_key(id));
         self.reviews.retain(|_, review| review.deadline > now);
         self.failures.retain(|_, failures| {
             failures.retain(|at| now.saturating_duration_since(*at) < FAILURE_WINDOW);
@@ -69,6 +76,8 @@ pub struct State {
     inner: Arc<Mutex<Inner>>,
     #[cfg(unix)]
     pub(super) install: install_key::State,
+    #[cfg(unix)]
+    pub(super) admin: admin::State,
 }
 
 struct AttemptGuard {
@@ -213,6 +222,91 @@ impl State {
         }
     }
 
+    fn insert_admin_proof(&self, proof: AdminProof) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Administrator proof state is unavailable.".to_string())?;
+        let now = Instant::now();
+        inner.prune(now);
+        if inner.admin_proofs.len() >= MAX_PROOFS {
+            if let Some(oldest) = inner
+                .admin_proofs
+                .values()
+                .min_by_key(|proof| proof.deadline)
+                .map(|proof| proof.id.clone())
+            {
+                inner.admin_proofs.remove(&oldest);
+            }
+        }
+        inner.admin_proofs.insert(proof.id.clone(), proof);
+        Ok(())
+    }
+
+    fn admin_proof(&self, proof_id: &str) -> Result<AdminProof, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Administrator proof state is unavailable.".to_string())?;
+        inner.prune(Instant::now());
+        inner.admin_proofs.get(proof_id).cloned().ok_or_else(|| {
+            "Administrator proof expired or is unavailable. Apply and verify access again."
+                .to_string()
+        })
+    }
+
+    fn insert_admin_handle(
+        &self,
+        proof_id: &str,
+        handle: super::client::Handle<super::Client>,
+    ) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Administrator proof state is unavailable.".to_string())?;
+        inner.admin_handles.insert(proof_id.to_string(), handle);
+        Ok(())
+    }
+
+    /// Atomically claim the proof and its live candidate handle. The handle is
+    /// withheld from the prune-retain set while claimed, so an expiry during the
+    /// local commit cannot silently discard a verified connection.
+    fn take_admin_candidate(&self, proof_id: &str) -> Result<AdminCandidate, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Administrator proof state is unavailable.".to_string())?;
+        inner.prune(Instant::now());
+        let proof = inner.admin_proofs.get(proof_id).cloned().ok_or_else(|| {
+            "The administrator proof expired or was already used. Apply and verify access again."
+                .to_string()
+        })?;
+        let handle = inner.admin_handles.remove(proof_id).ok_or_else(|| {
+            "The verified administrator connection is no longer available. Apply and verify access again."
+                .to_string()
+        })?;
+        inner.admin_proofs.remove(proof_id);
+        Ok(AdminCandidate { proof, handle })
+    }
+
+    fn restore_admin_candidate(
+        &self,
+        proof_id: &str,
+        candidate: AdminCandidate,
+    ) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Administrator proof state is unavailable.".to_string())?;
+        inner
+            .admin_proofs
+            .insert(proof_id.to_string(), candidate.proof);
+        inner
+            .admin_handles
+            .insert(proof_id.to_string(), candidate.handle);
+        Ok(())
+    }
+
     /// A completed remote mutation invalidates prior login proofs and config
     /// reviews for the affected server only; other servers' evidence is kept.
     fn clear_setup_evidence(&self, profile_id: &str) {
@@ -220,6 +314,12 @@ impl State {
             inner
                 .proofs
                 .retain(|_, proof| proof.profile_id != profile_id);
+            inner
+                .admin_proofs
+                .retain(|_, proof| proof.profile_id != profile_id);
+            let live: std::collections::HashSet<String> =
+                inner.admin_proofs.keys().cloned().collect();
+            inner.admin_handles.retain(|id, _| live.contains(id));
             inner
                 .reviews
                 .retain(|_, review| review.profile_id != profile_id);
@@ -413,6 +513,88 @@ pub struct KeyLoginProof {
     pub expires_at_ms: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct AdminProof {
+    pub(crate) id: String,
+    pub(crate) profile_id: String,
+    pub(crate) revision: String,
+    pub(crate) connection_id: String,
+    pub(crate) key_id: String,
+    pub(crate) key_fingerprint: String,
+    pub(crate) key_digest: [u8; 32],
+    pub(crate) key_path: PathBuf,
+    pub(crate) key_location: KeyLocation,
+    pub(crate) host_key: HostKey,
+    pub(crate) host: String,
+    pub(crate) source_username: String,
+    pub(crate) username: String,
+    pub(crate) port: u16,
+    pub(crate) sudo_verified: bool,
+    pub(crate) deadline: Instant,
+}
+
+impl AdminProof {
+    fn view(&self) -> SetupAdminProof {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        SetupAdminProof {
+            proof_id: self.id.clone(),
+            profile_id: self.profile_id.clone(),
+            profile_revision: self.revision.clone(),
+            connection_id: self.connection_id.clone(),
+            key_id: self.key_id.clone(),
+            key_fingerprint: self.key_fingerprint.clone(),
+            key_location: self.key_location,
+            host: self.host.clone(),
+            source_username: self.source_username.clone(),
+            username: self.username.clone(),
+            port: self.port,
+            sudo_verified: self.sudo_verified,
+            expires_at_ms: u64::try_from(now_ms.saturating_add(remaining.as_millis()))
+                .unwrap_or(u64::MAX),
+        }
+    }
+}
+
+/// Safe administrator proof metadata. No sudo password, key bytes or passphrase.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupAdminProof {
+    pub proof_id: String,
+    pub profile_id: String,
+    pub profile_revision: String,
+    pub connection_id: String,
+    pub key_id: String,
+    pub key_fingerprint: String,
+    pub key_location: KeyLocation,
+    pub host: String,
+    pub source_username: String,
+    pub username: String,
+    pub port: u16,
+    pub sudo_verified: bool,
+    pub expires_at_ms: u64,
+}
+
+/// A newly saved administrator profile. The original root profile and its live
+/// session are unchanged.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupAdminPromotionResult {
+    pub profile: Profile,
+    pub previous_username: String,
+    pub source_profile_id: String,
+    pub connection_id: String,
+    pub connected: bool,
+}
+
+struct AdminCandidate {
+    proof: AdminProof,
+    handle: super::client::Handle<super::Client>,
+}
+
 pub struct VerifyRequest {
     pub profile_id: String,
     pub connection_id: String,
@@ -431,6 +613,8 @@ pub struct InstallRequest {
     pub profile_revision: String,
     pub connection_id: String,
     pub key_id: String,
+    /// Present only for a staged-administrator installation from a root source.
+    pub target_username: Option<String>,
 }
 
 /// Preview for appending the selected public key to the current account's
@@ -976,6 +1160,7 @@ pub async fn ssh_setup_key_install_review(
     profile_revision: String,
     connection_id: String,
     key_id: String,
+    target_username: Option<String>,
 ) -> Result<SetupKeyInstallReview, String> {
     service
         .review_setup_key_install(
@@ -985,6 +1170,7 @@ pub async fn ssh_setup_key_install_review(
                 profile_revision,
                 connection_id,
                 key_id,
+                target_username,
             },
         )
         .await
@@ -1032,5 +1218,153 @@ impl SshService {
     pub(crate) fn reject_setup_key_install(&self, review_id: &str) -> Result<(), String> {
         let _ = review_id;
         Err("Reviewed public-key installation is unavailable on this platform.".into())
+    }
+}
+
+#[cfg(unix)]
+pub mod admin_commands {
+    use super::admin::{
+        AdminApplyRequest, AdminApplyResult, AdminRequest, AdminReview, AdminVerifyRequest,
+    };
+    use super::{SetupAdminPromotionResult, SetupAdminProof, SshService};
+    use crate::setup_keys::KeyVault;
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ssh_setup_admin_review(
+        service: tauri::State<'_, SshService>,
+        vault: tauri::State<'_, KeyVault>,
+        profile_id: String,
+        profile_revision: String,
+        connection_id: String,
+        key_id: String,
+        username: String,
+        mode: String,
+    ) -> Result<AdminReview, String> {
+        service
+            .review_setup_admin(
+                vault.inner(),
+                AdminRequest {
+                    profile_id,
+                    profile_revision,
+                    connection_id,
+                    key_id,
+                    username,
+                    mode,
+                },
+            )
+            .await
+    }
+
+    #[tauri::command]
+    pub async fn ssh_setup_admin_apply(
+        service: tauri::State<'_, SshService>,
+        vault: tauri::State<'_, KeyVault>,
+        review_id: String,
+        password: String,
+    ) -> Result<AdminApplyResult, String> {
+        service
+            .apply_setup_admin(
+                vault.inner(),
+                AdminApplyRequest {
+                    review_id,
+                    password,
+                },
+            )
+            .await
+    }
+
+    #[tauri::command]
+    pub fn ssh_setup_admin_reject(
+        service: tauri::State<'_, SshService>,
+        review_id: String,
+    ) -> Result<(), String> {
+        service.reject_setup_admin(&review_id)
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ssh_setup_admin_verify(
+        service: tauri::State<'_, SshService>,
+        vault: tauri::State<'_, KeyVault>,
+        profile_id: String,
+        profile_revision: String,
+        connection_id: String,
+        key_id: String,
+        username: String,
+        passphrase: Option<String>,
+        sudo_password: String,
+    ) -> Result<SetupAdminProof, String> {
+        service
+            .verify_setup_admin_access(
+                vault.inner(),
+                AdminVerifyRequest {
+                    profile_id,
+                    profile_revision,
+                    connection_id,
+                    key_id,
+                    username,
+                    passphrase,
+                    sudo_password,
+                },
+            )
+            .await
+    }
+
+    #[tauri::command]
+    pub async fn ssh_setup_admin_promote(
+        service: tauri::State<'_, SshService>,
+        vault: tauri::State<'_, KeyVault>,
+        proof_id: String,
+    ) -> Result<SetupAdminPromotionResult, String> {
+        service.promote_setup_admin(vault.inner(), &proof_id).await
+    }
+}
+
+#[cfg(not(unix))]
+pub mod admin_commands {
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ssh_setup_admin_review(
+        _profile_id: String,
+        _profile_revision: String,
+        _connection_id: String,
+        _key_id: String,
+        _username: String,
+        _mode: String,
+    ) -> Result<serde_json::Value, String> {
+        Err("Staged administrator setup is unavailable on this platform.".into())
+    }
+
+    #[tauri::command]
+    pub async fn ssh_setup_admin_apply(
+        _review_id: String,
+        _password: String,
+    ) -> Result<serde_json::Value, String> {
+        Err("Staged administrator setup is unavailable on this platform.".into())
+    }
+
+    #[tauri::command]
+    pub fn ssh_setup_admin_reject(_review_id: String) -> Result<(), String> {
+        Err("Staged administrator setup is unavailable on this platform.".into())
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ssh_setup_admin_verify(
+        _profile_id: String,
+        _profile_revision: String,
+        _connection_id: String,
+        _key_id: String,
+        _username: String,
+        _passphrase: Option<String>,
+        _sudo_password: String,
+    ) -> Result<serde_json::Value, String> {
+        Err("Staged administrator verification is unavailable on this platform.".into())
+    }
+
+    #[tauri::command]
+    pub async fn ssh_setup_admin_promote(_proof_id: String) -> Result<serde_json::Value, String> {
+        Err("Staged administrator promotion is unavailable on this platform.".into())
     }
 }

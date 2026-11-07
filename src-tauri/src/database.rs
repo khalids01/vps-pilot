@@ -11,6 +11,8 @@ const ERROR: &str = "Local database could not be read or saved. Existing data wa
 const QUICK_SETUP_DRAFT_PREFIX: &str = "vps-pilot:quick-setup-draft:v1:";
 const QUICK_SETUP_DRAFT_LIMIT: usize = 4_096;
 const QUICK_SETUP_INVALID_SENTINEL: &str = "vps-pilot:quick-setup-draft-invalid";
+const SETUP_ACCESS_PROGRESS_PREFIX: &str = "vps-pilot:setup-access:v1:";
+const SETUP_ACCESS_PROGRESS_LIMIT: usize = 1_024;
 pub struct LocalDatabase(Mutex<Connection>);
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -244,6 +246,60 @@ fn quick_setup_key(key: &str) -> Option<&str> {
     key.strip_prefix(QUICK_SETUP_DRAFT_PREFIX)
         .filter(|id| uuid::Uuid::parse_str(id).is_ok())
 }
+fn setup_access_progress_key(key: &str) -> Option<&str> {
+    key.strip_prefix(SETUP_ACCESS_PROGRESS_PREFIX)
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+fn validate_setup_access_progress(value: &str) -> Result<(), String> {
+    if value.len() > SETUP_ACCESS_PROGRESS_LIMIT {
+        return Err("Invalid access progress.".into());
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(value).map_err(|_| "Invalid access progress.")?;
+    let object = parsed
+        .as_object()
+        .ok_or_else(|| "Invalid access progress.".to_string())?;
+    // Nonsecret progress only: an opaque stage plus the reviewed account name
+    // and an opaque key reference. Live proofs are never persisted.
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "version" | "stage" | "username" | "keyId"))
+    {
+        return Err("Only non-secret access progress can be saved.".into());
+    }
+    let stage = object
+        .get("stage")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if object.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+        || ![
+            "accountReady",
+            "keyInstalled",
+            "accessVerified",
+            "accessPromoted",
+        ]
+        .contains(&stage)
+    {
+        return Err("Invalid access progress.".into());
+    }
+    if let Some(username) = object.get("username") {
+        let value = username
+            .as_str()
+            .ok_or_else(|| "Invalid access progress.".to_string())?;
+        if !quick_setup_username_valid(value) {
+            return Err("Invalid access progress.".into());
+        }
+    }
+    if let Some(key_id) = object.get("keyId") {
+        let value = key_id
+            .as_str()
+            .ok_or_else(|| "Invalid access progress.".to_string())?;
+        if uuid::Uuid::parse_str(value).map(|id| id.to_string()) != Ok(value.to_string()) {
+            return Err("Invalid access progress.".into());
+        }
+    }
+    Ok(())
+}
 fn quick_setup_username_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -347,6 +403,7 @@ fn ui_key(key: &str) -> bool {
         || key
             .strip_prefix("vps-pilot:remote-terminal:v1:")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || setup_access_progress_key(key).is_some()
         || key
             .strip_prefix("vps-pilot:command-console:v1:")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -413,6 +470,9 @@ fn validate_document(key: &str, value: &str) -> Result<(), String> {
     }
     if quick_setup_key(key).is_some() {
         return validate_quick_setup_draft(value);
+    }
+    if setup_access_progress_key(key).is_some() {
+        return validate_setup_access_progress(value);
     }
     if let Some(id) = key.strip_prefix("vps-pilot:command-console:v1:") {
         if uuid::Uuid::parse_str(id).is_err() || value.len() > 256 {

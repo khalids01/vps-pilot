@@ -19,6 +19,7 @@ import {
   resolveQuickSetupFirewallPlan,
   resolveQuickSetupPlan,
   sanitizeQuickSetupDraft,
+  sanitizeQuickSetupProgress,
   validateQuickSetupKeyName,
   validateQuickSetupPort,
   validateQuickSetupUsername,
@@ -626,4 +627,24 @@ test("catalog metadata is clearly non-executable and source-policy only", () => 
   expect(quickSetupSourcePolicy).toContain("must be rechecked");
   expect(quickSetupSourcePolicy).toContain("not a verified");
   expect(quickSetupSourcePolicy).not.toContain("https://");
+});
+
+test("access progress rejects secrets and unknown verification evidence", () => {
+  const value = {
+    version: 1,
+    stage: "accessVerified",
+    username: "dev",
+    keyId: server,
+  };
+  expect(sanitizeQuickSetupProgress(value)).toEqual(value);
+  expect(
+    sanitizeQuickSetupProgress({ ...value, password: "must not persist" }),
+  ).toBeNull();
+  expect(sanitizeQuickSetupProgress({ ...value, proofId: server })).toBeNull();
+  expect(
+    sanitizeQuickSetupProgress({ ...value, stage: "fully-hardened" }),
+  ).toBeNull();
+  expect(
+    sanitizeQuickSetupProgress({ ...value, keyId: "/home/user/.ssh/key" }),
+  ).toBeNull();
 });

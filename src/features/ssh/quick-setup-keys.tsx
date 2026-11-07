@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { desktopAvailable, safeError } from "./api";
 import { QuickSetupAccess } from "./quick-setup-access";
+import { type AdminStage, QuickSetupAdmin } from "./quick-setup-admin";
 import {
   defaultQuickSetupKeyName,
   quickSetupKeyNameMaxLength,
@@ -62,14 +63,20 @@ function locationLabel(location: KeyLocation) {
 }
 
 export function QuickSetupKeyManager({
+  visible = true,
   strategy,
   selectedKeyId,
   onSelectKey,
   source,
   plannedTarget,
+  adminMode,
+  adminUsername,
+  plannedPort,
   connectionId,
   connected,
+  onOpenProfile,
 }: {
+  visible?: boolean;
   strategy: "existing" | "generate";
   selectedKeyId?: string;
   onSelectKey: (keyId: string) => void;
@@ -81,8 +88,12 @@ export function QuickSetupKeyManager({
     port: number;
   };
   plannedTarget: { username: string; port: number };
+  adminMode: "new" | "existing";
+  adminUsername: string;
+  plannedPort: number;
   connectionId?: string | null;
   connected: boolean;
+  onOpenProfile: (profileId: string) => void;
 }) {
   const id = useId();
   const [keys, setKeys] = useState<SetupKeyList | null>(null);
@@ -90,6 +101,12 @@ export function QuickSetupKeyManager({
   const [loading, setLoading] = useState(false);
   const [passphrase, setPassphrase] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  useEffect(() => {
+    if (!visible) {
+      setPassphrase("");
+      setConfirmation("");
+    }
+  }, [visible]);
   const [fileName, setFileName] = useState(() =>
     defaultQuickSetupKeyName(source.host),
   );
@@ -106,6 +123,11 @@ export function QuickSetupKeyManager({
   const [storedOpen, setStoredOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
   const [accessBusy, setAccessBusy] = useState(false);
+  const [adminStage, setAdminStage] = useState<AdminStage>("pending");
+  const [adminBusy, setAdminBusy] = useState(false);
+  const needsAdministrator =
+    source.username === "root" && plannedTarget.username !== "root";
+  const adminTarget = needsAdministrator ? plannedTarget.username : null;
   const active = useRef(true);
   const accessBusyRef = useRef(false);
   const mutationGate = useRef<KeyMutation | null>(null);
@@ -124,6 +146,9 @@ export function QuickSetupKeyManager({
   const handleAccessBusy = useCallback((busy: boolean) => {
     accessBusyRef.current = busy;
     setAccessBusy(busy);
+  }, []);
+  const handleAdminBusy = useCallback((busy: boolean) => {
+    setAdminBusy(busy);
   }, []);
 
   const load = useCallback(async () => {
@@ -760,14 +785,40 @@ export function QuickSetupKeyManager({
         </fieldset>
       )}
 
+      {selectedKey &&
+        selectedKey.location !== "legacy" &&
+        connected &&
+        needsAdministrator && (
+          <QuickSetupAdmin
+            visible={visible}
+            source={source}
+            mode={adminMode}
+            username={adminUsername}
+            plannedPort={plannedPort}
+            connectionId={connectionId}
+            connected={connected}
+            selectedKey={selectedKey}
+            keyBusy={mutation !== null || accessBusy}
+            onBusyChange={handleAdminBusy}
+            onStageChange={setAdminStage}
+            onOpenProfile={onOpenProfile}
+          />
+        )}
+
       {selectedKey && selectedKey.location !== "legacy" && (
         <QuickSetupAccess
+          visible={visible}
           source={source}
           plannedTarget={plannedTarget}
+          targetUsername={adminTarget}
           connectionId={connectionId}
           connected={connected}
           selectedKey={selectedKey}
-          keyBusy={mutation !== null}
+          keyBusy={
+            mutation !== null ||
+            adminBusy ||
+            (needsAdministrator && adminStage === "pending")
+          }
           onBusyChange={handleAccessBusy}
         />
       )}

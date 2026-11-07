@@ -32,6 +32,7 @@ const MAX_REVIEWS: usize = 100;
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(25);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 const PURPOSE: &str = "Append the selected public key to the current account's ~/.ssh/authorized_keys. Existing keys, options and file bytes are preserved; an existing file is backed up first. No sudo, password, port, SSH daemon or firewall change is made. Installation alone does not prove key login, and a custom sshd AuthorizedKeysFile is not detected.";
+const ADMIN_PURPOSE: &str = "Append the selected public key to the planned administrator's ~/.ssh/authorized_keys through the existing root connection. Existing keys, options and file bytes are preserved; an existing file is backed up first. No password, port, SSH daemon or firewall change is made. Installation alone does not prove key login; a separate key-only connection must verify sudo.";
 
 /// The exact fixed command executed on the existing authenticated channel. The
 /// selected public line and expected snapshot are sent on stdin only.
@@ -40,6 +41,26 @@ pub(crate) fn command() -> String {
         "exec python3 -I -S -B -u -c '{}'",
         SCRIPT.replace('\'', "'\\''")
     )
+}
+
+/// The same bounded helper, but run as the staged administrator. Only a root
+/// source connection may use this form; `runuser` takes the already-created
+/// account without a password and the helper still resolves that user's home and
+/// ownership from the kernel account record.
+pub(crate) fn command_for(target: Option<&str>) -> String {
+    match target {
+        None => command(),
+        Some(user) => {
+            debug_assert!(user.bytes().all(|byte| byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || b"_-".contains(&byte)));
+            format!(
+                "exec runuser -u {} -- python3 -I -S -B -u -c '{}'",
+                user,
+                SCRIPT.replace('\'', "'\\''")
+            )
+        }
+    }
 }
 
 /// Remote state captured by the read-only review and rechecked before apply.
@@ -88,6 +109,7 @@ struct Review {
     destination: String,
     public_line: String,
     snapshot: RemoteSnapshot,
+    target: Option<String>,
     deadline: Instant,
 }
 
@@ -105,12 +127,16 @@ impl Review {
             connection_id: self.connection_id.clone(),
             key_id: self.key_id.clone(),
             key_fingerprint: self.key_fingerprint.clone(),
-            username: self.username.clone(),
+            username: self.target.clone().unwrap_or_else(|| self.username.clone()),
             host: self.host.clone(),
             port: self.port,
             destination: self.destination.clone(),
-            command: command(),
-            purpose: PURPOSE.into(),
+            command: command_for(self.target.as_deref()),
+            purpose: if self.target.is_some() {
+                ADMIN_PURPOSE.into()
+            } else {
+                PURPOSE.into()
+            },
             already_present: self.snapshot.already_present,
             backup_planned: self.snapshot.file_exists && !self.snapshot.already_present,
             expires_at_ms: u64::try_from(now_ms.saturating_add(remaining.as_millis()))
@@ -374,6 +400,7 @@ async fn run_script(
     connection_id: &str,
     payload: &serde_json::Value,
     mutation: bool,
+    target: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::to_vec(payload)
         .map_err(|_| "The key installation request could not be prepared.".to_string())?;
@@ -399,7 +426,7 @@ async fn run_script(
             })?;
         (channel, profile.revision, profile.username)
     };
-    let command = command();
+    let command = command_for(target);
     let outcome = timeout(INSTALL_TIMEOUT, async {
         channel.exec(true, command).await.map_err(|_| {
             "Could not start the bounded key installer. No change was made.".to_string()
@@ -541,7 +568,10 @@ fn parse_apply(
     Ok(SetupKeyInstallResult {
         status,
         backup_path,
-        username: review.username.clone(),
+        username: review
+            .target
+            .clone()
+            .unwrap_or_else(|| review.username.clone()),
         port: review.port,
     })
 }
@@ -569,6 +599,28 @@ impl SshService {
                 "The current server account name is not supported for key installation.".into(),
             );
         }
+        let target = request.target_username.as_deref();
+        if let Some(name) = target {
+            if profile.username != "root" {
+                return Err(
+                    "Installing a key for another administrator requires the existing root connection."
+                        .into(),
+                );
+            }
+            let valid = !name.is_empty()
+                && name.len() <= 32
+                && name != "root"
+                && name
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|first| first.is_ascii_lowercase() || *first == b'_')
+                && name.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte)
+                });
+            if !valid {
+                return Err("Use a valid planned administrator name.".into());
+            }
+        }
         let _guard = self.setup_access.begin(&request.profile_id)?;
         let payload = serde_json::json!({
             "mode": "review",
@@ -580,6 +632,7 @@ impl SshService {
             &request.connection_id,
             &payload,
             false,
+            target,
         )
         .await?;
         let snapshot = reply
@@ -595,11 +648,15 @@ impl SshService {
                 })
             })?;
         validate_snapshot(&snapshot)?;
-        if snapshot.username != profile.username {
-            return Err(
+        let expected_username = target.unwrap_or(profile.username.as_str());
+        if snapshot.username != expected_username {
+            return Err(if target.is_some() {
+                "The reviewed remote account does not match the planned administrator. Key installation is supported only for the planned account."
+                    .into()
+            } else {
                 "The connected server account does not match this profile. Key installation is supported only for the current effective account."
-                    .into(),
-            );
+                    .into()
+            });
         }
         let destination = format!(
             "{}/.ssh/authorized_keys",
@@ -622,6 +679,7 @@ impl SshService {
             destination,
             public_line: key.public_line,
             snapshot,
+            target: target.map(str::to_string),
             deadline: Instant::now() + REVIEW_LIFETIME,
         };
         let view = review.view();
@@ -687,6 +745,7 @@ impl SshService {
             &review.connection_id,
             &payload,
             true,
+            review.target.as_deref(),
         )
         .await?;
         // Recheck the full source binding after the mutation could have happened.

@@ -481,3 +481,23 @@ read-only badge without broadening any native action permissions. Show the actua
 application version in the sidebar footer and improve current/new update details.
 Preserve open sessions/streams, tool state, keyboard/tooltip accessibility and
 mobile navigation. Collapse is a non-secret persisted local preference.
+
+
+## Staged administrator access — authorized 2026-11-07
+
+The user approved creating/adopting the planned non-root administrator through
+the original root connection, installing its selected public key, independently
+verifying key-only SSH plus sudo to root, and switching only after proof. This
+supersedes the previous current-account-only restriction for this narrow adapter.
+Supported remote path: Debian 12+ / Ubuntu 22.04+, existing Python 3 and standard
+account/sudo tools. New users get a transient stdin password and sudo group;
+existing accounts are explicitly adopted without password/group changes. Refuse
+occupied new homes and unsafe paths, validate sudoers, use fresh single-use
+reviews and retain source/root access. No real user SSH or important-VPS tests.
+
+Promote the live verified connection into a separate saved administrator profile;
+preserve source terminals/samplers and copy nonsecret wizard choices. Local save
+failure must not silently discard the candidate or auto-retry. Store only bounded
+nonsecret progress, never passwords/passphrases or a durable verification claim.
+SSH/UFW migration, key-only/root policy changes and reboot remain gated pending
+full disposable-VM recovery validation. Do not label those steps complete.

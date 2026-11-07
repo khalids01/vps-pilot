@@ -451,6 +451,74 @@ export function writeQuickSetupDraft(serverId: string, draft: QuickSetupDraft) {
   writePreference(key, JSON.stringify(clean), { immediate: true });
 }
 
+export const quickSetupProgressPrefix = "vps-pilot:setup-access:v1:";
+export const quickSetupProgressStages = [
+  "accountReady",
+  "keyInstalled",
+  "accessVerified",
+  "accessPromoted",
+] as const;
+export type QuickSetupProgressStage = (typeof quickSetupProgressStages)[number];
+export interface QuickSetupProgress {
+  version: 1;
+  stage: QuickSetupProgressStage;
+  username: string;
+  keyId?: string;
+}
+export function quickSetupProgressKey(serverId: string) {
+  return uuidPattern.test(serverId)
+    ? `${quickSetupProgressPrefix}${serverId}`
+    : null;
+}
+export function sanitizeQuickSetupProgress(
+  value: unknown,
+): QuickSetupProgress | null {
+  if (!isRecord(value)) return null;
+  const keys = ["version", "stage", "username"];
+  if (value.keyId !== undefined) keys.push("keyId");
+  if (!hasExactKeys(value, keys) || value.version !== 1) return null;
+  if (!(quickSetupProgressStages as readonly unknown[]).includes(value.stage))
+    return null;
+  if (
+    typeof value.username !== "string" ||
+    validateQuickSetupUsername(value.username) !== null
+  )
+    return null;
+  if (
+    value.keyId !== undefined &&
+    (typeof value.keyId !== "string" || !uuidPattern.test(value.keyId))
+  )
+    return null;
+  return {
+    version: 1,
+    stage: value.stage as QuickSetupProgressStage,
+    username: value.username,
+    ...(value.keyId === undefined ? {} : { keyId: value.keyId }),
+  };
+}
+export function readQuickSetupProgress(
+  serverId: string,
+): QuickSetupProgress | null {
+  const key = quickSetupProgressKey(serverId);
+  if (!key) return null;
+  const raw = readPreference(key);
+  if (raw === null || raw.length > 1024) return null;
+  try {
+    return sanitizeQuickSetupProgress(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+export function writeQuickSetupProgress(
+  serverId: string,
+  progress: QuickSetupProgress,
+) {
+  const key = quickSetupProgressKey(serverId);
+  const clean = sanitizeQuickSetupProgress(progress);
+  if (!key || !clean) return;
+  writePreference(key, JSON.stringify(clean), { immediate: true });
+}
+
 export interface QuickSetupAccessTargets {
   current: { username: string; port: number };
   planned: { username: string; port: number };

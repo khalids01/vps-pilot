@@ -65,18 +65,22 @@ export function QuickSetupKeyInstall({
   connected,
   keyId,
   keyFingerprint,
+  targetUsername,
   controlsBusy,
   onInstallationBusyChange,
   onInvalidate,
+  onInstalled,
 }: {
   source: InstallSource;
   connectionId?: string | null;
   connected: boolean;
   keyId: string;
   keyFingerprint: string;
+  targetUsername?: string | null;
   controlsBusy: boolean;
   onInstallationBusyChange: (busy: boolean) => void;
   onInvalidate: () => void;
+  onInstalled?: (username: string) => void;
 }) {
   const id = useId();
   const log = useCommandActivity();
@@ -104,6 +108,7 @@ export function QuickSetupKeyInstall({
     connectionId ?? "",
     keyId,
     keyFingerprint,
+    targetUsername ?? "",
     connected ? "connected" : "disconnected",
   ].join("\u0000");
   const contextRef = useRef(contextKey);
@@ -179,7 +184,7 @@ export function QuickSetupKeyInstall({
       value.connectionId === connectionId &&
       value.keyId === keyId &&
       value.keyFingerprint === keyFingerprint &&
-      value.username === source.username &&
+      value.username === (targetUsername ?? source.username) &&
       value.host === source.host &&
       value.port === source.port &&
       typeof value.destination === "string" &&
@@ -258,6 +263,7 @@ export function QuickSetupKeyInstall({
           profileRevision: source.profileRevision,
           connectionId,
           keyId,
+          targetUsername: targetUsername ?? null,
         },
       );
       if (
@@ -362,6 +368,8 @@ export function QuickSetupKeyInstall({
       setResult(value);
       setOpen(false);
       setError("");
+      onInstallationBusyChange(false);
+      onInstalled?.(value.username);
       onInvalidate();
     } catch (failure) {
       log.update(operationId, {
@@ -411,8 +419,10 @@ export function QuickSetupKeyInstall({
         <div className="min-w-0">
           <p className="text-sm font-medium">Install public key</p>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            Add the selected public key for {source.username} on the current
-            connection. Existing keys are preserved.
+            {targetUsername
+              ? `Add the selected public key for the planned administrator ${targetUsername} through the existing root connection.`
+              : `Add the selected public key for ${source.username} on the current connection.`}{" "}
+            Existing keys are preserved.
           </p>
         </div>
         <Button
@@ -421,7 +431,11 @@ export function QuickSetupKeyInstall({
           disabled={reviewDisabled}
           onClick={() => void startReview()}
         >
-          {reviewPending ? "Preparing review…" : "Install public key"}
+          {reviewPending
+            ? "Preparing review…"
+            : targetUsername
+              ? `Install key for ${targetUsername}`
+              : "Install public key"}
         </Button>
       </div>
 
@@ -481,8 +495,12 @@ export function QuickSetupKeyInstall({
           <DialogHeader>
             <DialogTitle>Review public key installation</DialogTitle>
             <DialogDescription>
-              The server adds this public key for the current account. Existing
-              keys, passwords, SSH ports and firewall settings are not changed.
+              The server adds this public key for{" "}
+              {targetUsername
+                ? `the planned administrator ${targetUsername}`
+                : "the current account"}
+              . Existing keys, passwords, SSH ports and firewall settings are
+              not changed.
             </DialogDescription>
           </DialogHeader>
 
@@ -518,7 +536,9 @@ export function QuickSetupKeyInstall({
                 </div>
                 <div className="grid gap-1 py-2 sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3">
                   <dt className="text-xs text-muted-foreground sm:text-sm">
-                    Current account
+                    {targetUsername
+                      ? "Planned administrator"
+                      : "Current account"}
                   </dt>
                   <dd className="min-w-0 text-sm break-all">
                     {review.username}

@@ -172,6 +172,9 @@ export async function hydratePreferences(documents: Record<string, string>) {
       quickSetupDraftPrefix,
       quickSetupInvalidDraftSentinel,
       sanitizeQuickSetupDraft,
+      quickSetupProgressKey,
+      quickSetupProgressPrefix,
+      sanitizeQuickSetupProgress,
     },
   ] = await Promise.all([
     import("../workspace/preferences"),
@@ -194,6 +197,17 @@ export async function hydratePreferences(documents: Record<string, string>) {
     }
   };
   const clean = (key: string, raw: string): string | null => {
+    if (key.startsWith(quickSetupProgressPrefix)) {
+      const serverId = key.slice(quickSetupProgressPrefix.length);
+      if (quickSetupProgressKey(serverId) !== key || raw.length > 1024)
+        return null;
+      try {
+        const value = sanitizeQuickSetupProgress(JSON.parse(raw));
+        return value ? JSON.stringify(value) : null;
+      } catch {
+        return null;
+      }
+    }
     if (key.startsWith(quickSetupDraftPrefix))
       return cleanQuickSetupDraft(key, raw);
     if (raw.length > 128000) return null;

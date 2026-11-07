@@ -14,6 +14,8 @@ use tokio::{
 };
 
 const FIXTURE_PASSWORD: &str = "fixture-only-password";
+#[cfg(unix)]
+const ADMIN_FIXTURE_PASSWORD: &str = "fixture-admin-sudo-password";
 #[derive(Clone)]
 struct TestServer {
     auth_count: Arc<AtomicUsize>,
@@ -30,6 +32,13 @@ struct TestServer {
     install_home: Option<std::path::PathBuf>,
     install_wrapper: Option<std::path::PathBuf>,
     install_requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    admin_channels: std::collections::HashSet<russh::ChannelId>,
+    admin_input: std::collections::HashMap<russh::ChannelId, Vec<u8>>,
+    admin_wrapper: Option<std::path::PathBuf>,
+    admin_requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    sudo_verify_channels: std::collections::HashSet<russh::ChannelId>,
+    sudo_verify_input: std::collections::HashMap<russh::ChannelId, Vec<u8>>,
+    root_password: bool,
     gate_explicit_key_on_install: bool,
     channels_closed: Arc<AtomicUsize>,
     open_pause: Arc<Mutex<Option<Arc<Notify>>>>,
@@ -111,6 +120,72 @@ impl server::Handler for TestServer {
         data: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        if self.admin_channels.contains(&channel) {
+            let complete = {
+                let buffer = self.admin_input.entry(channel).or_default();
+                if buffer.len() + data.len() > 65536 {
+                    return Ok(());
+                }
+                buffer.extend_from_slice(data);
+                if serde_json::from_slice::<serde_json::Value>(buffer).is_ok() {
+                    Some(buffer.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(request) = complete {
+                self.admin_input.remove(&channel);
+                self.admin_requests.lock().unwrap().push(request.clone());
+                let output = self.admin_wrapper.as_ref().map(|wrapper| {
+                    std::process::Command::new("python3")
+                        .arg(wrapper)
+                        .stdin(std::process::Stdio::piped())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .and_then(|mut child| {
+                            use std::io::Write as _;
+                            child.stdin.take().unwrap().write_all(&request)?;
+                            child.wait_with_output()
+                        })
+                });
+                match output {
+                    Some(Ok(output)) => {
+                        if !output.stdout.is_empty() {
+                            session.data(channel, output.stdout)?;
+                        }
+                        session.exit_status_request(
+                            channel,
+                            output.status.code().unwrap_or(1) as u32,
+                        )?;
+                    }
+                    _ => {
+                        session.data(channel, br#"{"ok":false,"reason":"io_error"}"#.to_vec())?;
+                        session.exit_status_request(channel, 1)?;
+                    }
+                }
+                session.close(channel)?;
+            }
+            return Ok(());
+        }
+        if self.sudo_verify_channels.contains(&channel) {
+            let complete = {
+                let buffer = self.sudo_verify_input.entry(channel).or_default();
+                buffer.extend_from_slice(data);
+                buffer.ends_with(b"\n")
+            };
+            if complete {
+                let request = self.sudo_verify_input.remove(&channel).unwrap_or_default();
+                if request == format!("{ADMIN_FIXTURE_PASSWORD}\n").as_bytes() {
+                    session.data(channel, b"0\n".to_vec())?;
+                    session.exit_status_request(channel, 0)?;
+                } else {
+                    session.exit_status_request(channel, 1)?;
+                }
+                session.close(channel)?;
+            }
+            return Ok(());
+        }
         if self.install_channels.contains(&channel) {
             let complete = {
                 let buffer = self.install_input.entry(channel).or_default();
@@ -218,8 +293,20 @@ impl server::Handler for TestServer {
             return Ok(());
         }
         #[cfg(unix)]
-        if data == setup_access::install_key::command().as_bytes() {
+        if data == setup_access::install_key::command().as_bytes()
+            || data.starts_with(b"exec runuser -u ")
+        {
             self.install_channels.insert(channel);
+            return Ok(());
+        }
+        #[cfg(unix)]
+        if data == setup_access::admin::command().as_bytes() {
+            self.admin_channels.insert(channel);
+            return Ok(());
+        }
+        #[cfg(unix)]
+        if data == setup_access::admin::SUDO_TEST.as_bytes() {
+            self.sudo_verify_channels.insert(channel);
             return Ok(());
         }
         if data == monitor::command().as_bytes() {
@@ -259,6 +346,10 @@ impl server::Handler for TestServer {
         self.configuration_channels.remove(&channel);
         self.install_channels.remove(&channel);
         self.install_input.remove(&channel);
+        self.admin_channels.remove(&channel);
+        self.admin_input.remove(&channel);
+        self.sudo_verify_channels.remove(&channel);
+        self.sudo_verify_input.remove(&channel);
         self.channels_closed.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -294,17 +385,24 @@ impl server::Handler for TestServer {
         if let Some(pause) = &self.pause {
             pause.notified().await;
         }
-        Ok(if user == "tester" && password == FIXTURE_PASSWORD {
-            server::Auth::Accept
-        } else {
-            server::Auth::reject()
-        })
+        Ok(
+            if (user == "tester" || (self.root_password && user == "root"))
+                && password == FIXTURE_PASSWORD
+            {
+                server::Auth::Accept
+            } else {
+                server::Auth::reject()
+            },
+        )
     }
 }
 struct InstallFixture {
     home: PathBuf,
     wrapper: PathBuf,
     requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    admin_wrapper: Option<PathBuf>,
+    admin_requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    root_password: bool,
 }
 struct Fixture {
     port: u16,
@@ -320,6 +418,7 @@ struct Fixture {
     sudo_inputs: Arc<AtomicUsize>,
     service_snapshot: Arc<Mutex<String>>,
     install_requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    admin_requests: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 impl Fixture {
     async fn start(port: u16, pause: Option<Arc<Notify>>) -> Self {
@@ -385,6 +484,52 @@ impl Fixture {
                 home,
                 wrapper,
                 requests: Arc::new(Mutex::new(Vec::new())),
+                admin_wrapper: None,
+                admin_requests: Arc::new(Mutex::new(Vec::new())),
+                root_password: false,
+            }),
+        )
+        .await
+    }
+    #[cfg(unix)]
+    async fn start_for_admin(
+        port: u16,
+        admin_user: String,
+        key: keys::PublicKey,
+        host_key: Option<PrivateKey>,
+        home: PathBuf,
+    ) -> Self {
+        let parent = home.parent().unwrap().to_path_buf();
+        let key_script = parent.join("install_key.py");
+        std::fs::write(&key_script, setup_access::install_key::SCRIPT).unwrap();
+        let key_wrapper = parent.join("install-wrapper.py");
+        std::fs::write(
+            &key_wrapper,
+            setup_access::install_key::test_wrapper_source(&home, &admin_user, &key_script),
+        )
+        .unwrap();
+        let admin_wrapper = parent.join("admin-wrapper.py");
+        std::fs::write(
+            &admin_wrapper,
+            setup_access::admin::test_wrapper_source(&home, &admin_user),
+        )
+        .unwrap();
+        Self::start_with_options(
+            port,
+            None,
+            None,
+            false,
+            Some(admin_user),
+            Some(key),
+            host_key,
+            true,
+            Some(InstallFixture {
+                home,
+                wrapper: key_wrapper,
+                requests: Arc::new(Mutex::new(Vec::new())),
+                admin_wrapper: Some(admin_wrapper),
+                admin_requests: Arc::new(Mutex::new(Vec::new())),
+                root_password: true,
             }),
         )
         .await
@@ -418,6 +563,16 @@ impl Fixture {
             .unwrap_or_default();
         let install_home = install.as_ref().map(|install| install.home.clone());
         let install_wrapper = install.as_ref().map(|install| install.wrapper.clone());
+        let admin_wrapper = install
+            .as_ref()
+            .and_then(|install| install.admin_wrapper.clone());
+        let admin_requests = install
+            .as_ref()
+            .map(|install| install.admin_requests.clone())
+            .unwrap_or_default();
+        let root_password = install
+            .as_ref()
+            .is_some_and(|install| install.root_password);
         let mut server = TestServer {
             configuration_channels: Default::default(),
             channels_closed: channels_closed.clone(),
@@ -431,6 +586,13 @@ impl Fixture {
             install_home: install_home.clone(),
             install_wrapper,
             install_requests: install_requests.clone(),
+            admin_channels: Default::default(),
+            admin_input: Default::default(),
+            admin_wrapper,
+            admin_requests: admin_requests.clone(),
+            sudo_verify_channels: Default::default(),
+            sudo_verify_input: Default::default(),
+            root_password,
             gate_explicit_key_on_install,
             service_snapshot: service_snapshot.clone(),
             sudo_inputs: sudo_inputs.clone(),
@@ -471,6 +633,7 @@ impl Fixture {
             sudo_inputs,
             service_snapshot,
             install_requests,
+            admin_requests,
         }
     }
     async fn stop(&mut self) {
@@ -3143,6 +3306,7 @@ async fn reviewed_public_key_install_enables_the_selected_key_and_keeps_the_sour
         profile_revision: profile.revision.clone(),
         connection_id: connection.clone(),
         key_id: key.key_id.clone(),
+        target_username: None,
     };
     let review = service
         .review_setup_key_install(&vault, request())
@@ -3301,6 +3465,7 @@ async fn install_reviews_are_rejectable_expiring_and_bound_to_the_source_and_key
         profile_revision: profile.revision.clone(),
         connection_id: connection.clone(),
         key_id: key.key_id.clone(),
+        target_username: None,
     };
 
     let rejected = service
@@ -3358,4 +3523,340 @@ async fn install_reviews_are_rejectable_expiring_and_bound_to_the_source_and_key
         commands,
         "a changed key must be refused before any remote mutation"
     );
+}
+
+#[cfg(unix)]
+fn root_input(port: u16) -> ProfileInput {
+    ProfileInput {
+        id: None,
+        name: "Root fixture".into(),
+        host: "127.0.0.1".into(),
+        port,
+        username: "root".into(),
+        identity_file: None,
+        password_allowed: true,
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn staged_admin_flow_creates_target_installs_public_key_and_promotes_only_after_key_plus_sudo(
+) {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(home_dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    // The reviewed home path is /home/<username>; the fixture mirrors that shape
+    // inside an owned temporary parent root.
+    let home = std::fs::canonicalize(home_dir.path())
+        .unwrap()
+        .join("deploy");
+    let fixture = Fixture::start_for_admin(
+        0,
+        "deploy".into(),
+        setup_public_key(&key),
+        Some(host_key),
+        home.clone(),
+    )
+    .await;
+    let (_dir, service) = service();
+    let profile = service
+        .save_profile(root_input(fixture.port))
+        .await
+        .unwrap();
+    let inspection = service.inspect(&profile.id).await.unwrap();
+    service
+        .trust(&profile.id, &inspection.challenge_id)
+        .await
+        .unwrap();
+    service
+        .connect(
+            &profile.id,
+            &inspection.challenge_id,
+            FIXTURE_PASSWORD.into(),
+        )
+        .await
+        .unwrap();
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let (sink, mut output) = stream_sink();
+    let shell = service
+        .start_stream(&profile.id, Some((80, 24)), None, sink)
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"fixture shell ready"
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(1))
+        .await
+        .unwrap();
+
+    // Choosing "existing" must not silently create, and vice versa.
+    let review = service
+        .review_setup_admin(
+            &vault,
+            setup_access::admin::AdminRequest {
+                profile_id: profile.id.clone(),
+                profile_revision: profile.revision.clone(),
+                connection_id: connection.clone(),
+                key_id: key.key_id.clone(),
+                username: "deploy".into(),
+                mode: "new".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(review.action, "create");
+    assert_eq!(review.source_username, "root");
+    assert_eq!(review.username, "deploy");
+    assert!(!serde_json::to_string(&review)
+        .unwrap()
+        .contains(ADMIN_FIXTURE_PASSWORD));
+
+    let mut wrong = setup_access::admin::AdminApplyRequest {
+        review_id: review.review_id.clone(),
+        password: ADMIN_FIXTURE_PASSWORD.into(),
+    };
+    wrong.review_id = "not-a-review".into();
+    assert!(service.apply_setup_admin(&vault, wrong).await.is_err());
+
+    // Create the account first, then install the key into its home (the
+    // administrator-before-key ordering); key install must not be the primary
+    // path for a different planned account.
+    let created = service
+        .apply_setup_admin(
+            &vault,
+            setup_access::admin::AdminApplyRequest {
+                review_id: review.review_id.clone(),
+                password: ADMIN_FIXTURE_PASSWORD.into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status, "created");
+    assert_eq!(created.username, "deploy");
+
+    let expired = service
+        .review_setup_admin(
+            &vault,
+            setup_access::admin::AdminRequest {
+                profile_id: profile.id.clone(),
+                profile_revision: profile.revision.clone(),
+                connection_id: connection.clone(),
+                key_id: key.key_id.clone(),
+                username: "deploy".into(),
+                mode: "existing".into(),
+            },
+        )
+        .await
+        .unwrap();
+    service
+        .setup_access
+        .admin
+        .expire_for_test(&expired.review_id);
+    assert!(service
+        .apply_setup_admin(
+            &vault,
+            setup_access::admin::AdminApplyRequest {
+                review_id: expired.review_id,
+                password: String::new(),
+            }
+        )
+        .await
+        .unwrap_err()
+        .contains("expired"));
+
+    let install = service
+        .review_setup_key_install(
+            &vault,
+            setup_access::InstallRequest {
+                profile_id: profile.id.clone(),
+                profile_revision: profile.revision.clone(),
+                connection_id: connection.clone(),
+                key_id: key.key_id.clone(),
+                target_username: Some("deploy".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(install.username, "deploy");
+    assert!(install.command.contains("runuser -u deploy"));
+    assert_eq!(
+        install.destination,
+        format!("{}/.ssh/authorized_keys", home.display())
+    );
+    let installed = service
+        .apply_setup_key_install(&vault, &install.review_id)
+        .await
+        .unwrap();
+    assert_eq!(installed.username, "deploy");
+    assert_eq!(installed.status, "installed");
+    let admin_home = home.join(".ssh/authorized_keys");
+    assert!(std::fs::read_to_string(&admin_home)
+        .unwrap()
+        .contains(&setup_public_key(&key).to_openssh().unwrap()));
+
+    // Source root profile and its PTY are still alive.
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"root-still-alive".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"root-still-alive"
+    ));
+    service
+        .control(&profile.id, &shell, streams::Control::Ack(2))
+        .await
+        .unwrap();
+
+    let proof = service
+        .verify_setup_admin_access(
+            &vault,
+            setup_access::admin::AdminVerifyRequest {
+                profile_id: profile.id.clone(),
+                profile_revision: profile.revision.clone(),
+                connection_id: connection.clone(),
+                key_id: key.key_id.clone(),
+                username: "deploy".into(),
+                passphrase: Some(PASSPHRASE.into()),
+                sudo_password: ADMIN_FIXTURE_PASSWORD.into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(proof.sudo_verified);
+    assert_eq!(proof.source_username, "root");
+    assert_eq!(proof.username, "deploy");
+    assert!(!serde_json::to_string(&proof)
+        .unwrap()
+        .contains(ADMIN_FIXTURE_PASSWORD));
+
+    let promoted = service
+        .promote_setup_admin(&vault, &proof.proof_id)
+        .await
+        .unwrap();
+    assert_eq!(promoted.previous_username, "root");
+    assert_eq!(promoted.profile.username, "deploy");
+    assert_eq!(promoted.profile.host, "127.0.0.1");
+    assert_eq!(promoted.profile.port, fixture.port);
+    assert_eq!(
+        promoted.profile.identity_file.as_deref(),
+        Some(key.path.as_str())
+    );
+    assert!(!promoted.profile.password_allowed);
+    assert_ne!(promoted.profile.id, profile.id);
+
+    // The promoted profile is live and independent; the original root session
+    // and its own connection record are untouched.
+    let statuses = service.statuses().await;
+    let root_status = statuses
+        .iter()
+        .find(|s| s.profile_id == profile.id)
+        .unwrap();
+    assert_eq!(
+        root_status.connection_id.as_deref(),
+        Some(connection.as_str())
+    );
+    let admin_status = statuses
+        .iter()
+        .find(|s| s.profile_id == promoted.profile.id)
+        .unwrap();
+    assert_eq!(
+        admin_status.connection_id.as_deref(),
+        Some(promoted.connection_id.as_str())
+    );
+    service
+        .control(
+            &profile.id,
+            &shell,
+            streams::Control::Input(b"root-after-promote".to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        event(&mut output).await,
+        streams::StreamEvent::Data { data, .. } if data == b"root-after-promote"
+    ));
+
+    // Single-use: a replayed proof cannot create a second profile.
+    let count = service.profiles().unwrap().len();
+    assert!(service
+        .promote_setup_admin(&vault, &proof.proof_id)
+        .await
+        .is_err());
+    assert_eq!(service.profiles().unwrap().len(), count);
+
+    // No sudo password reached the persisted profile or admin request bytes.
+    for request in fixture.admin_requests.lock().unwrap().iter() {
+        let text = String::from_utf8_lossy(request);
+        assert!(text.contains("deploy"), "{text}");
+    }
+    let stored = std::fs::read_to_string(_dir.path().join("profiles.json")).unwrap();
+    assert!(!stored.contains(ADMIN_FIXTURE_PASSWORD));
+    assert!(!stored.contains(PASSPHRASE));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn staged_admin_rejects_non_root_sources_and_wrong_existing_mode() {
+    const PASSPHRASE: &str = "fixture-key-passphrase";
+    let key_dir = tempfile::tempdir().unwrap();
+    let vault = setup_vault(&key_dir);
+    let key = vault.generate_async(PASSPHRASE.into()).await.unwrap();
+    let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(home_dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let home = std::fs::canonicalize(home_dir.path())
+        .unwrap()
+        .join("deploy");
+    let fixture = Fixture::start_for_admin(
+        0,
+        "deploy".into(),
+        setup_public_key(&key),
+        Some(host_key),
+        home,
+    )
+    .await;
+    let (_dir, service) = service();
+    // The ordinary fixture connection authenticates as `tester`, not root.
+    let profile = fixture_connection(&service, &fixture).await;
+    let connection = service
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.profile_id == profile.id)
+        .unwrap()
+        .connection_id
+        .unwrap();
+    let error = service
+        .review_setup_admin(
+            &vault,
+            setup_access::admin::AdminRequest {
+                profile_id: profile.id.clone(),
+                profile_revision: profile.revision.clone(),
+                connection_id: connection.clone(),
+                key_id: key.key_id.clone(),
+                username: "deploy".into(),
+                mode: "new".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("root"), "{error}");
 }

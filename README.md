@@ -53,11 +53,26 @@ Dokploy requires Docker; JavaScript/PM2 requires NVM/Node; LazyVim adds its shar
 dependencies once. Server provisioning remains unavailable until its recovery
 and installation adapters are validated. See [the provisioning plan](agents/quick-setup.md).
 
-**Administrator** now shows new-account password/confirmation or an existing
-administrator's sudo password. These optional preparation fields are not sent,
-saved or verified while account provisioning is unavailable. They clear when
-leaving the step, changing account/server/connection, visiting Home/Settings or
-restarting. Existing-account mode does not reset that account's password.
+**Administrator** selects a new or existing non-root account. With a connected
+root profile on Debian 12+ or Ubuntu 22.04+, the SSH key step now offers a reviewed
+administrator preparation action. A new account receives a sudo password only
+through encrypted SSH stdin; adopting an existing account never resets its
+password or changes its groups. Standard account tools, sudo and Python 3 must
+already be available. Unsafe or occupied new-home paths are refused.
+
+Prepare the administrator, review installation of the public key for that
+account, then choose **Apply and verify access**. A separate pinned-host,
+selected-key-only SSH connection must authenticate and prove sudo to root.
+**Promote administrator access** saves and opens that still-connected session as
+a separate profile, carrying over nonsecret setup choices. The original root
+profile and its sessions remain available. A failed verification cannot promote;
+a failed profile write retains the candidate for an explicit retry while its
+proof is valid. Passwords/passphrases are transient. Saved progress never
+restores a live proof after restart; verification must be repeated.
+
+This access increment keeps the current SSH port and does not reboot the server,
+disable password/root login or apply UFW changes. Those migration/recovery
+adapters remain pending, as do application/tool installation adapters.
 
 **SSH and firewall** shows proposed protected current/target SSH allow rules,
 HTTP/HTTPS choices and up to 16 custom TCP/UDP rules. Choices survive restarts;

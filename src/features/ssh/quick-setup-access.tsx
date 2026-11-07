@@ -100,16 +100,20 @@ function rejectReview(reviewId: string) {
 }
 
 export function QuickSetupAccess({
+  visible = true,
   source,
   plannedTarget,
+  targetUsername,
   connectionId,
   connected,
   selectedKey,
   keyBusy,
   onBusyChange,
 }: {
+  visible?: boolean;
   source: SourceSelection;
   plannedTarget: PlannedTarget;
+  targetUsername?: string | null;
   connectionId?: string | null;
   connected: boolean;
   selectedKey: SetupKey;
@@ -181,6 +185,10 @@ export function QuickSetupAccess({
     }
     if (hadActivity && message) setNotice(message);
   }, []);
+
+  useEffect(() => {
+    if (!visible) invalidate();
+  }, [visible, invalidate]);
 
   const expire = useCallback(() => {
     const now = Date.now();
@@ -603,6 +611,7 @@ export function QuickSetupAccess({
         connected={connected}
         keyId={selectedKey.keyId}
         keyFingerprint={selectedKey.fingerprint}
+        targetUsername={targetUsername ?? null}
         controlsBusy={
           keyBusy || verifying || reviewPending || reviewOpen || saving
         }
@@ -610,18 +619,27 @@ export function QuickSetupAccess({
         onInvalidate={invalidate}
       />
 
-      <div className="space-y-1.5 border-t border-border/70 pt-3">
-        <p className="text-xs text-muted-foreground">Planned access</p>
-        <p className="break-all text-sm">
-          {plannedTarget.username}@{source.host}:{plannedTarget.port}
-        </p>
-        <Button type="button" variant="outline" disabled>
-          Verify new access
-        </Button>
+      <div className="space-y-1 border-t border-border/70 pt-3">
+        <dl className="divide-y divide-border/70">
+          <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
+            <dt className="text-xs text-muted-foreground">Current access</dt>
+            <dd className="min-w-0 text-sm break-all">
+              {source.username}@{source.host}:{source.port}
+            </dd>
+          </div>
+          <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
+            <dt className="text-xs text-muted-foreground">Planned access</dt>
+            <dd className="min-w-0 text-sm break-all">
+              {plannedTarget.username}@{source.host}:{plannedTarget.port}
+            </dd>
+          </div>
+        </dl>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Available after the new account, public key, SSH port and firewall
-          changes have been applied. Testing the current connection does not
-          verify these planned changes.
+          Applying and verifying access above proves {plannedTarget.username}{" "}
+          key login and sudo on the current port and saves a separate
+          administrator profile. Testing the current connection never certifies
+          the planned account. Target port {plannedTarget.port}, sshd key-only
+          policy, and firewall changes remain pending.
         </p>
       </div>
 

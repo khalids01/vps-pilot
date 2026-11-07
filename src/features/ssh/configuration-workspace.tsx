@@ -154,17 +154,19 @@ function FirewallRules({ section }: { section?: ConfigurationEvidence }) {
 }
 
 export function ConfigurationWorkspace({
+  visible = true,
   tool,
   profile,
   connected,
-  active,
   onNavigate,
+  onOpenProfile,
 }: {
+  visible?: boolean;
   tool: "quick-setup" | "ssh-access" | "firewall";
   profile: ServerProfile;
   connected: boolean;
-  active: boolean;
   onNavigate: (tool: ToolId) => void;
+  onOpenProfile?: (profileId: string) => void;
 }) {
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const previousTool = useRef(tool);
@@ -177,10 +179,11 @@ export function ConfigurationWorkspace({
     return (
       <QuickSetupWorkspace
         key={profile.id}
+        visible={visible}
         profile={profile}
         connected={connected}
-        active={active}
         onOpenInspection={() => setInspectionOpen(true)}
+        onOpenProfile={onOpenProfile}
       />
     );
   return (

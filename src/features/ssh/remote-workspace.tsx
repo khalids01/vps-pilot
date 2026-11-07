@@ -88,6 +88,7 @@ interface RemoteWorkspaceProps {
   settingsOpen: boolean;
   sidebarCollapsed: boolean;
   onSidebarCollapsedChange: (collapsed: boolean) => void;
+  onOpenProfile?: (profileId: string) => void;
 }
 export function RemoteWorkspace(props: RemoteWorkspaceProps) {
   return (
@@ -121,6 +122,7 @@ function RemoteWorkspaceContent({
   settingsOpen,
   sidebarCollapsed,
   onSidebarCollapsedChange,
+  onOpenProfile,
 }: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
   const labels: Record<ToolId, string> = {
@@ -374,11 +376,12 @@ function RemoteWorkspaceContent({
                   }
                 >
                   <ConfigurationWorkspace
+                    visible={active && !settingsOpen}
                     tool={selectedTool}
                     profile={profile}
                     connected={connected}
-                    active={active && !settingsOpen}
                     onNavigate={onSelectTool}
+                    onOpenProfile={onOpenProfile}
                   />
                 </Suspense>
               )}

@@ -1,6 +1,6 @@
 [[permission]]
 identifier = "setup-access"
-description = "Independent Quick Setup key-login proof, reviewed local SSH config export, and reviewed current-account public-key installation. Verification opens a separate native SSH connection to the saved profile host and target port, authenticates with exactly the selected protected local key and a transient passphrase, and returns bounded proof metadata. Reviewed export prepares only a new app-owned block for the standard ~/.ssh/config, keeps a protected backup and publishes atomically after revalidation. Reviewed installation previews an append of the selected public key to the current account's default ~/.ssh/authorized_keys, keeps a protected backup of an existing file and applies over the existing authenticated channel after revalidating the source connection, trusted host, key identity and reviewed remote snapshot. No password, agent, none or default-key fallback, no renderer-supplied host/key/trust/config/path/command text, no sudo, and no SSH daemon, port or firewall changes."
+description = "Independent Quick Setup key-login proof, staged administrator setup, reviewed local SSH config export, and reviewed public-key installation. Verification opens a separate native SSH connection to the saved profile host and target port, authenticates with exactly the selected protected local key and checks real sudo before publishing a proof. Staged administrator reviews/creates or adopts the planned non-root account only over an existing root connection on supported Debian/Ubuntu, sets a new account sudo password on stdin, validates sudoers and never resets an adopted account. Reviewed export prepares only a new app-owned block for the standard ~/.ssh/config, keeps a protected backup and publishes atomically after revalidation. Reviewed installation previews an append of the selected public key to the current or planned administrator account, keeps a protected backup of an existing file and applies over the existing authenticated channel after revalidating the source connection, trusted host, key identity and reviewed remote snapshot. Promotion saves a separate profile only after independent key plus sudo proof. No password, agent, none or default-key fallback, no renderer-supplied host/key/trust/config/path/command text, and no SSH port, sshd hardening or firewall changes."
 commands.allow = [
   "ssh_setup_key_verify",
   "ssh_setup_config_review",
@@ -9,4 +9,9 @@ commands.allow = [
   "ssh_setup_key_install_review",
   "ssh_setup_key_install_apply",
   "ssh_setup_key_install_reject",
+  "ssh_setup_admin_review",
+  "ssh_setup_admin_apply",
+  "ssh_setup_admin_reject",
+  "ssh_setup_admin_verify",
+  "ssh_setup_admin_promote",
 ]

@@ -22,6 +22,7 @@ test.beforeEach(async ({ page }) => {
       { id: first, revision: "a", name: "Fixture Alpha", host: "alpha.invalid", username: "tester", port: 22 },
       { id: second, revision: "b", name: "Fixture Beta", host: "beta.invalid", username: "tester", port: 2222 },
     ];
+    if (localStorage.getItem("__fixture_root_profile")) profiles.push({ id: "44444444-4444-4444-8444-444444444444", revision: "r", name: "Root Fixture", host: "alpha.invalid", username: "root", port: 22 });
     if (!localStorage.getItem("vps-pilot:sample-workspace:v1")) localStorage.setItem("vps-pilot:sample-workspace:v1", JSON.stringify({ version: 1, openServerIds: [`remote:${first}`, `remote:${second}`], activeServerId: `remote:${first}`, servers: {} }));
     const calls: { cmd: string; profileId?: string; intervalSeconds?: number }[] = [];
     const streams = new Map<string, { output: { onmessage: (value: unknown) => void }; sequence: number; timer?: ReturnType<typeof setInterval>; pending?: boolean }>();
@@ -64,6 +65,8 @@ test.beforeEach(async ({ page }) => {
     const documentSaveReleases:(()=>void)[]=[];
     const setupAccessMeta={proofs:0,reviews:0,saves:0,rejects:0,verifyPassphraseState:"none" as "none"|"provided",savedAliases:[] as string[],savedReviewIds:[] as string[],rejectedReviewIds:[] as string[]};
     const installReviews=new Map<string,any>();
+    const adminReviews=new Map<string,any>();
+    const adminProofs=new Map<string,string>();
     const installReviewHeld=new Map<string,{resolve:(value:any)=>void;reject:(reason:any)=>void;build:()=>any}>();
     let installApplyHeld:{resolve:(value:any)=>void;reject:(reason:any)=>void;finish:()=>any}|null=null;
     const setupInstallMeta={reviews:0,applies:0,rejects:0,appliedReviewIds:[] as string[],rejectedReviewIds:[] as string[]};
@@ -80,8 +83,9 @@ test.beforeEach(async ({ page }) => {
       if(!key)throw "Selected local key is unavailable.";
       if(!args.connectionId)throw "Connect to this server before installing a public key.";
       const alreadyPresent=Boolean((window as any).__installAlreadyPresent);
-      const destination=`/home/${profile.username}/.ssh/authorized_keys`;
-      return {reviewId:crypto.randomUUID(),profileId:profile.id,profileRevision:profile.revision,connectionId:args.connectionId,keyId:key.keyId,keyFingerprint:(window as any).__installWrongFingerprint?"SHA256:differentInstallKey":key.fingerprint,username:profile.username,host:profile.host,port:profile.port,destination,command:`python3 [fixed public-key installer] --append ${destination}`,purpose:`Add the selected public key for ${profile.username}.`,alreadyPresent,backupPlanned:!alreadyPresent&&(window as any).__installNoBackup!==true,expiresAtMs:Date.now()+((window as any).__setupInstallExpiryMs??120000)};
+      const username=args.targetUsername??profile.username;
+      const destination=`/home/${username}/.ssh/authorized_keys`;
+      return {reviewId:crypto.randomUUID(),profileId:profile.id,profileRevision:profile.revision,connectionId:args.connectionId,keyId:key.keyId,keyFingerprint:(window as any).__installWrongFingerprint?"SHA256:differentInstallKey":key.fingerprint,username,host:profile.host,port:profile.port,destination,command:`python3 [fixed public-key installer] --append ${destination}`,purpose:`Add the selected public key for ${username}.`,alreadyPresent,backupPlanned:!alreadyPresent&&(window as any).__installNoBackup!==true,expiresAtMs:Date.now()+((window as any).__setupInstallExpiryMs??120000)};
     };
     const pruneSetupAccess=()=>{
       const now=Date.now();
@@ -482,6 +486,46 @@ test.beforeEach(async ({ page }) => {
             setupAccessMeta.rejectedReviewIds.push(args.reviewId);
             return null;
           }
+          if(cmd==="ssh_setup_admin_review"){
+            if(args.username==="root")throw "Choose an administrator other than root.";
+            if(profiles.find(profile=>profile.id===args.profileId)?.username!=="tester"&&profiles.find(profile=>profile.id===args.profileId)?.username!=="root")throw "Administrator setup uses the existing root connection. Connect this profile as root first.";
+            if(args.mode!=="new"&&args.mode!=="existing")throw "Choose whether to create a new administrator or use an existing account.";
+            const action=args.mode==="new"?"create":"adopt";
+            const review={reviewId:crypto.randomUUID(),profileId:args.profileId,profileRevision:profiles.find(profile=>profile.id===args.profileId)!.revision,connectionId:args.connectionId,keyId:args.keyId,keyFingerprint:storedSetupKeys().find((item:any)=>item.keyId===args.keyId)?.fingerprint??"SHA256:fixture",sourceUsername:profiles.find(profile=>profile.id===args.profileId)!.username,username:args.username,host:profiles.find(profile=>profile.id===args.profileId)!.host,port:profiles.find(profile=>profile.id===args.profileId)!.port,osId:"debian",osVersion:"12",action,plannedHome:`/home/${args.username}`,home:action==="adopt"?`/home/${args.username}`:null,command:"python3 [fixed staged administrator helper]",purpose:"Create or adopt the planned non-root administrator.",expiresAtMs:Date.now()+180000};
+            adminReviews.set(review.reviewId,review);
+            (window as any).__adminSource={id:args.profileId,username:review.sourceUsername,target:review.username};
+            ((window as any).__adminMeta??={reviews:0,applies:0,verifies:0,promotions:0,reviewedModes:[] as string[],usernames:[] as string[]}).reviews++;
+            ((window as any).__adminMeta).reviewedModes.push(args.mode);
+            return review;
+          }
+          if(cmd==="ssh_setup_admin_apply"){
+            const review=adminReviews.get(args.reviewId);
+            adminReviews.delete(args.reviewId);
+            if(!review)throw "This administrator review expired or was already used. Create a new review.";
+            if((window as any).__adminApplyFailure)throw "Fixture administrator apply failed.";
+            (window as any).__adminMeta.applies++;
+            if(review.action==="create"&&(!args.password||String(args.password).length===0))throw "Enter the sudo password for the new administrator account.";
+            return {status:review.action==="create"?"created":"adopted",username:review.username,sourceUsername:review.sourceUsername,osId:"debian",osVersion:"12"};
+          }
+          if(cmd==="ssh_setup_admin_reject"){adminReviews.delete(args.reviewId);return null;}
+          if(cmd==="ssh_setup_admin_verify"){
+            if((window as any).__adminVerifyFailure)throw "Selected key authentication failed; administrator access was not verified.";
+            adminProofs.set(args.keyId,args.username);
+            (window as any).__adminMeta.verifies++;
+
+            return {proofId:crypto.randomUUID(),profileId:args.profileId,profileRevision:profiles.find(profile=>profile.id===args.profileId)!.revision,connectionId:args.connectionId,keyId:args.keyId,keyFingerprint:storedSetupKeys().find((item:any)=>item.keyId===args.keyId)?.fingerprint??"SHA256:fixture",host:profiles.find(profile=>profile.id===args.profileId)!.host,sourceUsername:profiles.find(profile=>profile.id===args.profileId)!.username,username:args.username,port:profiles.find(profile=>profile.id===args.profileId)!.port,sudoVerified:true,expiresAtMs:Date.now()+120000};
+          }
+          if(cmd==="ssh_setup_admin_promote"){
+            if((window as any).__adminPromoteFailure)throw "The profile could not be saved. The administrator is verified and its live connection was kept.";
+            if(!(window as any).__adminMeta?.verifies)throw "The administrator proof expired or was already used.";
+            const admin=(window as any).__adminMeta;
+            if(admin.promoted)throw "The administrator proof expired or was already used.";
+            admin.promotions++;
+            admin.promoted=true;
+            const saved={id:"33333333-3333-4333-8333-333333333333",revision:"c",name:"Fixture Alpha (administrator)",host:"alpha.invalid",username:admin.username??"deploy",port:22,identityFile:"/fixture/.ssh/fixture-key",passwordAllowed:false};
+            if(!profiles.some(profile=>profile.id===saved.id))profiles.push(saved);
+            return {profile:saved,previousUsername:(window as any).__adminSource.username,sourceProfileId:(window as any).__adminSource.id,connectionId:"connection-admin-promoted",connected:true};
+          }
           if(cmd==="ssh_setup_key_install_review"){
             if((window as any).__installReviewFailure)throw "Fixture installation review unavailable.";
             const build=()=>{
@@ -583,7 +627,11 @@ test.beforeEach(async ({ page }) => {
           if (cmd === "ssh_save_profile") {
             const input=args.input;
             const existing=profiles.find(profile=>profile.id===input.id);
-            if(!existing)throw "Server profile no longer exists.";
+            if(!existing){
+              const created={id:"33333333-3333-4333-8333-333333333333",revision:"c",name:input.name,host:input.host,username:input.username,port:input.port,identityFile:input.identityFile??null,passwordAllowed:input.passwordAllowed!==false};
+              profiles.push(created);
+              return {...created};
+            }
             existing.name=input.name;
             existing.host=input.host;
             existing.username=input.username;
@@ -2579,7 +2627,7 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   const remoteCalls=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_configuration_snapshot","ssh_connect","ssh_inspection_run","ssh_action_execute"].includes(call.cmd)));
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await expect(setup.getByRole("complementary",{name:"Setup preview"})).toContainText("Server changes are unavailable.");
+  await expect(setup.getByRole("complementary",{name:"Setup preview"})).toContainText("Administrator access uses a separate review.");
   await expect(setup.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
   expect(await saves()).toBe(0);
   expect(await remoteCalls()).toHaveLength(0);
@@ -2631,7 +2679,7 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   await expect(setup).toContainText("LazyVim adds Git, ripgrep and fd once.");
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
   await expect(setup.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
-  await expect(setup.getByText("Server changes remain unavailable. SSH and UFW hardening has not been applied; key login verification is a separate test.",{exact:true})).toBeVisible();
+  await expect(setup.getByText("Administrator access is applied and verified separately in the SSH key step. SSH port, login-policy and UFW changes remain pending.",{exact:true})).toBeVisible();
   await expect(setup.getByRole("button",{name:"Technical details",exact:true})).toBeVisible();
   await expect(setup.getByRole("complementary",{name:"Draft summary"})).toHaveCount(0);
   await expect(setup).toContainText("Herdr");
@@ -3375,8 +3423,9 @@ test("Quick Setup proves key login explicitly and saves only a reviewed SSH conf
   const {setup,selectedCard,access}=await openStandardKeyAccess(page,passphrase);
   await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
   await expect(access).toContainText("Current account: tester@alpha.invalid:22");
+  await expect(access).toContainText("Current access");
+  await expect(access).toContainText("Planned access");
   await expect(access).toContainText("deploy@alpha.invalid:52022");
-  await expect(access.getByRole("button",{name:"Verify new access",exact:true})).toBeDisabled();
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd.startsWith("ssh_setup_")))).toHaveLength(0);
 
   await page.evaluate(()=>{(window as any).__holdKeyExport=true;});
@@ -3527,7 +3576,7 @@ test("Quick Setup key-login rejection names the current tester:22 account and of
   await expect(access.getByRole("status",{name:"Key login status"})).toHaveText("Current connection key login not verified");
   await expect(access.getByRole("alert")).toContainText("tester@alpha.invalid:22");
   await expect(access.getByRole("button",{name:"Review SSH config",exact:true})).toHaveCount(0);
-  await expect(access.getByRole("button",{name:"Verify new access",exact:true})).toBeDisabled();
+  await expect(access.getByRole("button",{name:"Verify new access",exact:true})).toHaveCount(0);
   const verify=await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_setup_key_verify"));
   expect(verify).toHaveLength(1);
   expect(verify[0]).toMatchObject({username:"tester",port:22});
@@ -3839,60 +3888,27 @@ test("Quick Setup rejects late installation reviews and reports an apply interru
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_setup_config_save","ssh_action_execute","ssh_terminal_open","ssh_terminal_input"].includes(call.cmd)))).toEqual([]);
 });
 
-test("Quick Setup administrator passwords are transient and clear on every scope change",async({page},testInfo)=>{
-  const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
+test("Quick Setup clears reviewed administrator credentials when the workspace is hidden",async({page},testInfo)=>{
+  const {admin}=await openRootKeyAccess(page,"fixture-encrypted-key");
   const secret="fixture-only-Password-9!";
-  const consoleMessages:string[]=[];
-  page.on("console",message=>consoleMessages.push(message.text()));
-  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
-  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
-  const newPassword=setup.getByLabel("New administrator password",{exact:true});
-  const confirmation=setup.getByLabel("Confirm administrator password",{exact:true});
-  const username=setup.getByLabel("Administrator username");
-  await expect(setup.locator("select")).toHaveCount(0);
-  await newPassword.fill(secret);
-  await confirmation.fill(`${secret}-mismatch`);
-  await expect(setup.getByRole("alert")).toContainText("Passwords do not match.");
-  await page.setViewportSize({width:1366,height:900});
-  await page.screenshot({path:testInfo.outputPath("quick-setup-admin-desktop.png")});
+  await admin.getByRole("button",{name:"Create administrator",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review new administrator",exact:true});
+  await review.getByLabel("New administrator sudo password").fill(secret);
+  await page.screenshot({path:testInfo.outputPath("administrator-review.png")});
   await page.setViewportSize({width:430,height:900});
-  await newPassword.scrollIntoViewIfNeeded();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await page.screenshot({path:testInfo.outputPath("quick-setup-admin-narrow.png")});
-  await page.setViewportSize({width:1366,height:900});
-
-  await confirmation.fill(secret);
-  await username.fill("-invalid");
-  await expect(newPassword).toHaveValue("");
-  await expect(confirmation).toHaveValue("");
-  await username.fill("ops-user");
-
-  await setup.getByRole("button",{name:/Use an existing administrator/}).click();
-  const sudo=setup.getByLabel("Existing administrator sudo password",{exact:true});
-  await sudo.fill(secret);
-  await setup.getByRole("button",{name:"Next step",exact:true}).click();
-  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
-  await expect(sudo).toHaveValue("");
-  await sudo.fill(secret);
-
-  await page.getByRole("tab",{name:/Fixture Beta/}).click();
-  await page.getByRole("tab",{name:/Fixture Alpha/}).click();
-  await expect(sudo).toHaveValue("");
-  await sudo.fill(secret);
-  await page.getByRole("button",{name:"Fleet home"}).click();
-  await page.getByRole("tab",{name:/Fixture Alpha/}).click();
-  await expect(sudo).toHaveValue("");
-  await sudo.fill(secret);
-
-  await page.reload();
-  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
-  await expect(page.getByRole("region",{name:"Quick Setup",exact:true}).getByLabel("Existing administrator sudo password",{exact:true})).toHaveValue("");
-
+  await page.screenshot({path:testInfo.outputPath("administrator-review-narrow.png")});
+  // App navigation can change while a dialog is open (for example a global
+  // navigation action). Exercise the visibility boundary directly.
+  await page.evaluate(()=>(document.querySelector('button[aria-label="Fleet home"]') as HTMLButtonElement).click());
+  await expect(review).toHaveCount(0);
+  await page.getByRole("tab",{name:/Root Fixture/}).click();
+  await admin.getByRole("button",{name:"Create administrator",exact:true}).click();
+  await expect(review.getByLabel("New administrator sudo password")).toHaveValue("");
+  await review.getByRole("button",{name:"Cancel",exact:true}).click();
   expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(secret);
   expect(await page.evaluate(()=>JSON.stringify((window as any).__calls))).not.toContain(secret);
-  expect(consoleMessages.join("\n")).not.toContain(secret);
-  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>["ssh_connect","ssh_action_execute"].includes(call.cmd)))).toEqual([]);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_setup_admin_apply"))).toHaveLength(0);
 });
 
 test("Quick Setup plans protected SSH, HTTP/HTTPS and validated custom firewall rules without remote actions",async({page},testInfo)=>{
@@ -4276,4 +4292,146 @@ test("sidebar footer shows the runtime app version and a compact current-to-new 
   await expect(restart).toHaveAttribute("data-current-version", "0.2.2");
   await expect(restart).toHaveAttribute("data-available-version", "0.2.3");
   expect(await updateChecks()).toBe(1);
+});
+
+async function openRootKeyAccess(page:import("@playwright/test").Page,passphrase:string){
+  // Run before the app boots so the fixture root profile and its tab exist on
+  // the next load, without racing the app's own workspace persistence.
+  // The fixture profile list is built by the existing init script, which reads
+  // this persisted flag; set it before reload, and override only the open tab.
+  await page.evaluate(()=>localStorage.setItem("__fixture_root_profile","1"));
+  await page.addInitScript(()=>{
+    const key="vps-pilot:sample-workspace:v1";
+    const value=JSON.stringify({version:1,page:"server",openServerIds:["remote:44444444-4444-4444-8444-444444444444"],activeServerId:"remote:44444444-4444-4444-8444-444444444444",servers:{}});
+    const docs=JSON.parse(localStorage.getItem("__fixture_documents")??"{}");
+    docs[key]=value;
+    localStorage.setItem("__fixture_documents",JSON.stringify(docs));
+    localStorage.setItem(key,value);
+  });
+  await page.reload();
+  const nav=page.getByRole("navigation",{name:"Root Fixture tools"});
+  await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await setup.getByRole("button",{name:/Generate a new key/}).click();
+  await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
+  await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
+  await setup.getByRole("button",{name:"Create encrypted key",exact:true}).click();
+  await expect(setup.getByRole("group",{name:"Selected local key"})).toBeVisible();
+  const admin=setup.getByRole("region",{name:"Administrator access",exact:true});
+  await expect(admin).toBeVisible();
+  const access=setup.getByRole("region",{name:"Key login access",exact:true});
+  return {setup,admin,access};
+}
+
+test("staged administrator access creates the target, installs the key, verifies sudo and promotes live",async({page})=>{
+  const passphrase="admin fixture passphrase";
+  const {setup,admin,access}=await openRootKeyAccess(page,passphrase);
+  const sudo="fixture-sudo-password-not-saved";
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd.startsWith("ssh_setup_admin_")))).toHaveLength(0);
+
+  // New/existing choice is enforced: the review request carries the mode, and an
+  // account is never silently adopted under "new".
+  await admin.getByRole("button",{name:"Create administrator",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review new administrator",exact:true});
+  await expect(review).toContainText("Create new account");
+  await expect(review).toContainText("/home/deploy");
+  await expect(review.getByRole("button",{name:"Create deploy",exact:true})).toBeDisabled();
+  await review.getByLabel("New administrator sudo password").fill(sudo);
+  await review.getByRole("button",{name:"Create deploy",exact:true}).click();
+  await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Account ready · public key not yet installed");
+  expect(await page.evaluate(()=>(window as any).__adminMeta.reviewedModes)).toEqual(["new"]);
+  expect(await page.evaluate(()=>(window as any).__adminMeta.applies)).toBe(1);
+
+  // Public-key installation must target the planned administrator, never the
+  // connected root account.
+  await access.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  const install=page.getByRole("dialog",{name:"Review public key installation",exact:true});
+  await expect(install).toContainText("Planned administrator");
+  await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  await expect(access.getByRole("status",{name:"Key installation result"})).toContainText("deploy@alpha.invalid");
+
+  await page.evaluate(()=>{(window as any).__adminVerifyFailure=true;});
+  await admin.getByRole("button",{name:"Apply and verify access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Apply and verify access",exact:true});
+  await verify.getByLabel("deploy sudo password").fill(sudo);
+  await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
+  await expect(verify.getByRole("alert")).toContainText("administrator access was not verified");
+  expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(0);
+
+  await page.evaluate(()=>{(window as any).__adminVerifyFailure=false;});
+  await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
+  await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
+  expect(await page.evaluate(()=>(window as any).__adminMeta.verifies)).toBeGreaterThan(0);
+
+  await admin.getByRole("button",{name:"Promote administrator access",exact:true}).click();
+  await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveAttribute("aria-selected","true");
+  await expect(page.getByRole("heading",{name:"SSH and firewall",exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(1);
+  // The promoted profile opens as a separate tab; the root tab is retained.
+  await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toBeVisible();
+  await expect(page.getByRole("tab",{name:/Root Fixture/})).toBeVisible();
+  // Secrets never reach storage, IPC log, or persisted progress.
+  expect(await page.evaluate(secret=>JSON.stringify(localStorage).includes(secret),sudo)).toBe(false);
+  expect(await page.evaluate(secret=>JSON.stringify((window as any).__calls).includes(secret),sudo)).toBe(false);
+  expect(await page.evaluate(secret=>JSON.stringify(localStorage).includes(secret),passphrase)).toBe(false);
+});
+
+test("staged administrator promotion failure keeps the verified connection and never auto-retries",async({page})=>{
+  const passphrase="admin promote failure passphrase";
+  const {admin,access}=await openRootKeyAccess(page,passphrase);
+  await admin.getByRole("button",{name:"Create administrator",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review new administrator",exact:true});
+  await review.getByLabel("New administrator sudo password").fill("fixture-sudo-one");
+  await review.getByRole("button",{name:"Create deploy",exact:true}).click();
+  await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Account ready · public key not yet installed");
+  await access.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  const install=page.getByRole("dialog",{name:"Review public key installation",exact:true});
+  await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  await admin.getByRole("button",{name:"Apply and verify access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Apply and verify access",exact:true});
+  await verify.getByLabel("deploy sudo password").fill("fixture-sudo-two");
+  await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
+  await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
+
+  await page.evaluate(()=>{(window as any).__adminPromoteFailure=true;});
+  await admin.getByRole("button",{name:"Promote administrator access",exact:true}).click();
+  await expect(admin.getByRole("alert")).toContainText("connection was kept");
+  expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(0);
+  await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveCount(0);
+
+  await page.evaluate(()=>{(window as any).__adminPromoteFailure=false;});
+  await admin.getByRole("button",{name:"Promote administrator access",exact:true}).click();
+  await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveAttribute("aria-selected","true");
+});
+
+test("staged administrator progress persists without claiming a live proof after reload",async({page})=>{
+  const passphrase="admin progress fixture";
+  const {admin,access}=await openRootKeyAccess(page,passphrase);
+  await admin.getByRole("button",{name:"Create administrator",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review new administrator",exact:true});
+  await review.getByLabel("New administrator sudo password").fill("fixture-sudo-progress");
+  await review.getByRole("button",{name:"Create deploy",exact:true}).click();
+  await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Account ready · public key not yet installed");
+  await access.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  const install=page.getByRole("dialog",{name:"Review public key installation",exact:true});
+  await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  await admin.getByRole("button",{name:"Apply and verify access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Apply and verify access",exact:true});
+  await verify.getByLabel("deploy sudo password").fill("fixture-sudo-progress-2");
+  await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
+  await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
+  const saved=await page.evaluate(()=>Object.entries(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")).filter(([key])=>key.startsWith("vps-pilot:setup-access:v1:")).map(([,value])=>String(value)));
+  expect(saved.join("")).toContain("accessVerified");
+  expect(saved.join("")).not.toContain("proof");
+
+  await page.reload();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await page.getByRole("navigation",{name:"Root Fixture tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await expect(reloaded).toBeVisible();
+  const accessAfter=reloaded.getByRole("region",{name:"Key login access",exact:true});
+  await expect(accessAfter).toContainText("Current access");
+  // Non-secret progress is restored, but a live proof is never claimed.
+  expect(await page.evaluate(()=>document.body.innerText.includes("Administrator key login and sudo verified"))).toBe(false);
 });

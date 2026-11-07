@@ -51,6 +51,7 @@ import { HelperWorkspace } from "@/features/helper/helper-workspace";
 import { SettingsPage } from "@/features/settings/settings-page";
 import {
   address,
+  profileQueryKey,
   remoteTabId,
   type ServerProfile,
   safeError,
@@ -737,6 +738,17 @@ function WorkspaceContent() {
                   <RemoteWorkspace
                     key={profile.revision}
                     profile={profile}
+                    onOpenProfile={async (profileId) => {
+                      const result = await queryClient.fetchQuery({
+                        queryKey: profileQueryKey,
+                        queryFn: sshApi.profiles,
+                      });
+                      const opened = result.find(
+                        (item) => item.id === profileId,
+                      );
+                      if (opened) openRemote(opened, "quick-setup");
+                      void statuses.refetch();
+                    }}
                     onSettings={() => setSettingsOpen(true)}
                     settingsOpen={
                       settingsOpen && !fleetOpen && activeServerId === id

@@ -1,12 +1,7 @@
-VPS Pilot 0.2.3
+# VPS Pilot 0.2.4
 
-- Install the selected public SSH key for the connected account after reviewing and confirming the destination, fingerprint and backup plan.
-- Preserve existing authorized keys and restrictions, keep protected backups, and test key login separately without changing password authentication, ports or firewall settings.
-- Reject expired or stale installation reviews and report uncertain interrupted outcomes without automatically retrying.
-- Expand the tool sidebar to 256px or collapse it to a 56px icon rail, with saved collapse state, accessible labels and mobile navigation below the headers.
-- Keep VPS tabs, stats and terminal sessions in place when toggling the sidebar.
-- Show the running app version and clearer current-to-available update details in the sidebar footer.
+- Prepare a non-root administrator through the existing root connection, review its public-key installation, and independently verify selected-key SSH and sudo before switching.
+- Keep root access available while opening the verified administrator as a separate connected profile. Preserve nonsecret setup choices and progress.
+- Improve Fleet card wrapping, organization form spacing and friendly server names in cards and live tabs.
 
-Public-key installation requires a supported Linux server with Python 3 and uses the connected account's default ~/.ssh/authorized_keys. Custom AuthorizedKeysFile routes are not detected. Broader account creation, SSH/UFW migration and package provisioning remain unavailable.
-
-macOS downloads include Apple Silicon and Intel installers, ad-hoc signed and not notarized. Windows installers are unsigned.
+Administrator setup supports Debian 12+ and Ubuntu 22.04+ with Python 3 and standard account/sudo tools already installed. SSH-port, UFW and login-policy migration remain pending; this update does not reboot or disable existing access.
