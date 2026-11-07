@@ -226,8 +226,14 @@ export function QuickSetupKeyInstall({
     setOpen(false);
     setCommandOpen(false);
     if (live?.alreadyPresent) {
+      setResult({
+        status: "alreadyPresent",
+        backupPath: null,
+        username: live.username,
+        port: live.port,
+      });
       setNotice(
-        `This public key is already installed for ${live.username}. Use Test key on the current connection to verify it.`,
+        `This public key is already installed for ${live.username}. ${targetUsername ? "Verify administrator access to test key login and sudo." : "Use Test key on the current connection to verify it."}`,
       );
     }
   }
@@ -285,6 +291,7 @@ export function QuickSetupKeyInstall({
       }
       reviewRef.current = value;
       setReview(value);
+      if (value.alreadyPresent) onInstalled?.(value.username);
     } catch (failure) {
       if (
         !active.current ||
@@ -369,8 +376,8 @@ export function QuickSetupKeyInstall({
       setOpen(false);
       setError("");
       onInstallationBusyChange(false);
-      onInstalled?.(value.username);
       onInvalidate();
+      onInstalled?.(value.username);
     } catch (failure) {
       log.update(operationId, {
         status: "failed",
@@ -425,18 +432,20 @@ export function QuickSetupKeyInstall({
             Existing keys are preserved.
           </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={reviewDisabled}
-          onClick={() => void startReview()}
-        >
-          {reviewPending
-            ? "Preparing review…"
-            : targetUsername
-              ? `Install key for ${targetUsername}`
-              : "Install public key"}
-        </Button>
+        {!result && (
+          <Button
+            type="button"
+            variant="default"
+            disabled={reviewDisabled}
+            onClick={() => void startReview()}
+          >
+            {reviewPending
+              ? "Preparing review…"
+              : targetUsername
+                ? `Install key for ${targetUsername}`
+                : "Install public key"}
+          </Button>
+        )}
       </div>
 
       {!connected || !connectionId ? (
@@ -457,8 +466,10 @@ export function QuickSetupKeyInstall({
           {result.backupPath
             ? `A protected backup was kept at ${result.backupPath}.`
             : ""}{" "}
-          Test key login on the current connection to verify access. The current
-          connection is unchanged.
+          {targetUsername
+            ? "Verify administrator access to test this account’s key login and sudo."
+            : "Test key login on the current connection to verify access."}{" "}
+          The current connection is unchanged.
         </p>
       )}
 
@@ -492,9 +503,9 @@ export function QuickSetupKeyInstall({
           className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto sm:max-w-lg"
           showCloseButton={!applying}
         >
-          <DialogHeader>
+          <DialogHeader className="min-w-0">
             <DialogTitle>Review public key installation</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="min-w-0 break-words">
               The server adds this public key for{" "}
               {targetUsername
                 ? `the planned administrator ${targetUsername}`
@@ -601,8 +612,10 @@ export function QuickSetupKeyInstall({
                   className="text-sm leading-relaxed text-muted-foreground"
                 >
                   This public key is already installed for {review.username}.
-                  Close this review and use Test key on the current connection
-                  to verify it. No duplicate key will be added.
+                  {targetUsername
+                    ? "Close this review and verify administrator access to test key login and sudo."
+                    : "Close this review and use Test key on the current connection to verify it."}{" "}
+                  No duplicate key will be added.
                 </p>
               )}
 
@@ -641,7 +654,7 @@ export function QuickSetupKeyInstall({
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="min-w-0 [&>button]:min-w-0 [&>button]:whitespace-normal">
             <Button
               type="button"
               variant="outline"

@@ -1,7 +1,7 @@
-# VPS Pilot 0.2.4
+# VPS Pilot 0.2.5
 
-- Prepare a non-root administrator through the existing root connection, review its public-key installation, and independently verify selected-key SSH and sudo before switching.
-- Keep root access available while opening the verified administrator as a separate connected profile. Preserve nonsecret setup choices and progress.
-- Improve Fleet card wrapping, organization form spacing and friendly server names in cards and live tabs.
+- Guide SSH setup through local key selection, administrator preparation, public-key installation, verification and switching, with clear progress and next actions.
+- Fix password and review dialog overflow on smaller screens and improve sidebar item spacing.
+- Preserve completed setup progress across navigation while requiring fresh verification when login proof expires.
 
-Administrator setup supports Debian 12+ and Ubuntu 22.04+ with Python 3 and standard account/sudo tools already installed. SSH-port, UFW and login-policy migration remain pending; this update does not reboot or disable existing access.
+Existing root access stays available. SSH-port, UFW and login-policy migration remain pending.

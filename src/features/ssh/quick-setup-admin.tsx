@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -128,6 +128,8 @@ export function QuickSetupAdmin({
   connected,
   selectedKey,
   keyBusy,
+  keyInstalled = false,
+  keyInstallation,
   onBusyChange,
   onStageChange,
   onOpenProfile,
@@ -141,6 +143,8 @@ export function QuickSetupAdmin({
   connected: boolean;
   selectedKey: SetupKey;
   keyBusy: boolean;
+  keyInstalled?: boolean;
+  keyInstallation?: ReactNode;
   onBusyChange: (busy: boolean) => void;
   onStageChange: (stage: AdminStage) => void;
   onOpenProfile: (profileId: string) => void;
@@ -153,6 +157,7 @@ export function QuickSetupAdmin({
     // beyond "verified" comes back as key-installed until this run re-proves it.
     const saved = readQuickSetupProgress(source.profileId);
     if (!saved || saved.username !== username) return "pending";
+    if (saved.keyId !== selectedKey.keyId) return "account-ready";
     if (saved.stage === "accessPromoted" || saved.stage === "accessVerified")
       return "key-installed";
     return saved.stage === "accountReady"
@@ -161,6 +166,9 @@ export function QuickSetupAdmin({
         ? "key-installed"
         : "pending";
   });
+  useEffect(() => {
+    if (keyInstalled && stage === "account-ready") setStage("key-installed");
+  }, [keyInstalled, stage]);
   const [review, setReview] = useState<AdminReview | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewPending, setReviewPending] = useState(false);
@@ -233,32 +241,36 @@ export function QuickSetupAdmin({
       if (!active.current) return;
       proofRef.current = null;
       setProof(null);
+      setStage("key-installed");
       setNotice(
-        "Administrator proof expired before access was promoted. Apply and verify access again.",
+        "Administrator proof expired before access was promoted. Verify administrator access again.",
       );
     }, delay);
     return () => window.clearTimeout(timer);
   }, [proof]);
 
-  const contextKey = [
+  const bindingKey = [
     source.profileId,
     source.profileRevision,
     source.host,
     source.username,
     source.port,
     connectionId ?? "",
-    visible ? "visible" : "hidden",
     mode,
     username,
     selectedKey.keyId,
     selectedKey.fingerprint,
   ].join("\u0000");
+  const contextKey = `${bindingKey}\u0000${visible}`;
+  const previousBinding = useRef(bindingKey);
   const contextRef = useRef(contextKey);
   contextRef.current = contextKey;
   const previousContext = useRef(contextKey);
   useEffect(() => {
     if (previousContext.current === contextKey) return;
     previousContext.current = contextKey;
+    const bindingChanged = previousBinding.current !== bindingKey;
+    previousBinding.current = bindingKey;
     if (promoted) return;
     sequence.current += 1;
     const live = reviewRef.current;
@@ -275,8 +287,14 @@ export function QuickSetupAdmin({
     setSudoPassword("");
     setPassphrase("");
     setVerifyPasswordOpen(false);
-    setStage("pending");
-  }, [contextKey, promoted]);
+    setStage((current) =>
+      bindingChanged
+        ? "pending"
+        : current === "verified"
+          ? "key-installed"
+          : current,
+    );
+  }, [bindingKey, contextKey, promoted]);
 
   function reviewMatches(value: AdminReview) {
     return (
@@ -510,7 +528,7 @@ export function QuickSetupAdmin({
       if (!confirmed) {
         if (active.current) {
           setVerifyError(
-            "The verification result did not match this connection, account, or key. Apply and verify access again.",
+            "The verification result did not match this connection, account, or key. Verify administrator access again.",
           );
         }
         return;
@@ -545,8 +563,9 @@ export function QuickSetupAdmin({
     if (current.expiresAtMs <= Date.now() || !proofMatches(current)) {
       proofRef.current = null;
       setProof(null);
+      setStage("key-installed");
       setPromoteError(
-        "Administrator proof is stale or expired. Apply and verify access again.",
+        "Administrator proof is stale or expired. Verify administrator access again.",
       );
       return;
     }
@@ -612,7 +631,7 @@ export function QuickSetupAdmin({
     } catch (failure) {
       if (!active.current) return;
       setPromoteError(
-        `${safeError(failure)} The verified administrator connection was kept and the root profile is unchanged. Retry promoting access explicitly; nothing retries automatically.`,
+        `${safeError(failure)} The verified administrator connection was kept and the root profile is unchanged. Retry switching explicitly; nothing retries automatically.`,
       );
     } finally {
       promoteActive.current = false;
@@ -626,7 +645,9 @@ export function QuickSetupAdmin({
       ? "Administrator key login and sudo verified"
       : stage === "account-ready"
         ? "Account ready · public key not yet installed"
-        : "Administrator not applied";
+        : stage === "key-installed"
+          ? "Account ready · access not verified in this session"
+          : "Administrator not applied";
 
   if (!isRoot) {
     return (
@@ -647,6 +668,13 @@ export function QuickSetupAdmin({
     );
   }
 
+  const accountReady = stage !== "pending";
+  const canVerify =
+    keyInstalled ||
+    stage === "key-installed" ||
+    stage === "verified" ||
+    stage === "promoted";
+
   return (
     <section
       aria-label="Administrator access"
@@ -663,20 +691,14 @@ export function QuickSetupAdmin({
           </p>
           <p className="mt-0.5 text-xs leading-relaxed break-all text-muted-foreground">
             {mode === "new" ? "Create" : "Adopt"}{" "}
-            <span className="font-medium">{username}</span> from the root
-            connection {source.username}@{source.host}:{source.port}. Key{" "}
-            {selectedKey.fingerprint}.
-          </p>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            {mode === "new"
-              ? "A new sudo-capable account is created with the password below. Existing accounts are never reset."
-              : "The existing account is adopted without resetting its password or changing its keys."}
+            <span className="font-medium">{username}</span> through the root
+            connection {source.username}@{source.host}:{source.port}.
           </p>
         </div>
-        {!promoted && (
+        {!accountReady && !promoted && (
           <Button
             type="button"
-            variant="outline"
+            variant="default"
             disabled={
               reviewPending ||
               applying ||
@@ -688,11 +710,9 @@ export function QuickSetupAdmin({
           >
             {reviewPending
               ? "Preparing review…"
-              : stage === "account-ready"
-                ? "Review account again"
-                : mode === "new"
-                  ? "Create administrator"
-                  : "Adopt administrator"}
+              : mode === "new"
+                ? "Create administrator"
+                : "Adopt administrator"}
           </Button>
         )}
       </div>
@@ -716,11 +736,10 @@ export function QuickSetupAdmin({
         </p>
       )}
 
-      {stage === "account-ready" && !promoted && (
+      {stage === "account-ready" && !keyInstalled && !promoted && (
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Install the selected public key for {username} above. Installation for
-          a different planned administrator must target that account, not the
-          connected root account.
+          Next: install the selected public key for {username} below, then apply
+          and verify access.
         </p>
       )}
 
@@ -735,15 +754,66 @@ export function QuickSetupAdmin({
         </p>
       )}
 
-      {!promoted && (
+      {!promoted && !accountReady && (
+        <details className="min-w-0 text-xs leading-relaxed text-muted-foreground">
+          <summary className="cursor-pointer">Account details</summary>
+          <p className="mt-1">
+            {mode === "new"
+              ? `A new sudo-capable account is created with the password entered in the review. Existing accounts are never reset.`
+              : `The existing account is adopted without resetting its password or changing its keys.`}
+          </p>
+          <dl className="mt-2 divide-y divide-border/70 border-y border-border/70">
+            <div className="grid gap-1 py-1.5 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-3">
+              <dt className="text-muted-foreground">Source</dt>
+              <dd className="min-w-0 break-all text-foreground">
+                {source.username}@{source.host}:{source.port}
+              </dd>
+            </div>
+            <div className="grid gap-1 py-1.5 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-3">
+              <dt className="text-muted-foreground">Key</dt>
+              <dd className="min-w-0 break-all text-foreground">
+                {selectedKey.fingerprint}
+              </dd>
+            </div>
+          </dl>
+        </details>
+      )}
+
+      {!promoted && accountReady && !canVerify && (
+        <details className="min-w-0">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            Review the administrator account again
+          </summary>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="-ml-2.5 mt-1 text-muted-foreground"
+            disabled={
+              reviewPending ||
+              applying ||
+              keyBusy ||
+              !connected ||
+              !connectionId
+            }
+            onClick={() => void startReview()}
+          >
+            {reviewPending ? "Preparing review…" : "Review account again"}
+          </Button>
+        </details>
+      )}
+
+      {keyInstallation}
+
+      {!promoted && canVerify && (
         <div className="space-y-2.5 border-t border-border/70 pt-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-sm font-medium">Apply and verify access</p>
+              <p className="text-sm font-medium">Verify administrator access</p>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                Opens a separate pinned-host connection as {username},
-                authenticates with only the selected key, then proves sudo to
-                root. Group membership is not used as proof.
+                A separate pinned-host connection authenticates as {username}{" "}
+                with only the selected key, then proves sudo to root. Group
+                membership is not used as proof.
               </p>
               {proof && (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -755,7 +825,7 @@ export function QuickSetupAdmin({
             {!proof && (
               <Button
                 type="button"
-                variant="outline"
+                variant="default"
                 disabled={
                   verifying ||
                   promoting ||
@@ -765,9 +835,7 @@ export function QuickSetupAdmin({
                 }
                 onClick={startVerify}
               >
-                {verifying
-                  ? "Applying and verifying…"
-                  : "Apply and verify access"}
+                {verifying ? "Verifying…" : "Verify administrator access"}
               </Button>
             )}
           </div>
@@ -793,9 +861,7 @@ export function QuickSetupAdmin({
                 disabled={promoting}
                 onClick={() => void promote()}
               >
-                {promoting
-                  ? "Promoting access…"
-                  : "Promote administrator access"}
+                {promoting ? "Switching…" : `Switch to ${username}`}
               </Button>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Promotion saves a separate {username} profile using this
@@ -826,13 +892,13 @@ export function QuickSetupAdmin({
           className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto sm:max-w-lg"
           showCloseButton={!applying}
         >
-          <DialogHeader>
+          <DialogHeader className="min-w-0">
             <DialogTitle>
               {review?.action === "adopt"
                 ? "Review adopting administrator"
                 : "Review new administrator"}
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="min-w-0 break-words">
               Server accounts, the SSH port, sshd settings and the firewall are
               not otherwise changed.
             </DialogDescription>
@@ -908,16 +974,16 @@ export function QuickSetupAdmin({
                 <summary className="cursor-pointer text-xs text-muted-foreground">
                   Exact command
                 </summary>
-                <pre className="mt-1 max-h-64 overflow-auto rounded-md border border-border/70 bg-muted/40 p-2 font-mono text-xs whitespace-pre">
+                <pre className="mt-1 max-h-64 min-w-0 max-w-full overflow-auto rounded-md border border-border/70 bg-muted/40 p-2 font-mono text-xs whitespace-pre">
                   {review.command}
                 </pre>
               </details>
-              <p className="text-xs leading-relaxed text-muted-foreground">
+              <p className="break-words text-xs leading-relaxed text-muted-foreground">
                 {review.purpose}
               </p>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="min-w-0 [&>button]:min-w-0 [&>button]:whitespace-normal">
             <Button
               type="button"
               variant="outline"
@@ -955,19 +1021,25 @@ export function QuickSetupAdmin({
           }
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Apply and verify access</DialogTitle>
-            <DialogDescription>
-              A separate connection authenticates as {username} with only{" "}
-              {selectedKey.fingerprint}, then checks sudo to root. The root
-              session stays open.
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto sm:max-w-md"
+          showCloseButton={!verifying}
+        >
+          <DialogHeader className="min-w-0">
+            <DialogTitle>Verify administrator access</DialogTitle>
+            <DialogDescription className="min-w-0 break-words">
+              <span className="mb-2 block break-all font-medium text-foreground">
+                {username}@{source.host}:{source.port}
+              </span>
+              Authenticate with only{" "}
+              <span className="break-all">{selectedKey.fingerprint}</span>, then
+              verify sudo to root. Your current connection stays open.
             </DialogDescription>
           </DialogHeader>
-          <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
+          <pre className="max-h-40 min-w-0 max-w-full overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre">
             <code>{sudoCheckCommand}</code>
           </pre>
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <div className="space-y-1.5">
               <label htmlFor={`${id}-sudo`} className="block text-sm">
                 {username} sudo password
@@ -1003,13 +1075,13 @@ export function QuickSetupAdmin({
             {verifyError && (
               <p
                 role="alert"
-                className="text-sm leading-relaxed text-destructive"
+                className="break-words text-sm leading-relaxed text-destructive"
               >
                 {verifyError}
               </p>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="min-w-0 [&>button]:min-w-0 [&>button]:whitespace-normal">
             <Button
               type="button"
               variant="outline"

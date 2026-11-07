@@ -1,4 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  CircleCheck,
+  CircleDashed,
+  CircleDot,
+  TriangleAlert,
+} from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +18,100 @@ import {
 } from "./quick-setup-model";
 
 export type KeyLocation = "ssh" | "legacy" | "external";
+
+export type SetupStepState = "complete" | "current" | "attention" | "pending";
+
+export interface SetupStep {
+  id: string;
+  label: string;
+  summary: string;
+  state: SetupStepState;
+}
+
+const setupStepStyles: Record<
+  SetupStepState,
+  { badge: string; icon: typeof CircleCheck }
+> = {
+  complete: {
+    badge: "border-success/40 bg-success/10 text-success",
+    icon: CircleCheck,
+  },
+  current: {
+    badge: "border-primary/60 bg-primary/15 text-primary",
+    icon: CircleDot,
+  },
+  attention: {
+    badge: "border-warning/40 bg-warning/10 text-warning",
+    icon: TriangleAlert,
+  },
+  pending: {
+    badge: "border-border/70 bg-muted/20 text-muted-foreground",
+    icon: CircleDashed,
+  },
+};
+
+function SetupProgress({
+  steps,
+  nextAction,
+  identity,
+}: {
+  steps: SetupStep[];
+  nextAction: string;
+  identity: string;
+}) {
+  return (
+    <section
+      aria-label="Access setup progress"
+      className="min-w-0 rounded-lg border border-border/70 bg-card/40 p-3"
+    >
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="text-sm font-medium">Access setup</p>
+        <p className="min-w-0 break-words text-xs text-muted-foreground">
+          Next: <span className="text-foreground">{nextAction}</span>
+        </p>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+        {identity}
+      </p>
+      <ol className="mt-3 grid min-w-0 gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,11rem),1fr))]">
+        {steps.map((step, index) => {
+          const { badge, icon: Icon } = setupStepStyles[step.state];
+          return (
+            <li
+              key={step.id}
+              aria-current={
+                step.state === "current" || step.state === "attention"
+                  ? "step"
+                  : undefined
+              }
+              className="min-w-0"
+            >
+              <div
+                data-slot="setup-progress-step"
+                data-state={step.state}
+                className={`flex h-full min-w-0 items-start gap-2 rounded-md border px-2.5 py-2 ${badge}`}
+              >
+                <span
+                  className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full ${step.state === "current" ? "bg-primary text-primary-foreground" : "bg-background/60"}`}
+                >
+                  <Icon className="size-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block break-words text-xs font-medium text-foreground">
+                    {index + 1}. {step.label}
+                  </span>
+                  <span className="mt-0.5 block break-words text-xs leading-relaxed text-muted-foreground">
+                    {step.summary}
+                  </span>
+                </span>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
 export interface SetupKey {
   keyId: string;
   fingerprint: string;
@@ -125,6 +225,16 @@ export function QuickSetupKeyManager({
   const [accessBusy, setAccessBusy] = useState(false);
   const [adminStage, setAdminStage] = useState<AdminStage>("pending");
   const [adminBusy, setAdminBusy] = useState(false);
+  const [accessState, setAccessState] = useState<{
+    installedFor: string | null;
+    verified: boolean;
+  }>({ installedFor: null, verified: false });
+  const handleAccessState = useCallback(
+    (state: { installedFor: string | null; verified: boolean }) => {
+      setAccessState(state);
+    },
+    [],
+  );
   const needsAdministrator =
     source.username === "root" && plannedTarget.username !== "root";
   const adminTarget = needsAdministrator ? plannedTarget.username : null;
@@ -247,6 +357,121 @@ export function QuickSetupKeyManager({
 
   const selectedKey =
     keys?.keys.find((key) => key.keyId === selectedKeyId) ?? null;
+  const keyReady = Boolean(selectedKey && selectedKey.location !== "legacy");
+  const targetAccount = needsAdministrator
+    ? plannedTarget.username
+    : source.username;
+  const setupIdentity = `${needsAdministrator ? `Root ${source.username}@${source.host}:${source.port} → ` : "Key access: "}${targetAccount}@${source.host}:${source.port}. Planned port ${plannedTarget.port}, login policy and firewall changes remain pending.`;
+  const accountReady = adminStage !== "pending";
+  const adminVerified = adminStage === "verified" || adminStage === "promoted";
+  const promoted = adminStage === "promoted";
+  const installDone = needsAdministrator
+    ? accessState.installedFor === targetAccount ||
+      ["key-installed", "verified", "promoted"].includes(adminStage)
+    : accessState.installedFor === targetAccount || accessState.verified;
+  const accessVerified = needsAdministrator
+    ? adminVerified
+    : accessState.verified;
+  const stepAttention = Boolean(error || listError);
+  let setupSteps: SetupStep[];
+  let nextAction: string;
+  if (needsAdministrator) {
+    setupSteps = [
+      {
+        id: "key",
+        label: "Local key",
+        summary: keyReady
+          ? `${selectedKey?.encrypted ? "Encrypted" : "Unprotected"} key selected`
+          : "Create or choose a local key",
+        state: keyReady ? "complete" : "current",
+      },
+      {
+        id: "admin",
+        label: "Administrator",
+        summary: accountReady
+          ? `${adminMode === "new" ? "Created" : "Adopted"} ${adminUsername}`
+          : `${adminMode === "new" ? "Create" : "Adopt"} ${adminUsername}`,
+        state: accountReady ? "complete" : "current",
+      },
+      {
+        id: "install",
+        label: "Install public key",
+        summary: installDone
+          ? `Authorized for ${plannedTarget.username}`
+          : `Add the selected key for ${plannedTarget.username}`,
+        state: installDone ? "complete" : accountReady ? "current" : "pending",
+      },
+      {
+        id: "verify",
+        label: "Verify access",
+        summary: adminVerified
+          ? "Key login and sudo verified"
+          : "Test the selected key and sudo",
+        state: adminVerified
+          ? "complete"
+          : installDone || adminStage === "key-installed"
+            ? "current"
+            : "pending",
+      },
+      {
+        id: "promote",
+        label: "Use administrator",
+        summary: promoted
+          ? "Administrator profile connected"
+          : "Switch and keep root access",
+        state: promoted ? "complete" : adminVerified ? "current" : "pending",
+      },
+    ];
+    nextAction = !keyReady
+      ? "Create or choose a local key"
+      : !accountReady
+        ? `${adminMode === "new" ? "Create" : "Adopt"} ${adminUsername}`
+        : !installDone
+          ? `Install the public key for ${adminUsername}`
+          : !adminVerified
+            ? "Verify key login and sudo"
+            : !promoted
+              ? `Switch to ${adminUsername} and keep root`
+              : "Administrator access is ready";
+  } else {
+    setupSteps = [
+      {
+        id: "key",
+        label: "Local key",
+        summary: keyReady
+          ? `${selectedKey?.encrypted ? "Encrypted" : "Unprotected"} key selected`
+          : "Create or choose a local key",
+        state: keyReady ? "complete" : "current",
+      },
+      {
+        id: "install",
+        label: "Install public key",
+        summary: installDone
+          ? `Authorized for ${source.username}`
+          : `Add the selected key for ${source.username}`,
+        state: installDone ? "complete" : keyReady ? "current" : "pending",
+      },
+      {
+        id: "verify",
+        label: "Verify key login",
+        summary: accessVerified
+          ? "Current connection key verified"
+          : "Test the selected key",
+        state: accessVerified ? "complete" : keyReady ? "current" : "pending",
+      },
+    ];
+    nextAction = !keyReady
+      ? "Create or choose a local key"
+      : !installDone
+        ? `Install the public key for ${source.username}`
+        : !accessVerified
+          ? "Test the key on the current connection"
+          : "Review the SSH config entry";
+  }
+  if (stepAttention) {
+    const firstOpen = setupSteps.find((step) => step.state === "current");
+    if (firstOpen) firstOpen.state = "attention";
+  }
   const nameFormVisible =
     strategy === "generate" && (!selectedKey || createOpen);
   useEffect(() => {
@@ -660,10 +885,38 @@ export function QuickSetupKeyManager({
     </fieldset>
   );
 
+  const accessSection =
+    selectedKey &&
+    selectedKey.location !== "legacy" &&
+    (!needsAdministrator || accountReady) ? (
+      <QuickSetupAccess
+        visible={visible}
+        source={source}
+        plannedTarget={plannedTarget}
+        targetUsername={adminTarget}
+        connectionId={connectionId}
+        connected={connected}
+        selectedKey={selectedKey}
+        keyBusy={
+          mutation !== null ||
+          adminBusy ||
+          (needsAdministrator && adminStage === "pending")
+        }
+        onBusyChange={handleAccessBusy}
+        onStateChange={handleAccessState}
+      />
+    ) : null;
+
   return (
     <div className="space-y-4 border-t border-border/70 pt-5">
+      <SetupProgress
+        steps={setupSteps}
+        nextAction={nextAction}
+        identity={setupIdentity}
+      />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-sm font-medium">Local SSH key</h3>
+        <h3 className="text-sm font-medium">1. Local SSH key</h3>
         <Button
           type="button"
           variant="ghost"
@@ -754,6 +1007,7 @@ export function QuickSetupKeyManager({
               )}
               <Button
                 type="button"
+                variant="outline"
                 disabled={mutation !== null || accessBusy}
                 onClick={() => void backup(selectedKey.keyId)}
               >
@@ -799,29 +1053,15 @@ export function QuickSetupKeyManager({
             connected={connected}
             selectedKey={selectedKey}
             keyBusy={mutation !== null || accessBusy}
+            keyInstalled={installDone}
+            keyInstallation={accessSection}
             onBusyChange={handleAdminBusy}
             onStageChange={setAdminStage}
             onOpenProfile={onOpenProfile}
           />
         )}
 
-      {selectedKey && selectedKey.location !== "legacy" && (
-        <QuickSetupAccess
-          visible={visible}
-          source={source}
-          plannedTarget={plannedTarget}
-          targetUsername={adminTarget}
-          connectionId={connectionId}
-          connected={connected}
-          selectedKey={selectedKey}
-          keyBusy={
-            mutation !== null ||
-            adminBusy ||
-            (needsAdministrator && adminStage === "pending")
-          }
-          onBusyChange={handleAccessBusy}
-        />
-      )}
+      {!needsAdministrator && accessSection}
 
       {showCreateForm && createForm}
 

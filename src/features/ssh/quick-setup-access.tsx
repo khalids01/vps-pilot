@@ -109,6 +109,7 @@ export function QuickSetupAccess({
   selectedKey,
   keyBusy,
   onBusyChange,
+  onStateChange,
 }: {
   visible?: boolean;
   source: SourceSelection;
@@ -119,6 +120,10 @@ export function QuickSetupAccess({
   selectedKey: SetupKey;
   keyBusy: boolean;
   onBusyChange: (busy: boolean) => void;
+  onStateChange?: (state: {
+    installedFor: string | null;
+    verified: boolean;
+  }) => void;
 }) {
   const id = useId();
   const queryClient = useQueryClient();
@@ -139,6 +144,7 @@ export function QuickSetupAccess({
   const [saveResult, setSaveResult] = useState<SetupConfigSave | null>(null);
   const [notice, setNotice] = useState("");
   const [installationBusy, setInstallationBusy] = useState(false);
+  const [installedFor, setInstalledFor] = useState<string | null>(null);
   const active = useRef(true);
   const epoch = useRef(0);
   const verifySequence = useRef(0);
@@ -176,6 +182,7 @@ export function QuickSetupAccess({
     setVerifyError("");
     setAliasError("");
     setSaveResult(null);
+    setInstalledFor(null);
     if (!savingNow) {
       setReview(null);
       setReviewOpen(false);
@@ -256,6 +263,10 @@ export function QuickSetupAccess({
   useEffect(() => {
     onBusyChange(busy);
   }, [busy, onBusyChange]);
+
+  useEffect(() => {
+    onStateChange?.({ installedFor, verified: Boolean(proof) });
+  }, [installedFor, proof, onStateChange]);
 
   useEffect(() => {
     if (!proof && !review) return;
@@ -551,12 +562,27 @@ export function QuickSetupAccess({
   const modeLabel = review
     ? (reviewModeLabels[review.mode] ?? review.mode)
     : "";
+  const plannedTargetActive = Boolean(targetUsername);
 
-  return (
-    <section
-      aria-label="Key login access"
-      className="space-y-3 border-t border-border/70 pt-4"
-    >
+  const installSection = (
+    <QuickSetupKeyInstall
+      source={source}
+      connectionId={connectionId}
+      connected={connected}
+      keyId={selectedKey.keyId}
+      keyFingerprint={selectedKey.fingerprint}
+      targetUsername={targetUsername ?? null}
+      controlsBusy={
+        keyBusy || verifying || reviewPending || reviewOpen || saving
+      }
+      onInstallationBusyChange={setInstallationBusy}
+      onInvalidate={invalidate}
+      onInstalled={setInstalledFor}
+    />
+  );
+
+  const currentConnectionSection = (
+    <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p
@@ -604,44 +630,6 @@ export function QuickSetupAccess({
           connection.
         </p>
       ) : null}
-
-      <QuickSetupKeyInstall
-        source={source}
-        connectionId={connectionId}
-        connected={connected}
-        keyId={selectedKey.keyId}
-        keyFingerprint={selectedKey.fingerprint}
-        targetUsername={targetUsername ?? null}
-        controlsBusy={
-          keyBusy || verifying || reviewPending || reviewOpen || saving
-        }
-        onInstallationBusyChange={setInstallationBusy}
-        onInvalidate={invalidate}
-      />
-
-      <div className="space-y-1 border-t border-border/70 pt-3">
-        <dl className="divide-y divide-border/70">
-          <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
-            <dt className="text-xs text-muted-foreground">Current access</dt>
-            <dd className="min-w-0 text-sm break-all">
-              {source.username}@{source.host}:{source.port}
-            </dd>
-          </div>
-          <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
-            <dt className="text-xs text-muted-foreground">Planned access</dt>
-            <dd className="min-w-0 text-sm break-all">
-              {plannedTarget.username}@{source.host}:{plannedTarget.port}
-            </dd>
-          </div>
-        </dl>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Applying and verifying access above proves {plannedTarget.username}{" "}
-          key login and sudo on the current port and saves a separate
-          administrator profile. Testing the current connection never certifies
-          the planned account. Target port {plannedTarget.port}, sshd key-only
-          policy, and firewall changes remain pending.
-        </p>
-      </div>
 
       {verifyError && !unlockOpen && (
         <p role="alert" className="text-sm leading-relaxed text-destructive">
@@ -705,6 +693,58 @@ export function QuickSetupAccess({
           )}
         </div>
       )}
+    </div>
+  );
+
+  const identitySection = (
+    <div className="min-w-0 space-y-1 border-t border-border/70 pt-3">
+      <dl className="divide-y divide-border/70">
+        <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
+          <dt className="text-xs text-muted-foreground">Current access</dt>
+          <dd className="min-w-0 text-sm break-all">
+            {source.username}@{source.host}:{source.port}
+          </dd>
+        </div>
+        <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
+          <dt className="text-xs text-muted-foreground">Planned access</dt>
+          <dd className="min-w-0 text-sm break-all">
+            {plannedTarget.username}@{source.host}:{plannedTarget.port}
+          </dd>
+        </div>
+      </dl>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Testing the current connection never certifies the planned account.
+        Target port {plannedTarget.port}, sshd key-only policy, and firewall
+        changes remain pending.
+      </p>
+    </div>
+  );
+
+  return (
+    <section
+      aria-label="Key login access"
+      className="space-y-3 border-t border-border/70 pt-4"
+    >
+      {plannedTargetActive ? (
+        <>
+          {installSection}
+          <details className="min-w-0 border-t border-border/70 pt-3">
+            <summary className="cursor-pointer text-sm text-muted-foreground">
+              Current root connection verification and optional SSH config
+            </summary>
+            <div className="mt-3 space-y-3">
+              {currentConnectionSection}
+              {identitySection}
+            </div>
+          </details>
+        </>
+      ) : (
+        <>
+          {installSection}
+          {currentConnectionSection}
+          {identitySection}
+        </>
+      )}
 
       {notice && (
         <p
@@ -732,16 +772,19 @@ export function QuickSetupAccess({
           if (!open) closeUnlock();
         }}
       >
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto"
+          showCloseButton={!verifying}
+        >
+          <DialogHeader className="min-w-0">
             <DialogTitle>Unlock selected key</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="min-w-0 break-words">
               Enter the passphrase once for the encrypted key{" "}
-              {selectedKey.fingerprint}. It is used for this verification and is
-              not saved.
+              <span className="break-all">{selectedKey.fingerprint}</span>. It
+              is used for this verification and is not saved.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <label htmlFor={`${id}-passphrase`} className="block text-sm">
               Key passphrase
             </label>
@@ -758,12 +801,12 @@ export function QuickSetupAccess({
           {verifyError && (
             <p
               role="alert"
-              className="text-sm leading-relaxed text-destructive"
+              className="break-words text-sm leading-relaxed text-destructive"
             >
               {verifyError}
             </p>
           )}
-          <DialogFooter>
+          <DialogFooter className="min-w-0 [&>button]:min-w-0 [&>button]:whitespace-normal">
             <Button
               type="button"
               variant="outline"
@@ -795,9 +838,9 @@ export function QuickSetupAccess({
           className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto sm:max-w-lg"
           showCloseButton={!saving}
         >
-          <DialogHeader>
+          <DialogHeader className="min-w-0">
             <DialogTitle>Review SSH config</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="min-w-0 break-words">
               This adds one app-owned entry and preserves unrelated aliases,
               comments and defaults.
             </DialogDescription>
@@ -894,7 +937,7 @@ export function QuickSetupAccess({
             </p>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="min-w-0 [&>button]:min-w-0 [&>button]:whitespace-normal">
             <Button
               type="button"
               variant="outline"

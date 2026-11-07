@@ -513,7 +513,7 @@ test.beforeEach(async ({ page }) => {
             adminProofs.set(args.keyId,args.username);
             (window as any).__adminMeta.verifies++;
 
-            return {proofId:crypto.randomUUID(),profileId:args.profileId,profileRevision:profiles.find(profile=>profile.id===args.profileId)!.revision,connectionId:args.connectionId,keyId:args.keyId,keyFingerprint:storedSetupKeys().find((item:any)=>item.keyId===args.keyId)?.fingerprint??"SHA256:fixture",host:profiles.find(profile=>profile.id===args.profileId)!.host,sourceUsername:profiles.find(profile=>profile.id===args.profileId)!.username,username:args.username,port:profiles.find(profile=>profile.id===args.profileId)!.port,sudoVerified:true,expiresAtMs:Date.now()+120000};
+            return {proofId:crypto.randomUUID(),profileId:args.profileId,profileRevision:profiles.find(profile=>profile.id===args.profileId)!.revision,connectionId:args.connectionId,keyId:args.keyId,keyFingerprint:storedSetupKeys().find((item:any)=>item.keyId===args.keyId)?.fingerprint??"SHA256:fixture",host:profiles.find(profile=>profile.id===args.profileId)!.host,sourceUsername:profiles.find(profile=>profile.id===args.profileId)!.username,username:args.username,port:profiles.find(profile=>profile.id===args.profileId)!.port,sudoVerified:true,expiresAtMs:Date.now()+((window as any).__adminProofExpiryMs??120000)};
           }
           if(cmd==="ssh_setup_admin_promote"){
             if((window as any).__adminPromoteFailure)throw "The profile could not be saved. The administrator is verified and its live connection was kept.";
@@ -4160,6 +4160,18 @@ test("tool sidebar expands to 256px, collapses to a 56px icon rail, and persists
   await expect.poll(async () => (await gap.boundingBox())?.width).toBeCloseTo(256, 0);
   const headerBox = await header.boundingBox();
   expect(headerBox).not.toBeNull();
+  // Rows must not touch: the shared menu keeps a 4px vertical gap and the
+  // callers must not collapse it with a gap override.
+  const menu = nav.locator('[data-slot="sidebar-menu"]').first();
+  await expect(menu).toBeVisible();
+  expect(await menu.evaluate((element) => getComputedStyle(element).rowGap)).toBe("4px");
+  const overviewRow = nav.getByRole("button", { name: "Overview", exact: true });
+  const quickSetupRow = nav.getByRole("button", { name: "Quick Setup", exact: true });
+  const overviewRowBox = await overviewRow.boundingBox();
+  const quickSetupRowBox = await quickSetupRow.boundingBox();
+  expect(overviewRowBox).not.toBeNull();
+  expect(quickSetupRowBox).not.toBeNull();
+  expect(quickSetupRowBox!.y - (overviewRowBox!.y + overviewRowBox!.height)).toBeGreaterThanOrEqual(3);
 
   await nav.getByRole("button", { name: "Terminal", exact: true }).click();
   await page.getByRole("button", { name: "New shell", exact: true }).click();
@@ -4324,11 +4336,26 @@ async function openRootKeyAccess(page:import("@playwright/test").Page,passphrase
   return {setup,admin,access};
 }
 
-test("staged administrator access creates the target, installs the key, verifies sudo and promotes live",async({page})=>{
+test("staged administrator access creates the target, installs the key, verifies sudo and promotes live",async({page},testInfo)=>{
   const passphrase="admin fixture passphrase";
   const {setup,admin,access}=await openRootKeyAccess(page,passphrase);
   const sudo="fixture-sudo-password-not-saved";
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd.startsWith("ssh_setup_admin_")))).toHaveLength(0);
+  const progress=setup.getByRole("region",{name:"Access setup progress",exact:true});
+  await progress.scrollIntoViewIfNeeded();
+  await page.screenshot({path:testInfo.outputPath("administrator-guided-desktop.png"),animations:"disabled"});
+  const steps=progress.locator('[data-slot="setup-progress-step"]');
+  await expect(steps).toHaveCount(5);
+  for (const step of await steps.all()) expect(await step.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  for(const [index,label] of ["1. Local key","2. Administrator","3. Install public key","4. Verify access","5. Use administrator"].entries()){
+    await expect(steps.nth(index)).toContainText(label);
+  }
+  await expect(steps.nth(0)).toHaveAttribute("data-state","complete");
+  await expect(steps.nth(1)).toHaveAttribute("data-state","current");
+  await expect(progress).toContainText("Next: Create deploy");
+  // Before the account is applied only the current action is available.
+  await expect(admin.getByRole("button",{name:"Create administrator",exact:true})).toBeEnabled();
+  await expect(access.getByRole("button",{name:"Install key for deploy",exact:true})).toHaveCount(0);
 
   // New/existing choice is enforced: the review request carries the mode, and an
   // account is never silently adopted under "new".
@@ -4338,8 +4365,24 @@ test("staged administrator access creates the target, installs the key, verifies
   await expect(review).toContainText("/home/deploy");
   await expect(review.getByRole("button",{name:"Create deploy",exact:true})).toBeDisabled();
   await review.getByLabel("New administrator sudo password").fill(sudo);
+  await page.setViewportSize({width:360,height:800});
+  const reviewNarrow=await review.boundingBox();
+  expect(reviewNarrow).not.toBeNull();
+  expect(reviewNarrow!.x).toBeGreaterThanOrEqual(0);
+  expect(reviewNarrow!.x+reviewNarrow!.width).toBeLessThanOrEqual(360);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("administrator-review-360.png"),animations:"disabled"});
+  await page.setViewportSize({width:430,height:900});
+  const review430=await review.boundingBox();
+  expect(review430).not.toBeNull();
+  expect(review430!.x+review430!.width).toBeLessThanOrEqual(430);
+  await page.setViewportSize({width:1366,height:900});
   await review.getByRole("button",{name:"Create deploy",exact:true}).click();
   await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Account ready · public key not yet installed");
+  await expect(steps.nth(1)).toHaveAttribute("data-state","complete");
+  await expect(steps.nth(2)).toHaveAttribute("data-state","current");
+  await expect(progress).toContainText("Next: Install the public key for deploy");
+  await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__adminMeta.reviewedModes)).toEqual(["new"]);
   expect(await page.evaluate(()=>(window as any).__adminMeta.applies)).toBe(1);
 
@@ -4350,10 +4393,33 @@ test("staged administrator access creates the target, installs the key, verifies
   await expect(install).toContainText("Planned administrator");
   await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
   await expect(access.getByRole("status",{name:"Key installation result"})).toContainText("deploy@alpha.invalid");
+  await expect(steps.nth(2)).toHaveAttribute("data-state","complete");
+  await expect(steps.nth(3)).toHaveAttribute("data-state","current");
+  await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toBeVisible();
+  await expect(access.getByRole("button",{name:"Install key for deploy",exact:true})).toHaveCount(0);
 
   await page.evaluate(()=>{(window as any).__adminVerifyFailure=true;});
-  await admin.getByRole("button",{name:"Apply and verify access",exact:true}).click();
-  const verify=page.getByRole("dialog",{name:"Apply and verify access",exact:true});
+  await admin.getByRole("button",{name:"Verify administrator access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Verify administrator access",exact:true});
+  const verifyPre=verify.locator("pre");
+  await expect(verifyPre).toBeVisible();
+  await page.setViewportSize({width:360,height:800});
+  const verify360=await verify.boundingBox();
+  const pre360=await verifyPre.boundingBox();
+  expect(verify360).not.toBeNull();
+  expect(pre360).not.toBeNull();
+  expect(verify360!.x).toBeGreaterThanOrEqual(0);
+  expect(verify360!.x+verify360!.width).toBeLessThanOrEqual(360);
+  expect(pre360!.x).toBeGreaterThanOrEqual(verify360!.x);
+  expect(pre360!.x+pre360!.width).toBeLessThanOrEqual(verify360!.x+verify360!.width+1);
+  expect(await verifyPre.evaluate(element=>element.scrollWidth>element.clientWidth)).toBe(true);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("administrator-verify-360.png"),animations:"disabled"});
+  await page.setViewportSize({width:430,height:900});
+  const verify430=await verify.boundingBox();
+  expect(verify430).not.toBeNull();
+  expect(verify430!.x+verify430!.width).toBeLessThanOrEqual(430);
+  await page.setViewportSize({width:1366,height:900});
   await verify.getByLabel("deploy sudo password").fill(sudo);
   await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
   await expect(verify.getByRole("alert")).toContainText("administrator access was not verified");
@@ -4362,9 +4428,11 @@ test("staged administrator access creates the target, installs the key, verifies
   await page.evaluate(()=>{(window as any).__adminVerifyFailure=false;});
   await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
   await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
+  await expect(steps.nth(3)).toHaveAttribute("data-state","complete");
+  await expect(steps.nth(4)).toHaveAttribute("data-state","current");
   expect(await page.evaluate(()=>(window as any).__adminMeta.verifies)).toBeGreaterThan(0);
 
-  await admin.getByRole("button",{name:"Promote administrator access",exact:true}).click();
+  await admin.getByRole("button",{name:"Switch to deploy",exact:true}).click();
   await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveAttribute("aria-selected","true");
   await expect(page.getByRole("heading",{name:"SSH and firewall",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(1);
@@ -4388,20 +4456,20 @@ test("staged administrator promotion failure keeps the verified connection and n
   await access.getByRole("button",{name:"Install key for deploy",exact:true}).click();
   const install=page.getByRole("dialog",{name:"Review public key installation",exact:true});
   await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
-  await admin.getByRole("button",{name:"Apply and verify access",exact:true}).click();
-  const verify=page.getByRole("dialog",{name:"Apply and verify access",exact:true});
+  await admin.getByRole("button",{name:"Verify administrator access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Verify administrator access",exact:true});
   await verify.getByLabel("deploy sudo password").fill("fixture-sudo-two");
   await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
   await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
 
   await page.evaluate(()=>{(window as any).__adminPromoteFailure=true;});
-  await admin.getByRole("button",{name:"Promote administrator access",exact:true}).click();
+  await admin.getByRole("button",{name:"Switch to deploy",exact:true}).click();
   await expect(admin.getByRole("alert")).toContainText("connection was kept");
   expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(0);
   await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveCount(0);
 
   await page.evaluate(()=>{(window as any).__adminPromoteFailure=false;});
-  await admin.getByRole("button",{name:"Promote administrator access",exact:true}).click();
+  await admin.getByRole("button",{name:"Switch to deploy",exact:true}).click();
   await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveAttribute("aria-selected","true");
 });
 
@@ -4416,8 +4484,8 @@ test("staged administrator progress persists without claiming a live proof after
   await access.getByRole("button",{name:"Install key for deploy",exact:true}).click();
   const install=page.getByRole("dialog",{name:"Review public key installation",exact:true});
   await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
-  await admin.getByRole("button",{name:"Apply and verify access",exact:true}).click();
-  const verify=page.getByRole("dialog",{name:"Apply and verify access",exact:true});
+  await admin.getByRole("button",{name:"Verify administrator access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Verify administrator access",exact:true});
   await verify.getByLabel("deploy sudo password").fill("fixture-sudo-progress-2");
   await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
   await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
@@ -4434,4 +4502,43 @@ test("staged administrator progress persists without claiming a live proof after
   await expect(accessAfter).toContainText("Current access");
   // Non-secret progress is restored, but a live proof is never claimed.
   expect(await page.evaluate(()=>document.body.innerText.includes("Administrator key login and sudo verified"))).toBe(false);
+});
+
+
+test("guided access keeps completed steps on navigation, accepts installed keys and expires live proof",async({page})=>{
+  const passphrase="existing administrator fixture";
+  const {setup}=await openRootKeyAccess(page,passphrase);
+  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await setup.getByRole("button",{name:/Use an existing administrator/}).click();
+  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  const admin=setup.getByRole("region",{name:"Administrator access",exact:true});
+  await admin.getByRole("button",{name:"Adopt administrator",exact:true}).click();
+  const review=page.getByRole("dialog",{name:"Review adopting administrator",exact:true});
+  await review.getByRole("button",{name:"Adopt deploy",exact:true}).click();
+  const access=setup.getByRole("region",{name:"Key login access",exact:true});
+  await page.evaluate(()=>{(window as any).__installAlreadyPresent=true;});
+  await access.getByRole("button",{name:"Install key for deploy",exact:true}).click();
+  const install=page.getByRole("dialog",{name:"Review public key installation",exact:true});
+  await expect(install).toContainText("No duplicate key will be added");
+  await install.getByRole("button",{name:"Close",exact:true}).first().click();
+  await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_setup_key_install_apply"))).toHaveLength(0);
+  await page.getByRole("button",{name:"Fleet home",exact:true}).click();
+  await page.getByRole("tab",{name:/Root Fixture/}).click();
+  await expect(admin.getByRole("button",{name:"Adopt administrator",exact:true})).toHaveCount(0);
+  await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toBeVisible();
+  const steps=setup.getByRole("region",{name:"Access setup progress",exact:true}).locator('[data-slot="setup-progress-step"]');
+  await expect(steps.nth(2)).toHaveAttribute("data-state","complete");
+  await page.evaluate(()=>{(window as any).__adminProofExpiryMs=6000;});
+  await admin.getByRole("button",{name:"Verify administrator access",exact:true}).click();
+  const verify=page.getByRole("dialog",{name:"Verify administrator access",exact:true});
+  await verify.getByLabel("deploy sudo password").fill("fixture-sudo-password");
+  await verify.getByLabel("Key passphrase",{exact:true}).fill(passphrase);
+  await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
+  await expect(steps.nth(3)).toHaveAttribute("data-state","complete");
+  await page.clock.fastForward(6500);
+  await expect(steps.nth(3)).toHaveAttribute("data-state","current");
+  await expect(steps.nth(4)).toHaveAttribute("data-state","pending");
+  await expect(admin.getByRole("button",{name:"Switch to deploy",exact:true})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(0);
 });
