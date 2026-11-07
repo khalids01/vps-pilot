@@ -390,6 +390,7 @@ pub(crate) struct Proof {
     pub(crate) username: String,
     pub(crate) port: u16,
     pub(crate) deadline: Instant,
+    expires_at_ms: u64,
 }
 
 struct Review {
@@ -415,15 +416,11 @@ struct Review {
     source: SourceSnapshot,
     candidate_sha256: [u8; 32],
     deadline: Instant,
+    expires_at_ms: u64,
 }
 
 impl Review {
     fn view(&self) -> SetupConfigReview {
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
         SetupConfigReview {
             review_id: self.id.clone(),
             proof_id: self.proof_id.clone(),
@@ -437,8 +434,7 @@ impl Review {
             username: self.username.clone(),
             port: self.port,
             key_fingerprint: self.key_fingerprint.clone(),
-            expires_at_ms: u64::try_from(now_ms.saturating_add(remaining.as_millis()))
-                .unwrap_or(u64::MAX),
+            expires_at_ms: self.expires_at_ms,
         }
     }
 }
@@ -474,11 +470,6 @@ pub struct SetupConfigSave {
 
 impl Proof {
     fn view(&self) -> KeyLoginProof {
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
         KeyLoginProof {
             proof_id: self.id.clone(),
             profile_id: self.profile_id.clone(),
@@ -490,8 +481,7 @@ impl Proof {
             host: self.host.clone(),
             username: self.username.clone(),
             port: self.port,
-            expires_at_ms: u64::try_from(now_ms.saturating_add(remaining.as_millis()))
-                .unwrap_or(u64::MAX),
+            expires_at_ms: self.expires_at_ms,
         }
     }
 }
@@ -854,6 +844,17 @@ impl SshService {
                     .into(),
             );
         }
+        // Serialize one stable deadline for the proof and all derived reviews.
+        // Native validity continues to use Instant, independent of wall-clock changes.
+        let deadline = Instant::now() + PROOF_LIFETIME;
+        let expires_at_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .saturating_add(PROOF_LIFETIME.as_millis()),
+        )
+        .unwrap_or(u64::MAX);
         let proof = Proof {
             id: Uuid::new_v4().to_string(),
             profile_id: request.profile_id.clone(),
@@ -868,7 +869,8 @@ impl SshService {
             host: target_host,
             username: request.username.clone(),
             port: request.port,
-            deadline: Instant::now() + PROOF_LIFETIME,
+            deadline,
+            expires_at_ms,
         };
         let view = proof.view();
         self.setup_access.insert(proof)?;
@@ -1025,6 +1027,7 @@ impl SshService {
                 source: prepared.source,
                 candidate_sha256: prepared.candidate_sha256,
                 deadline: after.deadline,
+                expires_at_ms: after.expires_at_ms,
             };
             let view = review.view();
             self.setup_access.insert_review(review)?;

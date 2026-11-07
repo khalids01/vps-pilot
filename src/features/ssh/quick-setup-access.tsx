@@ -957,7 +957,7 @@ export function QuickSetupAccess({
             )}
             {reviewError && !reviewPending && !review && (
               <Button type="button" disabled={saving} onClick={reviewConfig}>
-                Retry review
+                Create new review
               </Button>
             )}
           </DialogFooter>

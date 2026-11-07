@@ -2663,6 +2663,29 @@ async fn save_config(
 
 #[cfg(unix)]
 #[tokio::test]
+async fn reviewed_config_keeps_exact_proof_expiry_across_reviews_and_rejects_expiration() {
+    let fixture = config_export_fixture(None).await;
+    for _ in 0..16 {
+        let review = review_config(&fixture, "stable-expiry").await.unwrap();
+        assert_eq!(review.expires_at_ms, fixture.proof.expires_at_ms);
+        assert_eq!(review.proof_id, fixture.proof.proof_id);
+        fixture
+            .service
+            .reject_setup_config(&review.review_id)
+            .unwrap();
+    }
+    let review = review_config(&fixture, "stable-expiry").await.unwrap();
+    fixture
+        .service
+        .setup_access
+        .expire_for_test(&fixture.proof.proof_id);
+    assert!(review_config(&fixture, "stable-expiry").await.is_err());
+    assert!(save_config(&fixture, &review.review_id).await.is_err());
+    assert!(!fixture.vault.standard_ssh_root().join("config").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn reviewed_config_save_preserves_unrelated_bytes_and_keeps_a_protected_backup() {
     use std::os::unix::fs::PermissionsExt;
     const ORIGINAL: &str = "# keep this comment\nHost *\n    ServerAliveInterval 30\nHost other\n    HostName other.example.com\n    User ops\n";
