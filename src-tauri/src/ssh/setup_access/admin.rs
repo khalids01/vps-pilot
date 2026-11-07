@@ -1262,7 +1262,8 @@ pub(crate) fn test_wrapper_source(home: &std::path::Path, user: &str) -> String 
     )
     .unwrap();
     format!(
-        r#"import builtins, grp, io, os, pwd, shutil
+        r#"import builtins, grp, io, os, pwd, shutil, sys
+sys.platform = "linux"
 HOME = {home_literal}
 HOME_ROOT = os.path.dirname(HOME)
 NAME = {user_literal}

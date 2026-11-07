@@ -168,6 +168,7 @@ impl server::Handler for TestServer {
             }
             return Ok(());
         }
+        #[cfg(unix)]
         if self.sudo_verify_channels.contains(&channel) {
             let complete = {
                 let buffer = self.sudo_verify_input.entry(channel).or_default();
