@@ -57,9 +57,26 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      # Pin the locally validated runtime instead of changing release tooling
+      # implicitly. Retry setup only; downstream checks still fail normally.
+      - name: Set up Bun
+        id: bun-setup
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.3
+      - name: Retry Bun setup
+        id: bun-retry
+        if: steps.bun-setup.outcome == 'failure'
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Final Bun setup attempt
+        if: steps.bun-setup.outcome == 'failure' && steps.bun-retry.outcome == 'failure'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -97,6 +114,7 @@ jobs:
           releaseDraft: true
           prerelease: true
           uploadUpdaterJson: false
+          retryAttempts: 2
           args: ${{ matrix.args }}
   publish:
     needs: [prepare, build]
