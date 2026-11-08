@@ -1,6 +1,6 @@
 [package]
 name = "vps-pilot"
-version = "0.2.7"
+version = "0.2.8"
 description = "A desktop workspace for managing VPS servers."
 edition = "2021"
 [lib]

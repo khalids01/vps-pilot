@@ -199,3 +199,13 @@ budget, and does not enable any configuration mutation.
 `python3 -B tests/fixtures/configuration-benchmark.test.py` checks bounded output,
 bidirectional pipe backpressure, timeout/reaping and cleanup failure/ownership
 cases locally, without launching Podman or contacting any server.
+
+Docker database protocol tests: `python3 tests/fixtures/docker-database.test.py`.
+They run the actual remote adapter against a private temporary Docker CLI fixture,
+exercise all four engine command paths, binary streaming, identity mismatch and
+credential-safe errors. They never contact Docker or a database. Native tests
+cover request validation, cancellation leases and private no-overwrite local
+staging; browser fixtures cover review/download/failure/cancel/credential lifetime.
+These fixtures do not establish restoration compatibility with every real server
+version. Validate restores separately on disposable databases before relying on
+production backups; never use the important user VPS for integration tests.

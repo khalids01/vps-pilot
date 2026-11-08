@@ -741,6 +741,18 @@ test.beforeEach(async ({ page }) => {
             args.progress.onmessage({stage:"finished",message:"Operation finished"});
             return {status:"completed",message:"Docker confirmed the operation",backup:plan.request.action==="deploy"?"/srv/my-app/.vps-pilot-compose-backup-fixture/compose.yaml":null,snapshot:managementSnapshot()};
           }
+          if(cmd==="ssh_database_list") {
+            if ((window as any).__databaseListFailure) throw "Cannot list databases. Check credentials and client tools.";
+            return {databases:["app","analytics"],engineId:"fixture-engine",imageId:"sha256:fixture",startedAt:"fixture-start"};
+          }
+          if(cmd==="ssh_database_backup") {
+            (window as any).__databaseBackupSelection={container:args.request.container,engine:args.request.engine,database:args.request.database};
+            args.progress.onmessage({bytes:4096});
+            if ((window as any).__databaseBackupFailure) throw "Backup failed. No complete backup was saved.";
+            if ((window as any).__holdDatabaseBackup) return new Promise((resolve,reject)=>{(window as any).__cancelDatabaseBackup=()=>reject("Database operation canceled. No complete backup was saved.");});
+            return {bytes:4096,sha256:"b".repeat(64),destination:"/fixture/backups/app.dump"};
+          }
+          if(cmd==="ssh_database_cancel") { (window as any).__cancelDatabaseBackup?.(); return null; }
           if(cmd==="ssh_docker_query"){
             if(args.query==="list" && (window as any).__failDockerList)throw "Container inventory unavailable.";
 
@@ -4582,4 +4594,60 @@ test("Quick Setup step actions scan and review without implying execution or res
   await page.getByRole("navigation", { name: "Fixture Alpha tools" }).getByRole("button", { name: "Quick Setup", exact: true }).click();
   await expect(page.getByRole("region", { name: "Step actions", exact: true })).toContainText("Recheck required");
   await expect(page.getByRole("region", { name: "Step actions", exact: true }).getByRole("button", { name: "Review this step", exact: true })).toBeDisabled();
+});
+
+for (const engine of ["PostgreSQL", "MySQL", "MariaDB", "MongoDB"]) {
+  test(`Docker databases list and download reviewed ${engine} backup without storing credentials`, async ({page}, testInfo) => {
+    await page.getByRole("navigation", {name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+    await page.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Databases",exact:true}).click();
+    const databases=page.getByRole("region",{name:"Docker databases",exact:true});
+    await databases.getByRole("combobox",{name:"Container",exact:true}).click();
+    await page.getByRole("option",{name:/web · nginx/}).click();
+    await databases.getByRole("combobox",{name:"Database engine",exact:true}).click();
+    await page.getByRole("option",{name:engine,exact:true}).click();
+    await databases.getByLabel("Database password",{exact:true}).fill("db-fixture-private-password");
+    await databases.getByRole("button",{name:"List databases",exact:true}).click();
+    await expect(databases).toContainText("2 databases found");
+    await databases.getByRole("combobox",{name:"Database to back up",exact:true}).click();
+    await page.getByRole("option",{name:"app",exact:true}).click();
+    await databases.getByRole("button",{name:"Review backup download",exact:true}).click();
+    const dialog=page.getByRole("dialog",{name:"Download database backup",exact:true});
+    await expect(dialog).toContainText("Fixture Alpha · web · app");
+    await expect(dialog).not.toContainText("db-fixture-private-password");
+    await page.setViewportSize({width:360,height:780});
+    expect(await dialog.evaluate(el=>el.scrollWidth <= el.clientWidth+1)).toBe(true);
+    if(engine==="PostgreSQL") await page.screenshot({path:testInfo.outputPath("database-backup-review-360.png"),animations:"disabled"});
+    await dialog.getByRole("button",{name:"Choose destination and download",exact:true}).click();
+    await expect(databases).toContainText("Backup downloaded");
+    await expect(databases).toContainText("/fixture/backups/app.dump");
+    const storage=await page.evaluate(()=>JSON.stringify({...localStorage}));
+    expect(storage).not.toContain("db-fixture-private-password");
+    expect(await page.evaluate(()=>(window as any).__databaseBackupSelection.database)).toBe("app");
+    await page.setViewportSize({width:1366,height:900});
+    await page.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Containers",exact:true}).click();
+    await page.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Databases",exact:true}).click();
+    await expect(databases.getByLabel("Database password",{exact:true})).toHaveValue("");
+  });
+}
+
+test("Docker database failures do not auto retry and cancellation does not report success",async({page})=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Docker",exact:true}).click();
+  await page.getByRole("navigation",{name:"Docker sections"}).getByRole("button",{name:"Databases",exact:true}).click();
+  const databases=page.getByRole("region",{name:"Docker databases",exact:true});
+  await databases.getByRole("combobox",{name:"Container",exact:true}).click();
+  await page.getByRole("option",{name:/web · nginx/}).click();
+  await page.evaluate(()=>{(window as any).__databaseListFailure=true;});
+  await databases.getByRole("button",{name:"List databases",exact:true}).click();
+  await expect(databases.getByRole("alert")).toContainText("Cannot list databases");
+  await page.clock.fastForward(5000);
+  expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="ssh_database_list").length)).toBe(1);
+  await page.evaluate(()=>{(window as any).__databaseListFailure=false;(window as any).__holdDatabaseBackup=true;});
+  await databases.getByRole("button",{name:"List databases",exact:true}).click();
+  await databases.getByRole("combobox",{name:"Database to back up",exact:true}).click();
+  await page.getByRole("option",{name:"app",exact:true}).click();
+  await databases.getByRole("button",{name:"Review backup download",exact:true}).click();
+  await page.getByRole("dialog",{name:"Download database backup",exact:true}).getByRole("button",{name:"Choose destination and download",exact:true}).click();
+  await databases.getByRole("button",{name:"Cancel operation",exact:true}).click();
+  await expect(databases.getByRole("alert")).toContainText("canceled");
+  await expect(databases).not.toContainText("Backup downloaded");
 });

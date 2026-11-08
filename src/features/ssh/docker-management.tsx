@@ -32,6 +32,7 @@ import { formatBytes } from "./structured-report";
 import { TextEditor } from "./text-editor";
 export type DockerSection =
   | "Containers"
+  | "Databases"
   | "Deploy"
   | "Images"
   | "Volumes"
@@ -156,6 +157,7 @@ export function DockerManagement({
   onTabChange,
   onChanged,
   children,
+  databases,
   diagnostics,
   active = true,
 }: {
@@ -165,6 +167,7 @@ export function DockerManagement({
   onTabChange: (s: DockerSection) => void;
   onChanged: () => void;
   children: ReactNode;
+  databases?: ReactNode;
   diagnostics?: ReactNode;
   active?: boolean;
 }) {
@@ -533,6 +536,7 @@ export function DockerManagement({
           {(
             [
               "Containers",
+              "Databases",
               "Deploy",
               "Images",
               "Volumes",
@@ -586,6 +590,9 @@ export function DockerManagement({
         )}
         <div className={tab === "Containers" ? "w-full" : "hidden"}>
           {children}
+        </div>
+        <div className={tab === "Databases" ? "w-full" : "hidden"}>
+          {databases}
         </div>
         <div className={tab === "Diagnostics" ? "w-full" : "hidden"}>
           {diagnostics}

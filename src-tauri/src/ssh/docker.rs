@@ -1,3 +1,4 @@
+pub mod database;
 pub mod manager;
 use super::*;
 use serde::Deserialize;

@@ -22,6 +22,7 @@ pub fn run() {
                 config.join("setup-keys"),
                 home.join(".ssh"),
             ));
+            app.manage(ssh::docker::database::DatabaseState::default());
             app.manage(db);
             Ok(())
         })
@@ -78,6 +79,9 @@ pub fn run() {
             ssh::monitor::ssh_monitor_describe,
             ssh::streams::ssh_terminal_open,
             ssh::docker::ssh_docker_query,
+            ssh::docker::database::ssh_database_list,
+            ssh::docker::database::ssh_database_backup,
+            ssh::docker::database::ssh_database_cancel,
             ssh::docker::manager::ssh_docker_snapshot,
             ssh::docker::manager::ssh_docker_review,
             ssh::docker::manager::ssh_docker_execute,

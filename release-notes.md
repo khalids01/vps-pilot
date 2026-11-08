@@ -1,7 +1,7 @@
-# VPS Pilot 0.2.7
+# VPS Pilot 0.2.8
 
-- Add explicit native configuration scans and preflight reviews to every Quick Setup step, with observed details, scan cancellation and clear retry feedback.
-- Save bounded scan/review history per VPS; reopening requires fresh evidence rather than restoring a verification claim.
-- Route access changes to existing administrator/key review, apply and verification controls, and explain available recovery limits.
+- Add Docker → Databases for PostgreSQL, MySQL, MariaDB and MongoDB: choose a running container, supply transient credentials and list databases.
+- Review and download an individual logical backup directly to a local file using pg_dump, mysqldump/mariadb-dump or mongodump, with streamed progress, cancellation and a SHA-256 receipt.
+- Protect existing local files from overwrite, clean incomplete staging files and reject changed SSH/container identities. Credentials and backup contents are excluded from app history.
 
-This release adds the workflow foundation. Package installers, SSH/firewall migration and selective undo remain unavailable pending native execution and recovery validation. A scan or preflight does not mark setup complete.
+Requires Python 3 and Docker access on the VPS and native database client/dump tools inside the container. Uses standard loopback database ports; no ports are exposed. Limits: 100 GiB / one hour. Restoration and cluster-wide roles/users are not included; test restoration with compatible tool versions before relying on a backup.

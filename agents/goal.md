@@ -517,3 +517,19 @@ SSH/UFW migration with autonomous access recovery, ownership-bound selective und
 and partial-operation retry. No generic executor or removal action is enabled by
 this increment. A preflight is not an executable plan or proof of completeness.
 Validate those adapters on disposable systems before enabling production actions.
+
+## Docker database discovery and logical backup — authorized 2026-11-08
+
+The user authorized accessing Docker-hosted PostgreSQL, MySQL/MariaDB and MongoDB
+and downloading selected database backups. Use explicit database/container choice,
+transient credentials over SSH stdin and native dump clients; never inspect
+container environment values or put passwords in command arguments/history/SQLite.
+The fixed read-only Python/Docker adapter projects engine/container identity and
+uses loopback standard ports inside the selected running container. Backups bind
+engine ID, image ID, start time, profile revision and SSH connection, stream into
+private local staging, require successful client exit and unchanged identity,
+then publish without overwriting existing files. Bound list output, bytes, time
+and concurrency; cancellation removes incomplete local staging without replay.
+No remote dump staging, port publication, restore, query mutation, volume backup
+or cluster-wide user/role export is authorized by this increment. Protected backup
+contents may be sensitive; do not send them through renderer or command activity.

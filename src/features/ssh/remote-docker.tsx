@@ -20,6 +20,7 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { type ServerProfile, safeError } from "./api";
 import { useCommandActivity } from "./command-activity";
+import { DockerDatabases } from "./docker-databases";
 import {
   DockerLifecycle,
   DockerManagement,
@@ -354,6 +355,14 @@ export function RemoteDocker({
         connected={connected}
         tab={section}
         active={active}
+        databases={
+          <DockerDatabases
+            profile={profile}
+            connected={connected}
+            active={active && section === "Databases"}
+            containers={containers ?? []}
+          />
+        }
         diagnostics={
           <RemoteInspection
             profile={profile}

@@ -92,6 +92,9 @@ jobs:
       - run: bun run check
       - run: bun run build
       - run: bun test
+      - name: Check database backup adapter
+        if: runner.os == 'Linux'
+        run: python3 tests/fixtures/docker-database.test.py
       - name: Check Docker safety policy
         if: runner.os == 'Linux'
         run: python3 tests/fixtures/docker-policy.test.py
