@@ -752,3 +752,24 @@ root-to-administrator handoff, no automatic promotion retry, transient credentia
 clearing on hidden workspaces, draft persistence and existing key-install guards.
 These are temporary-home/loopback and mocked-browser checks, not a claim of
 full-VM SSH/UFW recovery validation.
+
+## Per-step workflow foundation — 2026-11-08
+
+Each wizard step now exposes explicit Scan existing, Review this step, observed
+configuration and recovery guidance. Scans use the shared on-demand native
+configuration inspection, with cancellation, current connection binding, bounded
+output and the existing command panel. Reviews use native configuration preflight
+and validate server/revision/connection/snapshot/category selection before display.
+Access reviews route to the existing exact administrator/key review/apply/verify
+workflow. Other apply actions are explicitly unavailable rather than executing
+invented shell commands. Scan evidence is not package-specific verification.
+
+Only validated nonsecret scan/review checkpoints are persisted per VPS. Evidence,
+commands, errors, credentials and proofs stay out of history. Restart requires
+fresh evidence. Expired/disconnected reviews cannot route to access actions.
+
+Still required to fulfill the complete execution design: maintained official-source
+install adapters with exact command/artifact reviews, item ownership/dependencies,
+independent version/postcondition checks, partial operation journals, rescan-bound
+failed-item retries and selected safe rollback; native SSH/UFW recovery validation.
+These are not implemented or represented as complete in this release.

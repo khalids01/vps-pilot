@@ -24,6 +24,7 @@ import {
   quickSetupSourcePolicy,
 } from "./quick-setup-catalog";
 import { CheckRow, ChoiceGroup, ChoiceRow } from "./quick-setup-controls";
+import { QuickSetupExecution } from "./quick-setup-execution";
 import { QuickSetupFirewallControls } from "./quick-setup-firewall";
 import { QuickSetupKeyManager } from "./quick-setup-keys";
 import {
@@ -1179,6 +1180,12 @@ export function QuickSetupWorkspace({
         />
         <div className="min-w-0 max-w-[620px] space-y-6">
           {stepContent}
+          <QuickSetupExecution
+            profile={profile}
+            draft={draft}
+            visible={visible}
+            onStep={changeStep}
+          />
           <TechnicalDetails />
           <footer className="flex items-center justify-between gap-3 border-t border-border/70 pt-4">
             <Button

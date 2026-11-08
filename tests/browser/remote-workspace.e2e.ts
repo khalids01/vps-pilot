@@ -4542,3 +4542,44 @@ test("guided access keeps completed steps on navigation, accepts installed keys 
   await expect(admin.getByRole("button",{name:"Switch to deploy",exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(0);
 });
+
+test("Quick Setup step actions scan and review without implying execution or restoring verification", async ({ page }, testInfo) => {
+  const nav = page.getByRole("navigation", { name: "Fixture Alpha tools" });
+  await nav.getByRole("button", { name: "Quick Setup", exact: true }).click();
+  const setup = page.getByRole("region", { name: "Quick Setup", exact: true });
+  await setup.getByRole("button", { name: "Step 7: Runtimes", exact: true }).click();
+  const actions = setup.getByRole("region", { name: "Step actions", exact: true });
+  await expect(actions.getByRole("button", { name: "Review this step", exact: true })).toBeDisabled();
+  await page.evaluate(() => { (window as any).__configurationFailure = true; });
+  await actions.getByRole("button", { name: "Scan existing", exact: true }).click();
+  await expect(actions.getByRole("alert")).toContainText("Fixture configuration unavailable");
+  await page.clock.fastForward(3000);
+  expect(await page.evaluate(() => (window as any).__calls.filter((call: any) => call.cmd === "ssh_configuration_snapshot").length)).toBe(1);
+  await page.evaluate(() => { (window as any).__configurationFailure = false; });
+  await actions.getByRole("button", { name: "Retry scan", exact: true }).click();
+  await expect(actions).toContainText("Scan available · not verified");
+  await expect(actions).toContainText("Last scanned:");
+  await actions.getByRole("button", { name: "Review this step", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Review this step", exact: true });
+  await expect(dialog).toContainText("Essential software");
+  await expect(dialog.getByRole("button", { name: "Apply unavailable", exact: true })).toBeDisabled();
+  await page.setViewportSize({ width: 360, height: 780 });
+  const bounds = await dialog.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(361);
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("quick-setup-step-review-360.png"), animations: "disabled" });
+  await dialog.getByRole("button", { name: "Close", exact: true }).first().click();
+  await expect(actions).toContainText("Last reviewed:");
+  await actions.getByRole("button", { name: "Recovery options", exact: true }).click();
+  await expect(actions).toContainText("Automatic removal and selective undo are unavailable");
+  await expect.poll(() => page.evaluate(id => {
+    const documents = JSON.parse(localStorage.getItem("__fixture_documents") ?? "{}");
+    return documents[`vps-pilot:setup-checkpoints:v1:${id}`] ?? null;
+  }, first)).not.toBeNull();
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.reload();
+  await page.getByRole("navigation", { name: "Fixture Alpha tools" }).getByRole("button", { name: "Quick Setup", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Step actions", exact: true })).toContainText("Recheck required");
+  await expect(page.getByRole("region", { name: "Step actions", exact: true }).getByRole("button", { name: "Review this step", exact: true })).toBeDisabled();
+});

@@ -501,3 +501,19 @@ failure must not silently discard the candidate or auto-retry. Store only bounde
 nonsecret progress, never passwords/passphrases or a durable verification claim.
 SSH/UFW migration, key-only/root policy changes and reboot remain gated pending
 full disposable-VM recovery validation. Do not label those steps complete.
+
+## Per-step Quick Setup execution workflow — authorized 2026-11-08
+
+The user requested scan -> exact review -> explicit apply -> independent verify,
+with partial failure, deliberate retry and selective recovery for each step.
+This increment adds shared native inspection/preflight entry points to each step
+and bounded per-VPS scan/review history. History stores no output, credentials,
+commands or proofs and never restores a verified/completed state. Context changes
+invalidate pending reviews. Existing account/key adapters remain the executable
+access path; their native reviews and verification are still required.
+
+Outstanding: native installers and independent package-specific verification,
+SSH/UFW migration with autonomous access recovery, ownership-bound selective undo
+and partial-operation retry. No generic executor or removal action is enabled by
+this increment. A preflight is not an executable plan or proof of completeness.
+Validate those adapters on disposable systems before enabling production actions.

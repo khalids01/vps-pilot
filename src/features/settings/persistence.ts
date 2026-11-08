@@ -196,7 +196,16 @@ export async function hydratePreferences(documents: Record<string, string>) {
       return quickSetupInvalidDraftSentinel;
     }
   };
+  const { setupCheckpointPrefix, parseSetupCheckpoints } = await import(
+    "../ssh/quick-setup-execution-model"
+  );
   const clean = (key: string, raw: string): string | null => {
+    if (key.startsWith(setupCheckpointPrefix)) {
+      const serverId = key.slice(setupCheckpointPrefix.length);
+      if (!quickSetupDraftKey(serverId)) return null;
+      const steps = parseSetupCheckpoints(raw);
+      return steps === null ? "invalid" : JSON.stringify({ version: 1, steps });
+    }
     if (key.startsWith(quickSetupProgressPrefix)) {
       const serverId = key.slice(quickSetupProgressPrefix.length);
       if (quickSetupProgressKey(serverId) !== key || raw.length > 1024)

@@ -242,6 +242,48 @@ struct QuickSetupDraft {
     tools: QuickSetupTools,
     runtimes: Vec<String>,
 }
+fn setup_checkpoints_key(key: &str) -> Option<&str> {
+    let id = key.strip_prefix("vps-pilot:setup-checkpoints:v1:")?;
+    uuid::Uuid::parse_str(id)
+        .ok()
+        .filter(|uuid| uuid.to_string() == id)
+        .map(|_| id)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupCheckpoints {
+    version: u8,
+    steps: Vec<SetupCheckpoint>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupCheckpoint {
+    step: u8,
+    at: u64,
+    phase: String,
+}
+fn validate_setup_checkpoints(value: &str) -> Result<(), String> {
+    if value.len() > 1024 {
+        return Err("Invalid setup history.".into());
+    }
+    let history: SetupCheckpoints =
+        serde_json::from_str(value).map_err(|_| "Invalid setup history.")?;
+    if history.version != 1
+        || history.steps.len() > 8
+        || history.steps.iter().enumerate().any(|(index, item)| {
+            !(1..=8).contains(&item.step)
+                || item.at == 0
+                || item.at > 9_007_199_254_740_991
+                || !matches!(item.phase.as_str(), "scanned" | "reviewed")
+                || history.steps[..index]
+                    .iter()
+                    .any(|previous| previous.step == item.step)
+        })
+    {
+        return Err("Invalid setup history.".into());
+    }
+    Ok(())
+}
 fn quick_setup_key(key: &str) -> Option<&str> {
     key.strip_prefix(QUICK_SETUP_DRAFT_PREFIX)
         .filter(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -403,6 +445,7 @@ fn ui_key(key: &str) -> bool {
         || key
             .strip_prefix("vps-pilot:remote-terminal:v1:")
             .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        || setup_checkpoints_key(key).is_some()
         || setup_access_progress_key(key).is_some()
         || key
             .strip_prefix("vps-pilot:command-console:v1:")
@@ -470,6 +513,9 @@ fn validate_document(key: &str, value: &str) -> Result<(), String> {
     }
     if quick_setup_key(key).is_some() {
         return validate_quick_setup_draft(value);
+    }
+    if setup_checkpoints_key(key).is_some() {
+        return validate_setup_checkpoints(value);
     }
     if setup_access_progress_key(key).is_some() {
         return validate_setup_access_progress(value);
@@ -1189,5 +1235,26 @@ mod tests {
         assert_eq!(db.import("fixture", "new").unwrap(), value);
         assert!(db.compare_and_swap("fixture", "stale", "new").is_err());
         assert_eq!(db.read("fixture").unwrap().as_deref(), Some(value));
+    }
+}
+
+#[cfg(test)]
+mod setup_checkpoints_tests {
+    use super::*;
+    #[test]
+    fn history_is_bounded_nonsecret_and_cannot_restore_execution_or_verification() {
+        let key = "vps-pilot:setup-checkpoints:v1:11111111-1111-4111-8111-111111111111";
+        assert!(ui_key(key));
+        let good = r#"{"version":1,"steps":[{"step":2,"at":1000,"phase":"scanned"}]}"#;
+        validate_document(key, good).unwrap();
+        for phase in ["verified", "applied", "running"] {
+            assert!(validate_document(key, &good.replace("scanned", phase)).is_err());
+        }
+        for extra in ["password", "output", "command", "proofId"] {
+            let mut document: serde_json::Value = serde_json::from_str(good).unwrap();
+            document[extra] = "not-allowed".into();
+            assert!(validate_document(key, &document.to_string()).is_err());
+        }
+        assert!(validate_document(key, &good.replace("1000", "0")).is_err());
     }
 }
