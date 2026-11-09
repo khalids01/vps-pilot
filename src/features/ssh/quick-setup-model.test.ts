@@ -486,7 +486,7 @@ test("every stack choice requires an explicit engine key", () => {
   }
 });
 
-test("Herdr is an optional draft tool while installer verification is pending", () => {
+test("Herdr remains an optional native installer", () => {
   expect(
     sanitizeQuickSetupDraft({
       ...clone(),
@@ -619,13 +619,15 @@ test("catalog metadata is clearly non-executable and source-policy only", () => 
     expect(entry.sourceStatus).toBe("policy-only");
     expect(entry.description.length).toBeGreaterThan(0);
   }
-  expect(quickSetupHerdr.installer).toBe("pending-verification");
-  expect(quickSetupHerdr.reason).toContain("installer");
+  expect(quickSetupHerdr.installer).toBe("native");
+  expect(quickSetupHerdr.reason).toContain("checksum");
   expect(quickSetupCatalog.neovim.description).toContain(
     "Latest compatible stable official Neovim",
   );
-  expect(quickSetupSourcePolicy).toContain("must be rechecked");
-  expect(quickSetupSourcePolicy).toContain("not a verified");
+  expect(quickSetupSourcePolicy).toContain("Catalog source policy");
+  expect(quickSetupSourcePolicy).toContain(
+    "resolves versions, artifacts and commands for each approval",
+  );
   expect(quickSetupSourcePolicy).not.toContain("https://");
 });
 
@@ -646,5 +648,46 @@ test("access progress rejects secrets and unknown verification evidence", () => 
   ).toBeNull();
   expect(
     sanitizeQuickSetupProgress({ ...value, keyId: "/home/user/.ssh/key" }),
+  ).toBeNull();
+});
+
+test("six visible steps preserve old draft choices and normalize removed steps", () => {
+  const draft = defaultQuickSetupDraft();
+  draft.tools.utilities = ["git", "jq"];
+  draft.runtimes = ["bun", "uv"];
+  for (const [oldStep, nextStep] of [
+    [2, 3],
+    [8, 7],
+    [4, 4],
+    [5, 5],
+  ] as const) {
+    const result = sanitizeQuickSetupDraft({ ...draft, step: oldStep });
+    expect(result?.step).toBe(nextStep);
+    expect(result?.runtimes).toEqual(draft.runtimes);
+    expect(result?.tools).toEqual(draft.tools);
+  }
+});
+
+test("SSH login policy choices are optional, typed and survive draft round trips", () => {
+  const legacy = defaultQuickSetupDraft();
+  expect(sanitizeQuickSetupDraft(legacy)).toEqual(legacy);
+  const draft = {
+    ...legacy,
+    access: { ...legacy.access, passwordLogin: true, rootLogin: false },
+  };
+  expect(sanitizeQuickSetupDraft(JSON.parse(JSON.stringify(draft)))).toEqual(
+    draft,
+  );
+  expect(
+    sanitizeQuickSetupDraft({
+      ...draft,
+      access: { ...draft.access, passwordLogin: "yes" },
+    }),
+  ).toBeNull();
+  expect(
+    sanitizeQuickSetupDraft({
+      ...draft,
+      access: { ...draft.access, rootLogin: null },
+    }),
   ).toBeNull();
 });

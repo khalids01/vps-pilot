@@ -42,6 +42,8 @@ export interface Inspection {
   previous: HostKey | null;
 }
 export interface ConnectionStatus {
+  setupAccessVerified?: boolean;
+  authenticationMethod?: "password" | "key" | "agent" | "none" | null;
   connectionId?: string | null;
   profileId: string;
   status: "connecting" | "connected" | "disconnected" | "failed";

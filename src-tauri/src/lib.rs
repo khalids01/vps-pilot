@@ -23,6 +23,7 @@ pub fn run() {
                 home.join(".ssh"),
             ));
             app.manage(ssh::docker::database::DatabaseState::default());
+            app.manage(ssh::setup_packages::PackageState::default());
             app.manage(db);
             Ok(())
         })
@@ -63,6 +64,11 @@ pub fn run() {
             ssh::ssh_trust,
             ssh::ssh_connect,
             ssh::ssh_disconnect,
+            ssh::setup_packages::ssh_setup_packages_command,
+            ssh::setup_packages::ssh_setup_packages_scan,
+            ssh::setup_packages::ssh_setup_packages_prepare,
+            ssh::setup_packages::ssh_setup_packages_apply,
+            ssh::setup_packages::ssh_setup_security_save,
             ssh::setup_access::ssh_setup_key_verify,
             ssh::setup_access::ssh_setup_config_review,
             ssh::setup_access::ssh_setup_config_save,

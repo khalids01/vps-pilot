@@ -741,6 +741,30 @@ test.beforeEach(async ({ page }) => {
             args.progress.onmessage({stage:"finished",message:"Operation finished"});
             return {status:"completed",message:"Docker confirmed the operation",backup:plan.request.action==="deploy"?"/srv/my-app/.vps-pilot-compose-backup-fixture/compose.yaml":null,snapshot:managementSnapshot()};
           }
+          if(cmd==="ssh_setup_packages_command") return "python3 -I -S -u -c 'fixed setup fixture'";
+          if(cmd==="ssh_setup_packages_scan") return {items:args.source.items.map((id:string)=>({id,status:((window as any).__setupInstalled??["git"]).includes(id)?"installed":"missing",message:""}))};
+          if(cmd==="ssh_setup_packages_prepare") {const id=crypto.randomUUID();(window as any).__setupPackageApproval={id,source:args.source};return {reviewId:id,command:"python3 fixed setup fixture",purpose:"Apply selected setup changes",verificationCommands:args.source.kind==="security-apply"?Array(3).fill("sudo -S -k -- id -u"):[],items:args.source.items.map((id:string)=>({id,version:"1.2.3",source:"Official fixture source",message:""}))};}
+          if(cmd==="ssh_setup_packages_apply") {
+            const approval=(window as any).__setupPackageApproval;if(!approval||approval.id!==args.reviewId)throw "Apply request expired";
+            delete (window as any).__setupPackageApproval;
+            if(approval.source.kind==="security-apply"){
+              (window as any).__securityApplies=((window as any).__securityApplies??0)+1;
+              for(const phase of ["current","staged","final"]){args.onProgress.onmessage({phase,port:phase==="current"?22:52022,command:"sudo -S -k -- id -u"});args.onProgress.onmessage({phase:phase+"-verified"});}
+              return {candidateId:"fixture-verified-endpoint",items:[{id:"ufw",status:"installed",message:"SSH settings verified",rules:"Status: active\n[ 1] 52022/tcp ALLOW IN Anywhere",ssh:{ports:[52022],passwordauthentication:"no",permitrootlogin:"no"}}]};
+            }
+            if(approval.source.kind?.startsWith("firewall"))return {items:[{id:"ufw",status:"installed",message:"",rules:"Status: active\n[ 1] 22/tcp ALLOW IN Anywhere",ssh:{port:"22",passwordauthentication:"yes",permitrootlogin:"without-password"}}]};
+            (window as any).__setupInstallSelections??=[];(window as any).__setupInstallSelections.push(approval.source.items);
+            const finish=()=>{const items=approval.source.items.map((id:string)=>({id,status:(window as any).__setupPackageFail&&id==="jq"?"failed":"installed",message:(window as any).__setupPackageFail&&id==="jq"?"Package lock unavailable":""}));(window as any).__setupInstalled=[...new Set([...(window as any).__setupInstalled??["git"],...items.filter((item:any)=>item.status==="installed").map((item:any)=>item.id)])];return {items};};
+            if((window as any).__setupPackageHold){ args.onProgress.onmessage({id:approval.source.items[0],status:"installing",message:""});return await new Promise(resolve=>{(window as any).__releaseSetupInstall=()=>resolve(finish());}); }
+            return finish();
+          }
+          if(cmd==="ssh_setup_security_save"){
+            if((window as any).__securitySaveFailure)throw "Local save failed. Verified connection retained for retry.";
+            if(args.candidateId!=="fixture-verified-endpoint")throw "Verified candidate unavailable";
+            const saved={id:"55555555-5555-4555-8555-555555555555",revision:"ssh",name:"Fixture Alpha (SSH 52022)",host:"alpha.invalid",username:"tester",port:52022,identityFile:"/fixture/.ssh/fixture-key",passwordAllowed:false};
+            if(!profiles.some(profile=>profile.id===saved.id))profiles.push(saved);
+            return {profile:saved,connectionId:"verified-ssh-connection"};
+          }
           if(cmd==="ssh_database_list") {
             if ((window as any).__databaseListFailure) throw "Cannot list databases. Check credentials and client tools.";
             return {databases:["app","analytics"],engineId:"fixture-engine",imageId:"sha256:fixture",startedAt:"fixture-start"};
@@ -2640,16 +2664,16 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
   await expect(setup.getByRole("complementary",{name:"Setup preview"})).toContainText("Administrator access uses a separate review.");
-  await expect(setup.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(setup.getByRole("button",{name:"Step 1: Connection overview",exact:true})).toHaveAttribute("aria-current","step");
   expect(await saves()).toBe(0);
   expect(await remoteCalls()).toHaveLength(0);
 
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
-  await expect(setup.getByRole("button",{name:"Step 2: Administrator",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true})).toHaveAttribute("aria-current","step");
   await setup.getByLabel("Administrator username").fill("-bad");
   await expect(setup.getByRole("alert")).toContainText("lowercase letters");
   await expect(setup.getByRole("button",{name:"Next step",exact:true})).toBeDisabled();
-  await expect(setup.getByRole("button",{name:"Step 3: SSH key",exact:true})).toBeDisabled();
+  await expect(setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true})).toBeDisabled();
   await setup.getByRole("button",{name:"Back",exact:true}).click();
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
   await expect(setup.getByLabel("Administrator username")).toHaveValue("deploy");
@@ -2720,7 +2744,7 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   await page.getByRole("tab",{name:/Fixture Beta/}).click();
   await page.getByRole("navigation",{name:"Fixture Beta tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const beta=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await expect(beta.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(beta.getByRole("button",{name:"Step 1: Connection overview",exact:true})).toHaveAttribute("aria-current","step");
   await expect(beta).not.toContainText("ops-user");
   expect(await page.evaluate(k=>JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k],`vps-pilot:quick-setup-draft:v1:${second}`)).toBeUndefined();
 
@@ -2730,7 +2754,7 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   await expect(compactStep).toBeVisible();
   await compactStep.focus();
   await page.keyboard.press("Enter");
-  const mobileStep2=beta.getByRole("button",{name:"Step 2: Administrator",exact:true});
+  const mobileStep2=beta.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true});
   await expect(mobileStep2).toBeVisible();
   await mobileStep2.focus();
   await page.keyboard.press("Enter");
@@ -2743,7 +2767,7 @@ test("Quick Setup wizard saves a per-server draft, blocks invalid forward steps 
   // Both server forms stay mounted; labels must target their own inputs.
   await page.setViewportSize({width:1366,height:900});
   await page.getByRole("tab",{name:/Fixture Alpha/}).click();
-  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await expect(setup.getByLabel("Administrator username")).toHaveValue("ops-user");
   await page.getByRole("tab",{name:/Fixture Beta/}).click();
   await beta.getByText("Administrator username",{exact:true}).click();
@@ -2768,7 +2792,7 @@ test("Quick Setup reports a failed draft write, keeps choices and retries the la
   const saves=()=>page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,draftKey);
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   const status=setup.getByRole("status",{name:"Draft save status"});
   await expect(status).toContainText("Saved");
   await page.evaluate(()=>{(window as any).__documentSaveFailures=1;});
@@ -2798,7 +2822,7 @@ test("Quick Setup held draft acknowledgements never show Saved early and the new
   const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await page.evaluate(()=>{(window as any).__holdDocumentSave=true;});
   const username=setup.getByLabel("Administrator username");
   await username.fill("rapid-one");
@@ -2822,7 +2846,7 @@ test("Quick Setup draft save state is isolated per VPS and hydrated saved state 
   const alphaSaves=()=>page.evaluate(k=>(window as any).__calls.filter((call:any)=>call.cmd==="app_save_document"&&call.key===k).length,alphaKey);
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const alpha=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await alpha.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await alpha.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await alpha.getByLabel("Administrator username").fill("alpha-user");
   await expect(alpha.getByRole("status",{name:"Draft save status"})).toContainText("Saved");
 
@@ -2830,7 +2854,7 @@ test("Quick Setup draft save state is isolated per VPS and hydrated saved state 
   await page.getByRole("navigation",{name:"Fixture Beta tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const beta=page.getByRole("region",{name:"Quick Setup",exact:true});
   await expect(beta.getByRole("status",{name:"Draft save status"})).toHaveCount(0);
-  await beta.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await beta.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await beta.getByLabel("Administrator username").fill("beta-user");
   await expect(beta.getByRole("status",{name:"Draft save status"})).toContainText("Saved");
 
@@ -2873,7 +2897,7 @@ test("invalid saved Quick Setup drafts warn, are not imported or overwritten, an
   await setup.getByRole("button",{name:"Reset draft",exact:true}).click();
   await page.clock.fastForward(300);
   await expect(setup.getByRole("complementary",{name:"Saved draft cannot be used"})).toHaveCount(0);
-  await expect(setup.getByRole("button",{name:"Step 1: Connect and inspect",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(setup.getByRole("button",{name:"Step 1: Connection overview",exact:true})).toHaveAttribute("aria-current","step");
   const reset=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
   expect(reset).toMatchObject({version:1,step:1,access:{port:52022}});
 
@@ -2919,8 +2943,8 @@ test("Quick Setup creates and selects a local encrypted key without SSH actions"
   const openStep3=async()=>{
     await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
     const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-    await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
-    await expect(setup.getByRole("button",{name:"Step 3: SSH key",exact:true})).toHaveAttribute("aria-current","step");
+    await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
+    await expect(setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true})).toHaveAttribute("aria-current","step");
     return setup;
   };
   const setup=await openStep3();
@@ -3020,7 +3044,7 @@ test("Quick Setup copies a legacy key into the standard SSH directory only on re
   await page.evaluate(key=>localStorage.setItem("__fixture_setup_keys",JSON.stringify([key])),legacy);
   await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await setup.getByRole("button",{name:/Generate a new key/}).click();
   const copies=()=>page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd==="app_setup_key_use_ssh_directory").length);
   await setup.getByRole("button",{name:"Choose a stored key",exact:true}).click();
@@ -3123,7 +3147,7 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   await expect(selectedCard.getByRole("button",{name:"Backup encrypted key",exact:true})).toBeDisabled();
   await expect(setup.getByRole("button",{name:"Reload keys",exact:true})).toBeDisabled();
   await setup.getByRole("button",{name:"Back",exact:true}).click();
-  await expect(setup.getByRole("button",{name:"Step 2: Administrator",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true})).toHaveAttribute("aria-current","step");
   await page.evaluate(()=>{(window as any).__releaseKeyGenerate?.();(window as any).__holdKeyGenerate=false;});
   await page.clock.fastForward(300);
   const stored=await page.evaluate(k=>JSON.parse(JSON.parse(localStorage.getItem("__fixture_documents")??"{}")[k]),draftKey);
@@ -3134,7 +3158,7 @@ test("Quick Setup key failures and backup outcomes preserve selection without le
   await page.reload();
   await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const afterReload=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await afterReload.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await afterReload.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await afterReload.getByRole("button",{name:/Generate a new key/}).click();
   const reloadedCard=afterReload.getByRole("group",{name:"Selected local key"});
   await expect(reloadedCard).toBeVisible();
@@ -3172,7 +3196,7 @@ async function seedQuickSetupDraft(page:import("@playwright/test").Page,key:stri
 async function openQuickSetupStep3(page:import("@playwright/test").Page,strategy:"existing"|"generate"){
   await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   if(strategy==="generate")await setup.getByRole("button",{name:/Generate a new key/}).click();
   return setup;
 }
@@ -3418,7 +3442,7 @@ test("Quick Setup existing-key picking preserves selection, persists only an opa
 async function openStandardKeyAccess(page:import("@playwright/test").Page,passphrase:string){
   await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await setup.getByRole("button",{name:/Generate a new key/}).click();
   await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
   await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
@@ -3928,7 +3952,7 @@ test("Quick Setup plans protected SSH, HTTP/HTTPS and validated custom firewall 
   const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 4: SSH and firewall",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 3: SSH & firewall",exact:true}).click();
   const table=setup.getByRole("table",{name:/Planned firewall allow rules/});
   await expect(table).toContainText("22");
   await expect(table).toContainText("52022");
@@ -3981,7 +4005,7 @@ test("Quick Setup plans protected SSH, HTTP/HTTPS and validated custom firewall 
   await page.reload();
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await expect(reloaded.getByRole("button",{name:"Step 4: SSH and firewall",exact:true})).toHaveAttribute("aria-current","step");
+  await expect(reloaded.getByRole("button",{name:"Step 3: SSH & firewall",exact:true})).toHaveAttribute("aria-current","step");
   await expect(reloaded.getByRole("checkbox",{name:"Allow HTTP (port 80)",exact:true})).toBeChecked();
   await expect(reloaded.getByRole("checkbox",{name:"Allow HTTPS (port 443)",exact:true})).toBeChecked();
   await expect(reloaded.getByRole("table",{name:/Planned firewall allow rules/})).toContainText("udp");
@@ -4002,7 +4026,7 @@ test("Quick Setup keeps stack choices source-free and Review shows selected sour
   const nav=page.getByRole("navigation",{name:"Fixture Alpha tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 5: Application stack",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 4: Application stack",exact:true}).click();
   await expect(setup.getByRole("button",{name:/^Source for /})).toHaveCount(0);
   await expect(setup.getByRole("link",{name:/official documentation/})).toHaveCount(0);
   await expect(setup).not.toContainText("Planned source only.");
@@ -4076,7 +4100,7 @@ test("Quick Setup keeps stack choices source-free and Review shows selected sour
   const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
   await expect(reloaded.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
   await expect(reloaded.getByRole("link",{name:"Python on Unix",exact:true})).toBeVisible();
-  await reloaded.getByRole("button",{name:"Step 6: Developer tools",exact:true}).click();
+  await reloaded.getByRole("button",{name:"Step 5: Developer tools",exact:true}).click();
   await expect(reloaded.getByRole("checkbox",{name:"tmux",exact:true})).toBeChecked();
   await expect(reloaded.getByRole("checkbox",{name:"direnv",exact:true})).not.toBeChecked();
 });
@@ -4086,7 +4110,7 @@ test("Quick Setup runtime cards group JavaScript, Python and Go and keep optiona
   const draftKey=`vps-pilot:quick-setup-draft:v1:${first}`;
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 5: Application stack",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 4: Application stack",exact:true}).click();
   await setup.getByRole("button",{name:/^JavaScript \/ PM2/}).click();
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
   await setup.getByRole("button",{name:"Next step",exact:true}).click();
@@ -4152,7 +4176,7 @@ test("Quick Setup runtime cards group JavaScript, Python and Go and keep optiona
   const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
   await expect(reloaded.getByRole("button",{name:"Step 8: Review and finish",exact:true})).toHaveAttribute("aria-current","step");
   await expect(reloaded.getByRole("link",{name:"Go installation",exact:true})).toBeVisible();
-  await reloaded.getByRole("button",{name:"Step 7: Runtimes",exact:true}).click();
+  await reloaded.getByRole("button",{name:"Step 6: Runtimes",exact:true}).click();
   await expect(reloaded.getByRole("checkbox",{name:"Bun",exact:true})).toBeChecked();
   await expect(reloaded.getByRole("checkbox",{name:"uv",exact:true})).toBeChecked();
   await expect(reloaded.getByRole("checkbox",{name:"Python",exact:true})).toBeChecked();
@@ -4336,7 +4360,7 @@ async function openRootKeyAccess(page:import("@playwright/test").Page,passphrase
   const nav=page.getByRole("navigation",{name:"Root Fixture tools"});
   await nav.getByRole("button",{name:"Quick Setup",exact:true}).click();
   const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
-  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await setup.getByRole("button",{name:/Generate a new key/}).click();
   await setup.getByLabel("Passphrase (optional)",{exact:true}).fill(passphrase);
   await setup.getByLabel("Confirm passphrase (optional)",{exact:true}).fill(passphrase);
@@ -4353,18 +4377,9 @@ test("staged administrator access creates the target, installs the key, verifies
   const {setup,admin,access}=await openRootKeyAccess(page,passphrase);
   const sudo="fixture-sudo-password-not-saved";
   expect(await page.evaluate(()=>(window as any).__calls.filter((call:any)=>call.cmd.startsWith("ssh_setup_admin_")))).toHaveLength(0);
-  const progress=setup.getByRole("region",{name:"Access setup progress",exact:true});
-  await progress.scrollIntoViewIfNeeded();
+  await expect(setup.getByRole("region",{name:"Access setup progress",exact:true})).toHaveCount(0);
+  await admin.scrollIntoViewIfNeeded();
   await page.screenshot({path:testInfo.outputPath("administrator-guided-desktop.png"),animations:"disabled"});
-  const steps=progress.locator('[data-slot="setup-progress-step"]');
-  await expect(steps).toHaveCount(5);
-  for (const step of await steps.all()) expect(await step.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
-  for(const [index,label] of ["1. Local key","2. Administrator","3. Install public key","4. Verify access","5. Use administrator"].entries()){
-    await expect(steps.nth(index)).toContainText(label);
-  }
-  await expect(steps.nth(0)).toHaveAttribute("data-state","complete");
-  await expect(steps.nth(1)).toHaveAttribute("data-state","current");
-  await expect(progress).toContainText("Next: Create deploy");
   // Before the account is applied only the current action is available.
   await expect(admin.getByRole("button",{name:"Create administrator",exact:true})).toBeEnabled();
   await expect(access.getByRole("button",{name:"Install key for deploy",exact:true})).toHaveCount(0);
@@ -4391,9 +4406,6 @@ test("staged administrator access creates the target, installs the key, verifies
   await page.setViewportSize({width:1366,height:900});
   await review.getByRole("button",{name:"Create deploy",exact:true}).click();
   await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Account ready · public key not yet installed");
-  await expect(steps.nth(1)).toHaveAttribute("data-state","complete");
-  await expect(steps.nth(2)).toHaveAttribute("data-state","current");
-  await expect(progress).toContainText("Next: Install the public key for deploy");
   await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__adminMeta.reviewedModes)).toEqual(["new"]);
   expect(await page.evaluate(()=>(window as any).__adminMeta.applies)).toBe(1);
@@ -4405,8 +4417,6 @@ test("staged administrator access creates the target, installs the key, verifies
   await expect(install).toContainText("Planned administrator");
   await install.getByRole("button",{name:"Install key for deploy",exact:true}).click();
   await expect(access.getByRole("status",{name:"Key installation result"})).toContainText("deploy@alpha.invalid");
-  await expect(steps.nth(2)).toHaveAttribute("data-state","complete");
-  await expect(steps.nth(3)).toHaveAttribute("data-state","current");
   await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toBeVisible();
   await expect(access.getByRole("button",{name:"Install key for deploy",exact:true})).toHaveCount(0);
 
@@ -4440,13 +4450,11 @@ test("staged administrator access creates the target, installs the key, verifies
   await page.evaluate(()=>{(window as any).__adminVerifyFailure=false;});
   await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
   await expect(admin.getByRole("status",{name:"Administrator status"})).toHaveText("Administrator key login and sudo verified");
-  await expect(steps.nth(3)).toHaveAttribute("data-state","complete");
-  await expect(steps.nth(4)).toHaveAttribute("data-state","current");
   expect(await page.evaluate(()=>(window as any).__adminMeta.verifies)).toBeGreaterThan(0);
 
   await admin.getByRole("button",{name:"Switch to deploy",exact:true}).click();
   await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toHaveAttribute("aria-selected","true");
-  await expect(page.getByRole("heading",{name:"SSH and firewall",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"SSH & firewall",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(1);
   // The promoted profile opens as a separate tab; the root tab is retained.
   await expect(page.getByRole("tab",{name:/Fixture Alpha \(administrator\)/})).toBeVisible();
@@ -4511,7 +4519,8 @@ test("staged administrator progress persists without claiming a live proof after
   const reloaded=page.getByRole("region",{name:"Quick Setup",exact:true});
   await expect(reloaded).toBeVisible();
   const accessAfter=reloaded.getByRole("region",{name:"Key login access",exact:true});
-  await expect(accessAfter).toContainText("Current access");
+  await expect(accessAfter.getByRole("button",{name:"Test key on current connection",exact:true})).toHaveCount(0);
+  await expect(reloaded.getByRole("button",{name:"Verify administrator access",exact:true})).toBeVisible();
   // Non-secret progress is restored, but a live proof is never claimed.
   expect(await page.evaluate(()=>document.body.innerText.includes("Administrator key login and sudo verified"))).toBe(false);
 });
@@ -4520,9 +4529,9 @@ test("staged administrator progress persists without claiming a live proof after
 test("guided access keeps completed steps on navigation, accepts installed keys and expires live proof",async({page})=>{
   const passphrase="existing administrator fixture";
   const {setup}=await openRootKeyAccess(page,passphrase);
-  await setup.getByRole("button",{name:"Step 2: Administrator",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   await setup.getByRole("button",{name:/Use an existing administrator/}).click();
-  await setup.getByRole("button",{name:"Step 3: SSH key",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
   const admin=setup.getByRole("region",{name:"Administrator access",exact:true});
   await admin.getByRole("button",{name:"Adopt administrator",exact:true}).click();
   const review=page.getByRole("dialog",{name:"Review adopting administrator",exact:true});
@@ -4539,62 +4548,17 @@ test("guided access keeps completed steps on navigation, accepts installed keys 
   await page.getByRole("tab",{name:/Root Fixture/}).click();
   await expect(admin.getByRole("button",{name:"Adopt administrator",exact:true})).toHaveCount(0);
   await expect(admin.getByRole("button",{name:"Verify administrator access",exact:true})).toBeVisible();
-  const steps=setup.getByRole("region",{name:"Access setup progress",exact:true}).locator('[data-slot="setup-progress-step"]');
-  await expect(steps.nth(2)).toHaveAttribute("data-state","complete");
   await page.evaluate(()=>{(window as any).__adminProofExpiryMs=6000;});
   await admin.getByRole("button",{name:"Verify administrator access",exact:true}).click();
   const verify=page.getByRole("dialog",{name:"Verify administrator access",exact:true});
   await verify.getByLabel("deploy sudo password").fill("fixture-sudo-password");
   await verify.getByLabel("Key passphrase",{exact:true}).fill(passphrase);
   await verify.getByRole("button",{name:"Verify key login and sudo",exact:true}).click();
-  await expect(steps.nth(3)).toHaveAttribute("data-state","complete");
   await page.clock.fastForward(6500);
-  await expect(steps.nth(3)).toHaveAttribute("data-state","current");
-  await expect(steps.nth(4)).toHaveAttribute("data-state","pending");
   await expect(admin.getByRole("button",{name:"Switch to deploy",exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__adminMeta.promotions)).toBe(0);
 });
 
-test("Quick Setup step actions scan and review without implying execution or restoring verification", async ({ page }, testInfo) => {
-  const nav = page.getByRole("navigation", { name: "Fixture Alpha tools" });
-  await nav.getByRole("button", { name: "Quick Setup", exact: true }).click();
-  const setup = page.getByRole("region", { name: "Quick Setup", exact: true });
-  await setup.getByRole("button", { name: "Step 7: Runtimes", exact: true }).click();
-  const actions = setup.getByRole("region", { name: "Step actions", exact: true });
-  await expect(actions.getByRole("button", { name: "Review this step", exact: true })).toBeDisabled();
-  await page.evaluate(() => { (window as any).__configurationFailure = true; });
-  await actions.getByRole("button", { name: "Scan existing", exact: true }).click();
-  await expect(actions.getByRole("alert")).toContainText("Fixture configuration unavailable");
-  await page.clock.fastForward(3000);
-  expect(await page.evaluate(() => (window as any).__calls.filter((call: any) => call.cmd === "ssh_configuration_snapshot").length)).toBe(1);
-  await page.evaluate(() => { (window as any).__configurationFailure = false; });
-  await actions.getByRole("button", { name: "Retry scan", exact: true }).click();
-  await expect(actions).toContainText("Scan available · not verified");
-  await expect(actions).toContainText("Last scanned:");
-  await actions.getByRole("button", { name: "Review this step", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Review this step", exact: true });
-  await expect(dialog).toContainText("Essential software");
-  await expect(dialog.getByRole("button", { name: "Apply unavailable", exact: true })).toBeDisabled();
-  await page.setViewportSize({ width: 360, height: 780 });
-  const bounds = await dialog.boundingBox();
-  expect(bounds!.x).toBeGreaterThanOrEqual(0);
-  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(361);
-  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("quick-setup-step-review-360.png"), animations: "disabled" });
-  await dialog.getByRole("button", { name: "Close", exact: true }).first().click();
-  await expect(actions).toContainText("Last reviewed:");
-  await actions.getByRole("button", { name: "Recovery options", exact: true }).click();
-  await expect(actions).toContainText("Automatic removal and selective undo are unavailable");
-  await expect.poll(() => page.evaluate(id => {
-    const documents = JSON.parse(localStorage.getItem("__fixture_documents") ?? "{}");
-    return documents[`vps-pilot:setup-checkpoints:v1:${id}`] ?? null;
-  }, first)).not.toBeNull();
-  await page.setViewportSize({ width: 1366, height: 900 });
-  await page.reload();
-  await page.getByRole("navigation", { name: "Fixture Alpha tools" }).getByRole("button", { name: "Quick Setup", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Step actions", exact: true })).toContainText("Recheck required");
-  await expect(page.getByRole("region", { name: "Step actions", exact: true }).getByRole("button", { name: "Review this step", exact: true })).toBeDisabled();
-});
 
 for (const engine of ["PostgreSQL", "MySQL", "MariaDB", "MongoDB"]) {
   test(`Docker databases list and download reviewed ${engine} backup without storing credentials`, async ({page}, testInfo) => {
@@ -4650,4 +4614,127 @@ test("Docker database failures do not auto retry and cancellation does not repor
   await databases.getByRole("button",{name:"Cancel operation",exact:true}).click();
   await expect(databases.getByRole("alert")).toContainText("canceled");
   await expect(databases).not.toContainText("Backup downloaded");
+});
+
+test("six-step setup merges account actions, removes inspection clutter and applies selected tools",async({page},testInfo)=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  const steps=setup.getByRole("navigation",{name:"Quick Setup steps",exact:true});
+  await expect(steps.getByRole("button")).toHaveCount(6);
+  await expect(setup.getByRole("button",{name:"Open server inspection",exact:true})).toHaveCount(0);
+  await expect(setup.getByRole("region",{name:"Step actions",exact:true})).toHaveCount(0);
+  await steps.getByRole("button",{name:"Step 2: Administrator & SSH key",exact:true}).click();
+  await expect(setup.getByLabel("Administrator username",{exact:true})).toBeVisible();
+  await expect(setup.getByRole("group",{name:"SSH key strategy",exact:true})).toBeVisible();
+  await steps.getByRole("button",{name:"Step 5: Developer tools",exact:true}).click();
+  await setup.getByRole("checkbox",{name:"Git",exact:true}).uncheck();
+  await setup.getByRole("checkbox",{name:"jq",exact:true}).check();
+  await setup.getByRole("button",{name:"Check installed",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"Git",exact:true}).locator("..")).toContainText("Installed");
+  await setup.getByRole("button",{name:"Install selected",exact:true}).click();
+  const approval=page.getByRole("dialog",{name:"Install selected packages",exact:true});
+  await approval.getByLabel("Sudo password",{exact:true}).fill("fixture-only-sudo");
+  await page.setViewportSize({width:360,height:780});
+  expect(await approval.evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("setup-apply-mobile.png"),animations:"disabled"});
+  await approval.getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"jq",exact:true}).locator("..")).toContainText("Installed");
+  expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain("fixture-only-sudo");
+});
+
+test("six-step setup firewall shows current values and applies only through approval",async({page})=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 3: SSH & firewall",exact:true}).click();
+  const security=setup.getByRole("region",{name:"Current SSH and firewall status",exact:true});
+  await expect(security).toContainText("Connected SSH port");
+  await expect(security.getByRole("button",{name:"Apply changes",exact:true})).toBeDisabled();
+  await security.getByRole("button",{name:"Refresh status",exact:true}).click();
+  const approval=page.getByRole("dialog",{name:"Read current settings",exact:true});
+  await approval.getByLabel("Sudo password",{exact:true}).fill("fixture-sudo");
+  await approval.getByRole("button",{name:"Read status",exact:true}).click();
+  await expect(security).toContainText("Enabled");
+  await expect(security).toContainText("22/tcp ALLOW IN Anywhere");
+});
+
+
+test("six-step setup retries only failed items and keeps results across steps",async({page})=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 5: Developer tools",exact:true}).click();
+  await setup.getByRole("checkbox",{name:"jq",exact:true}).check();
+  await setup.getByRole("button",{name:"Check installed",exact:true}).click();
+  await page.evaluate(()=>{(window as any).__setupPackageFail=true;});
+  await setup.getByRole("button",{name:"Install selected",exact:true}).click();
+  let approval=page.getByRole("dialog",{name:"Install selected packages",exact:true});
+  await approval.getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"jq",exact:true}).locator("..")).toContainText("Package lock unavailable");
+  await setup.getByRole("button",{name:"Step 6: Runtimes",exact:true}).click();
+  await setup.getByRole("button",{name:"Step 5: Developer tools",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Retry failed",exact:true})).toBeEnabled();
+  await page.evaluate(()=>{(window as any).__setupPackageFail=false;});
+  await setup.getByRole("button",{name:"Retry failed",exact:true}).click();
+  approval=page.getByRole("dialog",{name:"Install selected packages",exact:true});
+  await expect(approval).toContainText("jq");
+  await expect(approval).not.toContainText("Unzip");
+  await approval.getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"jq",exact:true}).locator("..")).toContainText("Installed");
+  expect(await page.evaluate(()=>(window as any).__setupInstallSelections[1])).toEqual(["jq"]);
+  await setup.getByRole("button",{name:"Step 6: Runtimes",exact:true}).click();
+  await setup.getByRole("button",{name:"Finish",exact:true}).click();
+  const summary=page.getByRole("region",{name:"Quick Setup completion",exact:true});
+  await expect(summary).toContainText("Developer tools · 4/4 installed");
+  await expect(summary.getByRole("button",{name:"Continue",exact:true})).toHaveCount(1);
+  await summary.getByRole("button",{name:"Continue",exact:true}).click();
+  await expect(setup.getByRole("heading",{name:"SSH & firewall",exact:true})).toBeVisible();
+});
+
+test("six-step setup shows per-item progress without losing it on navigation",async({page},testInfo)=>{
+  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Quick Setup",exact:true}).click();
+  const setup=page.getByRole("region",{name:"Quick Setup",exact:true});
+  await setup.getByRole("button",{name:"Step 5: Developer tools",exact:true}).click();
+  await setup.getByRole("button",{name:"Check installed",exact:true}).click();
+  await page.evaluate(()=>{(window as any).__setupPackageHold=true;});
+  await setup.getByRole("button",{name:"Install selected",exact:true}).click();
+  await page.getByRole("dialog",{name:"Install selected packages",exact:true}).getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"curl",exact:true}).locator("..")).toContainText("Installing…");
+  await setup.getByRole("button",{name:"Step 6: Runtimes",exact:true}).click();
+  await expect(setup.getByRole("button",{name:"Finish",exact:true})).toBeDisabled();
+  await setup.getByRole("button",{name:"Step 5: Developer tools",exact:true}).click();
+  await expect(setup.getByRole("checkbox",{name:"curl",exact:true}).locator("..")).toContainText("Installing…");
+  await page.evaluate(()=>{(window as any).__releaseSetupInstall();});
+  await expect(setup.getByRole("checkbox",{name:"curl",exact:true}).locator("..")).toContainText("Installed");
+  await page.setViewportSize({width:360,height:780});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath("compact-tools-360.png"),animations:"disabled"});
+});
+
+
+test("six-step setup approves each SSH sudo command and retries only the local connection save",async({page})=>{
+  const setup=await openQuickSetupStep3(page,"generate");
+  await setup.getByRole("button",{name:"Create key without passphrase",exact:true}).click();
+  await expect(setup.getByRole("group",{name:"Selected local key",exact:true})).toBeVisible();
+  await setup.getByRole("button",{name:"Step 3: SSH & firewall",exact:true}).click();
+  const security=setup.getByRole("region",{name:"Current SSH and firewall status",exact:true});
+  await security.getByRole("button",{name:"Refresh status",exact:true}).click();
+  await page.getByRole("dialog",{name:"Read current settings",exact:true}).getByRole("button",{name:"Read status",exact:true}).click();
+  await security.getByRole("checkbox",{name:/Provider console is available/}).check();
+  await security.getByRole("button",{name:"Apply changes",exact:true}).click();
+  await page.evaluate(()=>{(window as any).__securitySaveFailure=true;});
+  const apply=page.getByRole("dialog");
+  await apply.getByLabel("Sudo password",{exact:true}).fill("fixture-only-security-sudo");
+  for(let index=0;index<3;index++){
+    expect(await page.evaluate(()=>(window as any).__securityApplies??0)).toBe(0);
+    await apply.getByRole("button",{name:"Approve command",exact:true}).click();
+  }
+  await apply.getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(security.getByRole("alert")).toContainText("Verified connection retained");
+  await expect(security.getByRole("button",{name:"Retry saving connection",exact:true})).toBeEnabled();
+  expect(await page.evaluate(()=>(window as any).__securityApplies)).toBe(1);
+  expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain("fixture-only-security-sudo");
+  await page.evaluate(()=>{(window as any).__securitySaveFailure=false;});
+  await security.getByRole("button",{name:"Retry saving connection",exact:true}).click();
+  await expect(page.getByRole("tab",{name:/Fixture Alpha \(SSH 52022\)/})).toHaveAttribute("aria-selected","true");
+  expect(await page.evaluate(()=>(window as any).__securityApplies)).toBe(1);
+  await expect(page.getByRole("tab",{name:/^Fixture Alpha ·/})).toBeVisible();
 });

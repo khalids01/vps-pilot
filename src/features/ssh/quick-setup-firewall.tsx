@@ -63,7 +63,7 @@ export function QuickSetupFirewallControls({
         className="space-y-2"
       >
         <h3 id={`${idPrefix}-firewall-plan`} className="text-sm font-medium">
-          Planned inbound rules
+          Inbound rules to apply
         </h3>
         {plan.apply ? (
           <>
@@ -109,27 +109,18 @@ export function QuickSetupFirewallControls({
               </tbody>
             </table>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Planned default policy: inbound deny, outbound allow. Protected
-              SSH rules cannot be removed here.
+              Current SSH access is retained.
             </p>
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            No planned rule changes. Current firewall choices are retained.
-          </p>
+          <p className="text-sm text-muted-foreground">Keep current rules.</p>
         )}
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          This is a plan only. Live UFW rules, provider firewalls and IPv4/IPv6
-          reachability are not observed or applied here. Use Open server
-          inspection to view current rules explicitly.
-        </p>
       </section>
 
       <div className="divide-y divide-border/70 border-y border-border/70">
         <CheckRow
           id={`${idPrefix}-allow-http`}
           label="Allow HTTP (port 80)"
-          hint="Typical web ingress. Only planned when the firewall is configured."
           checked={draft.access.allowHttp}
           onToggle={() =>
             onChange({
@@ -252,25 +243,9 @@ export function QuickSetupFirewallControls({
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Up to {quickSetupFirewallRuleLimit} custom rules. Source restrictions
-          are not planned; all sources are Any IPv4/IPv6.
+          Up to {quickSetupFirewallRuleLimit} custom rules.
         </p>
       </section>
-
-      {draft.stack.choice === "dokploy" && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Dokploy typically needs ingress on ports 80 and 443. Its dashboard on
-          port 3000 is not exposed automatically. Docker-published ports bypass
-          assumptions about UFW ingress and need a separate firewall review; no
-          automatic safety is claimed.
-        </p>
-      )}
-      {draft.stack.choice !== "dokploy" && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Docker-published ports need separate firewall review; this plan does
-          not claim automatic safety for them.
-        </p>
-      )}
     </div>
   );
 }

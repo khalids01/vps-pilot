@@ -533,3 +533,37 @@ and concurrency; cancellation removes incomplete local staging without replay.
 No remote dump staging, port publication, restore, query mutation, volume backup
 or cluster-wide user/role export is authorized by this increment. Protected backup
 contents may be sensitive; do not send them through renderer or command activity.
+
+## Compact six-step provisioning — authorized 2026-11-09
+
+The user explicitly authorized completing the interrupted six-step implementation:
+Connection overview; Administrator & SSH key; SSH & firewall; Application stack;
+Developer tools; Runtimes. This supersedes the eight-step/final-review presentation
+and generic per-step inspection/recovery panels. Each configuration step applies
+its own changes; Finish shows a compact summary and links to unfinished work.
+Keep only useful labels, inputs, current values, inline installation/conflict
+status, progress, specific errors and deliberate failed-item retry. Exact sudo
+command approvals remain required; they are not generic workflow reviews.
+
+The narrow `setup-provisioning` capability is separate from generic mutation gates.
+Installers resolve official sources and versions before approval, preserve existing
+tools/configuration, serialize per connection and verify individual results.
+User-tool artifacts run as the administrator, not root. Docker uses its signed
+repository; Dokploy refuses occupied ingress ports, existing Swarm/workloads and
+platform data. Its fixed native recipe uses reviewed image digests and ownership-bound retries;
+it never forces Swarm departure or removes networks. No general software removal is enabled.
+
+SSH/UFW provisioning uses an explicit selected local key, fresh server snapshots,
+provider-console/firewall acknowledgement, current key-plus-sudo proof, staged
+old/new listeners, two independent replacement key-plus-sudo proofs and persistent
+remote systemd recovery. Keep original connections/profiles. A verified candidate
+survives local-save failure for explicit retry. Conflicting external configuration
+must not be overwritten by recovery. Refuse unrecognized SSH arguments/includes,
+conditional/listen policies, unsafe files, NAT port translation, custom UFW hooks,
+restrictive existing UFW rules and container networking for this firewall preset.
+No important-VPS testing or broad service/firewall/proxy gates are authorized.
+
+Command Code was attempted through its bundled CLI and failed authentication
+before editing. Codex implemented and independently checked this increment directly.
+Actual validation and its distribution/architecture limits are recorded in
+`agents/supported-systems.md` and `tests/fixtures/README.md`.

@@ -398,7 +398,7 @@ export function QuickSetupAccess({
       )
         return;
       setVerifyError(
-        `${safeError(failure)} Key login was not verified for ${source.username}@${source.host}:${source.port}. The public key may not be installed for this account; creating or choosing a local key does not install it. The current session and saved connection are unchanged. The exact cause is not confirmed.`,
+        `${safeError(failure)} (${source.username}@${source.host}:${source.port})`,
       );
     } finally {
       if (request === verifySequence.current) {
@@ -599,9 +599,7 @@ export function QuickSetupAccess({
             {selectedKey.fingerprint}
           </p>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            The selected public key must already be installed for{" "}
-            {source.username} on this server. Creating or choosing a local key
-            does not install it.
+            Install the selected key before testing.
           </p>
           {proof && verifiedAt !== null && (
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -638,7 +636,10 @@ export function QuickSetupAccess({
       )}
 
       {proof && (
-        <div className="space-y-2.5">
+        <details className="space-y-2.5">
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            Save SSH alias
+          </summary>
           <div className="max-w-sm space-y-1.5">
             <label htmlFor={`${id}-alias`} className="block text-sm">
               SSH config alias
@@ -672,12 +673,8 @@ export function QuickSetupAccess({
             disabled={reviewDisabled}
             onClick={reviewConfig}
           >
-            {reviewPending ? "Preparing review…" : "Review SSH config"}
+            {reviewPending ? "Preparing review…" : "Save SSH alias"}
           </Button>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            An SSH config entry is created only for this verified current
-            account and port: {source.username}@{source.host}:{source.port}.
-          </p>
           {saveResult && (
             <p
               role="status"
@@ -688,35 +685,10 @@ export function QuickSetupAccess({
               {saveResult.backupPath
                 ? ` Protected backup: ${saveResult.backupPath}.`
                 : ""}{" "}
-              The current connection is unchanged.
             </p>
           )}
-        </div>
+        </details>
       )}
-    </div>
-  );
-
-  const identitySection = (
-    <div className="min-w-0 space-y-1 border-t border-border/70 pt-3">
-      <dl className="divide-y divide-border/70">
-        <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
-          <dt className="text-xs text-muted-foreground">Current access</dt>
-          <dd className="min-w-0 text-sm break-all">
-            {source.username}@{source.host}:{source.port}
-          </dd>
-        </div>
-        <div className="grid gap-1 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-3">
-          <dt className="text-xs text-muted-foreground">Planned access</dt>
-          <dd className="min-w-0 text-sm break-all">
-            {plannedTarget.username}@{source.host}:{plannedTarget.port}
-          </dd>
-        </div>
-      </dl>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Testing the current connection never certifies the planned account.
-        Target port {plannedTarget.port}, sshd key-only policy, and firewall
-        changes remain pending.
-      </p>
     </div>
   );
 
@@ -725,26 +697,8 @@ export function QuickSetupAccess({
       aria-label="Key login access"
       className="space-y-3 border-t border-border/70 pt-4"
     >
-      {plannedTargetActive ? (
-        <>
-          {installSection}
-          <details className="min-w-0 border-t border-border/70 pt-3">
-            <summary className="cursor-pointer text-sm text-muted-foreground">
-              Current root connection verification and optional SSH config
-            </summary>
-            <div className="mt-3 space-y-3">
-              {currentConnectionSection}
-              {identitySection}
-            </div>
-          </details>
-        </>
-      ) : (
-        <>
-          {installSection}
-          {currentConnectionSection}
-          {identitySection}
-        </>
-      )}
+      {installSection}
+      {!plannedTargetActive && currentConnectionSection}
 
       {notice && (
         <p

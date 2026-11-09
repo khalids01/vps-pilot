@@ -168,21 +168,13 @@ export function ConfigurationWorkspace({
   onNavigate: (tool: ToolId) => void;
   onOpenProfile?: (profileId: string) => void;
 }) {
-  const [inspectionOpen, setInspectionOpen] = useState(false);
-  const previousTool = useRef(tool);
-  useLayoutEffect(() => {
-    if (previousTool.current === tool) return;
-    previousTool.current = tool;
-    setInspectionOpen(false);
-  }, [tool]);
-  if (tool === "quick-setup" && !inspectionOpen)
+  if (tool === "quick-setup")
     return (
       <QuickSetupWorkspace
         key={profile.id}
         visible={visible}
         profile={profile}
         connected={connected}
-        onOpenInspection={() => setInspectionOpen(true)}
         onOpenProfile={onOpenProfile}
       />
     );
@@ -192,9 +184,6 @@ export function ConfigurationWorkspace({
       profile={profile}
       connected={connected}
       onNavigate={onNavigate}
-      onBackToSetup={
-        tool === "quick-setup" ? () => setInspectionOpen(false) : undefined
-      }
     />
   );
 }

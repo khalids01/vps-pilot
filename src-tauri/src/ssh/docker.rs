@@ -32,7 +32,7 @@ pub(super) fn id(value: &str) -> Result<&str, String> {
     }
     Ok(value)
 }
-fn quoted(value: &str) -> String {
+pub(super) fn quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 pub(super) fn command(query: Query, container: Option<&str>) -> Result<String, String> {

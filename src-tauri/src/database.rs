@@ -205,6 +205,10 @@ struct QuickSetupAccess {
     ufw: String,
     #[serde(rename = "recoveryAcknowledged")]
     _recovery_acknowledged: bool,
+    #[serde(default, rename = "passwordLogin")]
+    _password_login: bool,
+    #[serde(default, rename = "rootLogin")]
+    _root_login: bool,
     #[serde(default, rename = "allowHttp")]
     _allow_http: bool,
     #[serde(default, rename = "allowHttps")]
@@ -946,6 +950,8 @@ mod tests {
         validate_document(&key, &legacy.to_string()).unwrap();
 
         let mut draft = valid_quick_setup_draft();
+        draft["access"]["passwordLogin"] = serde_json::json!(false);
+        draft["access"]["rootLogin"] = serde_json::json!(false);
         draft["access"]["allowHttp"] = serde_json::json!(true);
         draft["access"]["allowHttps"] = serde_json::json!(true);
         draft["access"]["rules"] = serde_json::json!([
@@ -964,7 +970,13 @@ mod tests {
         assert_eq!(db.read(&key).unwrap(), Some(serialized));
 
         let mut base = valid_quick_setup_draft();
-        for field in ["allowHttp", "allowHttps", "rules"] {
+        for field in [
+            "allowHttp",
+            "allowHttps",
+            "rules",
+            "passwordLogin",
+            "rootLogin",
+        ] {
             for value in [serde_json::Value::Null, serde_json::json!("yes")] {
                 let mut rejected = base.clone();
                 rejected["access"][field] = value;

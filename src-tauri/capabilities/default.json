@@ -12,6 +12,7 @@
     "local-data",
     "setup-keys",
     "setup-access",
+    "setup-provisioning",
     "remote-files",
     "updater:default",
     "process:allow-restart"

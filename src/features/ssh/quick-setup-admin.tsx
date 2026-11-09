@@ -123,7 +123,6 @@ export function QuickSetupAdmin({
   source,
   mode,
   username,
-  plannedPort,
   connectionId,
   connected,
   selectedKey,
@@ -738,8 +737,7 @@ export function QuickSetupAdmin({
 
       {stage === "account-ready" && !keyInstalled && !promoted && (
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Next: install the selected public key for {username} below, then apply
-          and verify access.
+          Install the key for {username} next.
         </p>
       )}
 
@@ -748,35 +746,8 @@ export function QuickSetupAdmin({
           role="status"
           className="text-xs leading-relaxed text-muted-foreground"
         >
-          {promoted.profile.name} is saved and connected as{" "}
-          {promoted.profile.username}. Target SSH port {plannedPort}, sshd
-          key-only policy and firewall changes have not been applied.
+          Connected as {promoted.profile.username}.
         </p>
-      )}
-
-      {!promoted && !accountReady && (
-        <details className="min-w-0 text-xs leading-relaxed text-muted-foreground">
-          <summary className="cursor-pointer">Account details</summary>
-          <p className="mt-1">
-            {mode === "new"
-              ? `A new sudo-capable account is created with the password entered in the review. Existing accounts are never reset.`
-              : `The existing account is adopted without resetting its password or changing its keys.`}
-          </p>
-          <dl className="mt-2 divide-y divide-border/70 border-y border-border/70">
-            <div className="grid gap-1 py-1.5 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-3">
-              <dt className="text-muted-foreground">Source</dt>
-              <dd className="min-w-0 break-all text-foreground">
-                {source.username}@{source.host}:{source.port}
-              </dd>
-            </div>
-            <div className="grid gap-1 py-1.5 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-3">
-              <dt className="text-muted-foreground">Key</dt>
-              <dd className="min-w-0 break-all text-foreground">
-                {selectedKey.fingerprint}
-              </dd>
-            </div>
-          </dl>
-        </details>
       )}
 
       {!promoted && accountReady && !canVerify && (
@@ -810,11 +781,6 @@ export function QuickSetupAdmin({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-sm font-medium">Verify administrator access</p>
-              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                A separate pinned-host connection authenticates as {username}{" "}
-                with only the selected key, then proves sudo to root. Group
-                membership is not used as proof.
-              </p>
               {proof && (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   Verified until {formatTime(proof.expiresAtMs)}. The root
@@ -863,12 +829,6 @@ export function QuickSetupAdmin({
               >
                 {promoting ? "Switching…" : `Switch to ${username}`}
               </Button>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Promotion saves a separate {username} profile using this
-                verified connection and opens it. The root profile, its saved
-                access and its session are kept. SSH port, key-only policy and
-                firewall hardening stay pending.
-              </p>
             </div>
           )}
           {promoteError && (

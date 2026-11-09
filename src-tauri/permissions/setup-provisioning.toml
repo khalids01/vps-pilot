@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "setup-provisioning"
+description = "Fixed-catalog provisioning over an existing trusted SSH connection. Native reviews bind server revision, connection, selected artifacts and source snapshot; credentials travel only on stdin. Installers preserve existing tools, use resolved official sources and check each result. SSH/UFW changes require a selected local key, independently checked key login and sudo, fresh configuration evidence, provider-recovery acknowledgement, persistent remote rollback and two replacement-access proofs. Saving an endpoint consumes only its retained verified connection. No renderer-supplied shell executor or software-removal operation."
+commands.allow = [
+  "ssh_setup_packages_command",
+  "ssh_setup_packages_scan",
+  "ssh_setup_packages_prepare",
+  "ssh_setup_packages_apply",
+  "ssh_setup_security_save",
+]

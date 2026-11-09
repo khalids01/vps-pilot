@@ -209,3 +209,56 @@ staging; browser fixtures cover review/download/failure/cancel/credential lifeti
 These fixtures do not establish restoration compatibility with every real server
 version. Validate restores separately on disposable databases before relying on
 production backups; never use the important user VPS for integration tests.
+
+
+### Six-step provisioning — November 2026
+
+`python3 -B tests/fixtures/setup-packages.test.py` exercises the bundled adapters
+without contacting a server or writing to the host home. Native setup-package
+unit tests validate typed selections, reviews, progress and concurrency. Browser
+coverage is selected by `six-step setup|staged administrator|guided access`.
+Browser mocks establish UI behavior, not privileged integration safety.
+
+The `setup-*-vm.py` scripts are destructive **inside a disposable guest only**.
+They refuse execution outside a root container, use loopback SSH and assert the
+VM marker. Never substitute a production address/key. Stage source/scripts into
+a private local directory (avoid network-filesystem Docker mounts):
+
+```sh
+docker build -f tests/fixtures/setup-vm.Containerfile -t vps-pilot-setup-fixture .
+fixture_dir=$(mktemp -d /tmp/vps-pilot-setup.XXXXXX)
+chmod 700 "$fixture_dir"
+mkdir "$fixture_dir/source"
+cp src-tauri/src/ssh/setup_*.py "$fixture_dir/source/"
+cp tests/fixtures/setup-*-vm.py tests/fixtures/setup-vm-boot.py "$fixture_dir/"
+docker run -d --name vps-pilot-setup-fixture --label org.vps-pilot.fixture=true   --memory 4g --cpus 3 -v "$fixture_dir:/fixture"   -v "$fixture_dir/source:/source:ro" vps-pilot-setup-fixture   python3 -u /fixture/setup-vm-boot.py
+```
+
+Wait for `Disposable Debian VM ready` in container logs. The boot driver downloads
+and checksum-checks a Debian 12 arm64 cloud image, generates ephemeral SSH keys,
+and starts a 24 GiB QEMU guest with systemd. SSH ports are exposed only within the
+container; Docker publishes no host ports. Initial host-key acceptance is confined
+to this generated local guest; subsequent requests require its pinned identity.
+
+On a fresh guest, run **one** security path: `setup-security-vm.py` tests timed
+recovery and success; `setup-security-socket-vm.py` expects socket activation;
+`setup-security-reboot-vm.py` exercises reboot recovery and socket activation after
+the first security success. Read each script's starting-state assertions. Start
+from a new fixture directory for a different sequence. After successful migration,
+`setup-stacks-vm.py` installs Docker and Dokploy through the hardened guest port.
+`setup-wrapper-vm.py` then tests the actual sudo wrapper and both checkpoint
+messages with another SSH-only apply (existing Docker networking is preserved).
+Copy each selected script into the container or execute its `/fixture/` path.
+`setup-user-tools-integration.py` runs in a disposable Debian container with a
+`fixture` user and sudo/runuser prerequisites; it must never run on the host.
+
+Observed on Debian 12 arm64: all eight user-tool installers and repeat-install
+skips; Docker engine/Compose; Dokploy services, proxy and loopback dashboard;
+interrupted platform retry; key/sudo verification; SSH/UFW migration, client-loss
+rollback, real reboot recovery and socket activation. LazyVim plugin hydration,
+PM2 boot startup, other OS/CPU combinations and native WebKit rendering remain
+outside those claims. No important VPS was contacted.
+
+After validation, stop/remove the exact fixture container, then remove its private
+`fixture_dir` (including generated keys and disks). Never run global Docker prune.
+The test tools/image may be retained for reuse.

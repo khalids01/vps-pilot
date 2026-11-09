@@ -70,3 +70,46 @@ runtime invocation or recovery safety. Current-user PATH evidence does not
 establish software package ownership. UFW/listener evidence does not establish
 Internet reachability or Docker/cloud firewall coverage. See quick-setup-plan.md
 for bounds, remaining detection scope and validation evidence.
+
+## Guided provisioning exceptions — 2026-11-09
+
+The original blanket mutation statements above describe the earlier milestone.
+`setup-provisioning` is now a narrow exception; generic systemd/UFW/proxy/cleanup
+mutation gates remain unchanged. Remote installers accept Debian 12/13 and Ubuntu
+22.04/24.04/26.04/26.10 on x86_64/arm64, with official repositories and required
+Python/account tools. This is the compatibility filter, not certification of every
+combination. Existing binaries/configuration are preserved; unsupported evidence
+blocks the corresponding operation.
+
+Observed integration coverage for this increment:
+
+- Debian 12 arm64 full QEMU VM: real Docker CE installation and daemon/Compose
+  checks; pinned Dokploy/PostgreSQL/Traefik deployment, interrupted-install resume
+  and dashboard health; SSH/UFW staged migration; independent key login/sudo; password/root
+  restriction; retirement of the old listener; timed recovery after client loss;
+  recovery across a real VM reboot; socket-activated migration and recovery.
+- Debian 12 arm64 disposable container: real Bun, uv, NVM/Node LTS, PM2, Go,
+  latest stable Neovim, Herdr and pinned LazyVim starter installation; independent
+  executable/configuration checks and skip-on-retry. LazyVim plugin downloads and
+  PM2 boot startup are not represented as completed by installing their packages.
+- Native Rust loopback/temporary-home tests cover host/key identity, authentication
+  fallback refusal, credentials, account/key installation, persistence and approvals.
+  Mocked browser tests cover presentation/state, not privileged safety.
+
+Other distribution/architecture combinations still require their own integration
+coverage before being called certified. No important VPS was used. SSH migration
+refuses translated SSH ports, custom effective SSH policies/listen addresses,
+unsafe configuration paths, unsupported service semantics and incompatible UFW
+networking. The preset requires UFW IPv6 filtering and preserves existing rules;
+Docker-published ports are not claimed to be protected by UFW.
+
+
+Local checks: `bun run check`, `bun run build`, 28 focused Bun tests, 21 Python
+adapter tests, and nine targeted browser cases passed. The Rust suite passed
+160 tests with five existing integration tests ignored. A final focused native
+suite also passed after the retry hardening. Clippy passed with warnings denied
+except the repository's existing `clippy::nonminimal_bool` findings in unrelated
+adapters. Build output retains Vite's large-chunk advisory. Because this checkout
+is on SMB and its installed tools targeted Linux, frontend checks used a frozen-
+lockfile local mirror with macOS tool binaries; no project dependency changes were
+needed. Native Tauri/WebKit and other OS/CPU combinations still need release QA.

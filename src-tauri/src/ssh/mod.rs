@@ -10,6 +10,7 @@ pub mod files;
 pub mod monitor;
 mod services;
 pub mod setup_access;
+pub mod setup_packages;
 mod store;
 pub mod streams;
 pub mod structured;
@@ -77,6 +78,8 @@ struct Runtime {
     errors: HashMap<String, String>,
     streams: HashMap<String, streams::StreamHandle>,
     connection_ids: HashMap<String, String>,
+    authentication_methods: HashMap<String, &'static str>,
+    setup_access_verified: HashMap<String, Instant>,
     approvals: HashMap<String, actions::PendingApproval>,
     unresolved_changes: HashMap<String, String>,
 }
@@ -106,6 +109,8 @@ pub struct ConnectionStatus {
     pub profile_id: String,
     pub status: &'static str,
     pub error: Option<String>,
+    pub authentication_method: Option<&'static str>,
+    pub setup_access_verified: bool,
 }
 impl SshService {
     pub fn new(path: PathBuf) -> Self {
@@ -123,6 +128,8 @@ impl SshService {
                 errors: HashMap::new(),
                 streams: HashMap::new(),
                 connection_ids: HashMap::new(),
+                authentication_methods: HashMap::new(),
+                setup_access_verified: HashMap::new(),
                 approvals: HashMap::new(),
                 unresolved_changes: HashMap::new(),
             }),
@@ -389,7 +396,7 @@ impl SshService {
         };
         let mut runtime = self.runtime.lock().await;
         if runtime.jobs.get(id).map(|job| &job.token) != Some(&token) {
-            if let Ok(handle) = result {
+            if let Ok((handle, _)) = result {
                 let _ = handle
                     .disconnect(Disconnect::ByApplication, "Connection cancelled", "")
                     .await;
@@ -398,7 +405,8 @@ impl SshService {
         }
         runtime.jobs.remove(id);
         match result {
-            Ok(handle) => {
+            Ok((handle, method)) => {
+                runtime.authentication_methods.insert(id.into(), method);
                 runtime
                     .connection_ids
                     .insert(id.into(), Uuid::new_v4().to_string());
@@ -418,7 +426,7 @@ impl SshService {
         password: &str,
         passphrase: Option<&str>,
         token: &str,
-    ) -> Result<client::Handle<Client>, String> {
+    ) -> Result<(client::Handle<Client>, &'static str), String> {
         let expected =
             expected.ok_or("Verify and trust the server's host identity before authenticating.")?;
         let observed = Arc::new(AsyncMutex::new(None));
@@ -471,7 +479,7 @@ impl SshService {
         )
         .await;
         match authenticated {
-            Ok(Ok(())) => Ok(handle),
+            Ok(Ok(method)) => Ok((handle, method)),
             failure => {
                 let _ = handle
                     .disconnect(Disconnect::ByApplication, "Authentication failed", "")
@@ -492,6 +500,8 @@ impl SshService {
             runtime.challenges.remove(id);
             runtime.errors.remove(id);
             runtime.connection_ids.remove(id);
+            runtime.authentication_methods.remove(id);
+            runtime.setup_access_verified.remove(id);
             runtime
                 .approvals
                 .retain(|_, approval| approval.profile_id != id);
@@ -556,6 +566,16 @@ impl SshService {
                 ConnectionStatus {
                     connection_id: if status == "connected" {
                         runtime.connection_ids.get(&id).cloned()
+                    } else {
+                        None
+                    },
+                    setup_access_verified: status == "connected"
+                        && runtime
+                            .setup_access_verified
+                            .get(&id)
+                            .is_some_and(|deadline| *deadline > Instant::now()),
+                    authentication_method: if status == "connected" {
+                        runtime.authentication_methods.get(&id).copied()
                     } else {
                         None
                     },

@@ -174,7 +174,7 @@ pub async fn authenticate(
     profile: &Profile,
     password: &str,
     passphrase: Option<&str>,
-) -> Result<(), String> {
+) -> Result<&'static str, String> {
     if !password.is_empty() {
         if !profile.password_allowed {
             return Err(
@@ -187,7 +187,7 @@ pub async fn authenticate(
             .await
             .map_err(|_| "SSH password authentication failed.")?
             .success()
-            .then_some(())
+            .then_some("password")
             .ok_or_else(|| "SSH password was not accepted.".into());
     }
     if handle
@@ -195,7 +195,7 @@ pub async fn authenticate(
         .await
         .is_ok_and(|result| result.success())
     {
-        return Ok(());
+        return Ok("none");
     }
     if let Some(path) = &profile.identity_file {
         let path = key_path(path)?;
@@ -220,13 +220,13 @@ pub async fn authenticate(
                 )
                 .await
                 {
-                    return Ok(());
+                    return Ok("agent");
                 }
             }
         }
         return key_auth(handle, &profile.username, path, passphrase)
             .await?
-            .then_some(())
+            .then_some("key")
             .ok_or_else(|| "The server did not accept this private key.".into());
     }
     #[cfg(unix)]
@@ -239,7 +239,7 @@ pub async fn authenticate(
         )
         .await
         {
-            return Ok(());
+            return Ok("agent");
         }
     }
     if let Some(home) = home_dir() {
@@ -250,7 +250,7 @@ pub async fn authenticate(
                     .await
                     .unwrap_or(false)
             {
-                return Ok(());
+                return Ok("key");
             }
         }
     }

@@ -20,9 +20,9 @@ const distributionSource =
   "Signed packages from the VPS distribution’s official repositories. Versions depend on its stable release.";
 
 export const quickSetupSourcePolicy =
-  "Source policy only: official release pages, URLs, versions, signatures and commands must be rechecked before any installer is implemented. This list is not a verified or executable installer.";
+  "Catalog source policy. The native installer resolves versions, artifacts and commands for each approval.";
 export const quickSetupPlannedSourceNotice =
-  "Planned source only. The final version, checksum and exact command must be reviewed when installers are implemented.";
+  "Versions and artifact identities are resolved when you choose Install selected.";
 export const quickSetupCatalog = {
   dokploy: {
     id: "dokploy",
@@ -325,13 +325,22 @@ export const quickSetupCatalog = {
 export const quickSetupHerdr = {
   id: "herdr",
   label: "Herdr",
-  installer: "pending-verification",
+  installer: "native",
   reason:
-    "Optional draft tool. Official installer source and version verification is pending.",
+    "Official stable-channel binary, with the publisher checksum and version resolved before approval.",
 } as const;
 export function quickSetupCatalogLabel(id: string) {
   return (
     (quickSetupCatalog as Record<string, QuickSetupCatalogEntry>)[id]?.label ??
+    (
+      {
+        ufw: "UFW",
+        "ca-certificates": "CA certificates",
+        "xz-utils": "XZ utilities",
+        libatomic1: "Atomic runtime library",
+        "build-essential": "Build tools",
+      } as Record<string, string>
+    )[id] ??
     id
   );
 }

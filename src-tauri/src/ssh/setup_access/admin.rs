@@ -1233,6 +1233,9 @@ impl SshService {
         {
             let mut runtime = self.runtime.lock().await;
             runtime
+                .authentication_methods
+                .insert(saved.id.clone(), "key");
+            runtime
                 .connection_ids
                 .insert(saved.id.clone(), connection_id.clone());
             runtime

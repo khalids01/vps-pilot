@@ -773,3 +773,29 @@ install adapters with exact command/artifact reviews, item ownership/dependencie
 independent version/postcondition checks, partial operation journals, rescan-bound
 failed-item retries and selected safe rollback; native SSH/UFW recovery validation.
 These are not implemented or represented as complete in this release.
+
+## Six-step implementation update — 2026-11-09
+
+The user's latest direction replaces the eight-step UI above with six steps:
+connection overview; administrator/key; SSH/firewall; application stack; developer
+tools; runtimes. There is no separate inspection/review page. Native sudo approvals
+still preview the actual operation, resolved versions/sources and verification
+commands. Successful items stay visible across navigation, failed-item retry omits
+successes, and native preparation reconciles real installation state on every run.
+Finish shows observations from the current workspace and unfinished-step links;
+no draft or persisted checkpoint is restored as proof.
+
+Native adapters now exist in `setup_packages.rs` and the fixed `setup_*.py` sources.
+Artifact preparation is read-only and can download official releases to resolve
+and pin their digests. Installation never executes a moving downloaded user-tool
+bootstrap script. NVM/Node use pinned source/binary archives; PM2 uses the resolved
+npm tarball and official-registry dependencies; LazyVim installs its pinned starter,
+whose plugins download on first launch. Existing editor configuration is a conflict.
+
+The SSH/firewall transaction preserves existing SSH access while staging, checks
+new selected-key authentication and sudo twice, and keeps remote persistent recovery
+armed until the final proof. It supports service and socket activation and retains
+old firewall allowances because they may predate the transaction. It retires the
+old SSH listener. External configuration changes cause recovery to refuse overwrite.
+Recovery backups are protected, retained and bounded; no universal removal/undo is
+introduced. Provider firewall reachability still requires the user's acknowledgement.

@@ -15,16 +15,14 @@ import {
   retryPreference,
   subscribePreferenceSaveState,
 } from "@/features/settings/persistence";
-import type { ServerProfile } from "./api";
+import { type ServerProfile, useConnectionStatuses } from "./api";
 import { useConfiguration } from "./configuration-context";
 import {
   quickSetupCatalog,
   quickSetupCatalogLabel,
-  quickSetupHerdr,
-  quickSetupSourcePolicy,
 } from "./quick-setup-catalog";
 import { CheckRow, ChoiceGroup, ChoiceRow } from "./quick-setup-controls";
-import { QuickSetupExecution } from "./quick-setup-execution";
+import { stepItems } from "./quick-setup-execution-model";
 import { QuickSetupFirewallControls } from "./quick-setup-firewall";
 import { QuickSetupKeyManager } from "./quick-setup-keys";
 import {
@@ -40,21 +38,24 @@ import {
   type QuickSetupUfwChoice,
   type QuickSetupUtilityId,
   quickSetupDraftKey,
+  quickSetupStepNumber,
   quickSetupSteps,
   quickSetupUtilities,
   readQuickSetupDraft,
   requiredQuickSetupRuntimes,
   resolveQuickSetupAccessTargets,
-  resolveQuickSetupFirewallPlan,
   resolveQuickSetupPlan,
   sanitizeQuickSetupDraft,
   validateQuickSetupUsername,
   writeQuickSetupDraft,
 } from "./quick-setup-model";
 import {
-  PlannedSourceDisclosure,
-  QuickSetupResolvedSources,
-} from "./quick-setup-sources";
+  QuickSetupPackageProvider,
+  QuickSetupPackageStatus,
+  QuickSetupPackages,
+  useSetupPackages,
+} from "./quick-setup-packages";
+import { QuickSetupSecurity } from "./quick-setup-security";
 
 const adminModeLabels: Record<QuickSetupAdminMode, string> = {
   new: "Create a new administrator",
@@ -65,21 +66,8 @@ const keyStrategyLabels: Record<QuickSetupKeyStrategy, string> = {
   generate: "Generate a new key",
   agent: "Use the SSH agent",
 };
-const keyStrategyDescriptions: Record<QuickSetupKeyStrategy, string> = {
-  existing: "Choose a private key file already on this device.",
-  generate: "Create a key file in ~/.ssh with an optional passphrase.",
-  agent: "A key loaded in your desktop SSH agent.",
-};
-const keyStrategyExplanations: Record<QuickSetupKeyStrategy, string> = {
-  existing:
-    "The native file picker is functional. VPS Pilot stores an opaque local reference and public identity metadata; it never copies, moves, or changes the original private key. Keys outside ~/.ssh stay at their original path.",
-  generate:
-    "Creates an actual Ed25519 key pair in ~/.ssh with a filename you choose. Leave the passphrase blank for an unencrypted private key, or use 12 to 4096 bytes to encrypt it. Existing files are never overwritten; backup, public-key installation, and verification remain separate explicit steps.",
-  agent:
-    "Uses a key already loaded in your desktop SSH agent. The optional local desktop key cache is not used for authentication and no private key file is copied. Selecting an agent key is planning only.",
-};
 const ufwLabels: Record<QuickSetupUfwChoice, string> = {
-  configure: "Configure a restrictive UFW plan",
+  configure: "Configure UFW",
   "keep-current": "Keep the current firewall",
 };
 const stackLabels: Record<QuickSetupStackChoice, string> = {
@@ -88,22 +76,10 @@ const stackLabels: Record<QuickSetupStackChoice, string> = {
   containers: "Container foundation",
   skip: "Skip application stack",
 };
-const stackDescriptions: Record<QuickSetupStackChoice, string> = {
-  dokploy: "Deploy applications with Docker. Includes Docker.",
-  javascript: "Node.js through NVM, managed by PM2.",
-  containers: "Docker or Podman for your own stack.",
-  skip: "Set up server access only.",
-};
 const editorLabels: Record<QuickSetupEditorChoice, string> = {
-  none: "Plain terminal editing",
+  none: "Skip editor",
   neovim: "Neovim",
   lazyvim: "Neovim + LazyVim",
-};
-const editorDescriptions: Record<QuickSetupEditorChoice, string> = {
-  none: "No editor is planned.",
-  neovim:
-    "Latest compatible stable official Neovim release, with sudoedit for privileged files.",
-  lazyvim: "Official stable Neovim with the official LazyVim starter.",
 };
 const runtimeGroups: {
   id: string;
@@ -130,14 +106,6 @@ const runtimeGroups: {
     runtimes: ["go"],
   },
 ];
-
-function keySelectionSummary(draft: QuickSetupDraft) {
-  if (draft.sshKey.strategy === "generate" && draft.sshKey.generatedKeyId)
-    return "Generated local key selected";
-  if (draft.sshKey.strategy === "existing" && draft.sshKey.existingKeyId)
-    return "Existing private key selected";
-  return keyStrategyLabels[draft.sshKey.strategy];
-}
 
 function DraftSaveStatus({ draftKey }: { draftKey: string | null }) {
   const subscribe = useCallback(
@@ -191,20 +159,14 @@ function QuickSetupHeader({
         <h1 className="text-xl font-semibold tracking-tight">Quick Setup</h1>
         {step !== undefined && (
           <p className="mt-1 hidden text-sm text-muted-foreground md:block">
-            Step {step} of {quickSetupSteps.length}
+            Step {quickSetupStepNumber(step as QuickSetupStepId)} of{" "}
+            {quickSetupSteps.length}
           </p>
         )}
       </div>
       {step !== undefined && (
         <div className="flex flex-col items-start gap-1 sm:items-end">
           <DraftSaveStatus draftKey={draftKey ?? null} />
-          <aside
-            aria-label="Setup preview"
-            className="max-w-md text-xs leading-relaxed text-muted-foreground sm:text-right"
-          >
-            Choices save on this device. Administrator access uses a separate
-            review.
-          </aside>
         </div>
       )}
     </header>
@@ -229,18 +191,16 @@ function StepSection({
         <h2 id={headingId} className="text-lg font-semibold tracking-tight">
           {title}
         </h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          {description}
-        </p>
+        {description && (
+          <p className="text-sm text-muted-foreground">{description}</p>
+        )}
       </div>
       {children}
     </section>
   );
 }
 
-function stepDisplayTitle(item: { id: QuickSetupStepId; title: string }) {
-  if (item.id === 1) return "Connection";
-  if (item.id === 8) return "Review";
+function stepDisplayTitle(item: { title: string }) {
   return item.title;
 }
 
@@ -275,13 +235,14 @@ function StepNavigation({
           variant="ghost"
           aria-expanded={open}
           aria-controls={listId}
-          aria-label={`Current step ${step}: ${current.title}. ${open ? "Hide" : "Show"} all steps`}
+          aria-label={`Current step ${quickSetupStepNumber(step)}: ${current.title}. ${open ? "Hide" : "Show"} all steps`}
           onClick={() => setOpen((value) => !value)}
           className="h-auto w-full justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-left font-normal whitespace-normal"
         >
           <span className="min-w-0">
             <span className="block text-xs text-muted-foreground">
-              Step {step} of {quickSetupSteps.length}
+              Step {quickSetupStepNumber(step as QuickSetupStepId)} of{" "}
+              {quickSetupSteps.length}
             </span>
             <span className="block text-sm font-medium">
               {stepDisplayTitle(current)}
@@ -304,7 +265,7 @@ function StepNavigation({
                     type="button"
                     variant="ghost"
                     aria-current={active ? "step" : undefined}
-                    aria-label={`Step ${item.id}: ${item.title}`}
+                    aria-label={`Step ${quickSetupStepNumber(item.id)}: ${item.title}`}
                     disabled={item.id > step && forwardBlocked}
                     onClick={() => select(item.id, true)}
                     className={`h-auto w-full justify-start gap-2.5 rounded-none border-y-0 border-r-0 border-l-2 px-3 py-2 text-left font-normal whitespace-normal ${
@@ -313,7 +274,9 @@ function StepNavigation({
                         : "border-l-transparent text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    <span className="w-4 text-xs tabular-nums">{item.id}</span>
+                    <span className="w-4 text-xs tabular-nums">
+                      {quickSetupStepNumber(item.id)}
+                    </span>
                     <span className="min-w-0 text-sm">
                       {stepDisplayTitle(item)}
                     </span>
@@ -334,7 +297,7 @@ function StepNavigation({
                 variant="ghost"
                 size="sm"
                 aria-current={active ? "step" : undefined}
-                aria-label={`Step ${item.id}: ${item.title}`}
+                aria-label={`Step ${quickSetupStepNumber(item.id)}: ${item.title}`}
                 disabled={item.id > step && forwardBlocked}
                 onClick={() => select(item.id)}
                 className={`h-auto w-full justify-start gap-2.5 rounded-none border-y-0 border-r-0 border-l-2 px-2 py-1.5 text-left font-normal whitespace-normal ${
@@ -343,7 +306,9 @@ function StepNavigation({
                     : "border-l-transparent text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <span className="w-4 text-xs tabular-nums">{item.id}</span>
+                <span className="w-4 text-xs tabular-nums">
+                  {quickSetupStepNumber(item.id)}
+                </span>
                 <span className="min-w-0 text-sm">
                   {stepDisplayTitle(item)}
                 </span>
@@ -353,59 +318,6 @@ function StepNavigation({
         })}
       </ol>
     </nav>
-  );
-}
-
-function TechnicalDetails({ children }: { children?: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="border-t border-border/70 pt-4">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="-ml-2.5 text-muted-foreground"
-      >
-        Technical details
-      </Button>
-      {open && (
-        <div className="mt-2 space-y-3 text-xs leading-relaxed text-muted-foreground">
-          {children}
-          <p>{quickSetupSourcePolicy}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ExpandableExplanation({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="px-2 pb-2">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="-ml-2.5 h-7 text-xs text-muted-foreground"
-      >
-        {label}
-      </Button>
-      {open && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {children}
-        </p>
-      )}
-    </div>
   );
 }
 
@@ -424,20 +336,30 @@ function DetailRow({
   );
 }
 
-export function QuickSetupWorkspace({
+function QuickSetupWorkspaceContent({
   visible = true,
   profile,
   connected,
-  onOpenInspection,
   onOpenProfile,
 }: {
   profile: ServerProfile;
   connected: boolean;
   visible?: boolean;
-  onOpenInspection: () => void;
   onOpenProfile?: (profileId: string) => void;
 }) {
   const fieldPrefix = useId();
+  const packages = useSetupPackages();
+  const statuses = useConnectionStatuses(visible && connected);
+  const currentStatus = statuses.data?.find(
+    (item) => item.profileId === profile.id,
+  );
+  const authentication = statuses.data?.find(
+    (item) => item.profileId === profile.id,
+  )?.authenticationMethod;
+  const [finished, setFinished] = useState(false);
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [securityVerified, setSecurityVerified] = useState(false);
+  const [securityDraftChanged, setSecurityDraftChanged] = useState(false);
   const { connectionId } = useConfiguration();
   const [initial] = useState(() => {
     const loaded = readQuickSetupDraft(profile.id);
@@ -462,6 +384,13 @@ export function QuickSetupWorkspace({
   function commit(next: QuickSetupDraft) {
     const clean = sanitizeQuickSetupDraft(next);
     if (!clean) return;
+    if (
+      draft &&
+      JSON.stringify(draft.access) !== JSON.stringify(clean.access)
+    ) {
+      setSecurityVerified(false);
+      setSecurityDraftChanged(true);
+    }
     setDraft(clean);
     setInvalid(false);
     writeQuickSetupDraft(profile.id, clean);
@@ -470,7 +399,8 @@ export function QuickSetupWorkspace({
     if (draft) commit(mutate(draft));
   }
   function changeStep(step: QuickSetupStepId) {
-    if (!draft) return;
+    if (!draft || securityBusy) return;
+    setFinished(false);
     commit({ ...draft, step });
     setUsernameText(draft.administrator.username);
     setPortText(String(draft.access.port));
@@ -558,16 +488,11 @@ export function QuickSetupWorkspace({
   const forwardBlocked = Boolean(usernameError || portError);
   const draftKey = quickSetupDraftKey(profile.id);
   const noDraftStorage = draftKey === null;
-  const firewallPlan = resolveQuickSetupFirewallPlan(draft, profile.port);
 
   let stepContent: ReactNode;
   if (draft.step === 1) {
     stepContent = (
-      <StepSection
-        step={1}
-        title="Connect and inspect"
-        description="Review the saved profile, then open the inspection view when you are ready. Nothing connects automatically."
-      >
+      <StepSection step={1} title="Connection overview" description="">
         <dl className="divide-y divide-border/70 border-y border-border/70">
           <DetailRow label="Profile">{profile.name}</DetailRow>
           <DetailRow label="Address">
@@ -576,22 +501,35 @@ export function QuickSetupWorkspace({
           <DetailRow label="Connection">
             {connected ? "Connected" : "Disconnected"}
           </DetailRow>
+          <DetailRow label="Authentication">
+            {!connected
+              ? "Disconnected"
+              : authentication === "password"
+                ? "Password"
+                : authentication === "key"
+                  ? "SSH key"
+                  : authentication === "agent"
+                    ? "SSH agent"
+                    : authentication === "none"
+                      ? "No authentication required"
+                      : "Unknown"}
+          </DetailRow>
+          <DetailRow label="Administrator">
+            {profile.username === "root"
+              ? "Root account"
+              : currentStatus?.setupAccessVerified
+                ? "Sudo verified"
+                : "Sudo access needs verification"}
+          </DetailRow>
           <DetailRow label="Saved key">
             {profile.identityFile || "SSH agent / default keys"}
           </DetailRow>
         </dl>
-        <Button type="button" variant="outline" onClick={onOpenInspection}>
-          Open server inspection
-        </Button>
       </StepSection>
     );
-  } else if (draft.step === 2) {
+  } else if (draft.step === 3) {
     stepContent = (
-      <StepSection
-        step={2}
-        title="Administrator"
-        description="Choose a separate account or an existing administrator. Sudo access is not verified."
-      >
+      <StepSection step={3} title="Administrator & SSH key" description="">
         <ChoiceGroup label="Administrator choice">
           {(["new", "existing"] as const).map((mode) => (
             <ChoiceRow
@@ -604,11 +542,6 @@ export function QuickSetupWorkspace({
                 }))
               }
               label={adminModeLabels[mode]}
-              description={
-                mode === "new"
-                  ? "A separate sudo-capable account."
-                  : "An existing account with unknown privileges."
-              }
             />
           ))}
         </ChoiceGroup>
@@ -649,39 +582,8 @@ export function QuickSetupWorkspace({
             {usernameError}
           </p>
         )}
-        <div className="space-y-2 border-t border-border/70 pt-4">
-          {draft.administrator.mode === "new" ? (
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              The sudo password for this new account is entered in the SSH key
-              step's Apply and verify access review, where it is used once and
-              never saved. A new account is created on supported Debian 12+ or
-              Ubuntu 22.04+ servers.
-            </p>
-          ) : (
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              The existing account is adopted only after an explicit review. Its
-              password, groups, sudoers and existing keys are never reset or
-              overwritten. Its sudo password is entered in the Apply and verify
-              access review.
-            </p>
-          )}
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Account creation, adoption, public-key installation and
-            key-plus-sudo verification are in the SSH key step. SSH port, sshd
-            key-only policy and firewall changes are not applied.
-          </p>
-        </div>
-      </StepSection>
-    );
-  } else if (draft.step === 3) {
-    stepContent = (
-      <StepSection
-        step={3}
-        title="SSH key"
-        description="Choose how you will sign in."
-      >
         <ChoiceGroup label="SSH key strategy">
-          {(["existing", "generate", "agent"] as const).map((strategy) => (
+          {(["existing", "generate"] as const).map((strategy) => (
             <div key={strategy}>
               <ChoiceRow
                 selected={draft.sshKey.strategy === strategy}
@@ -693,11 +595,7 @@ export function QuickSetupWorkspace({
                   )
                 }
                 label={keyStrategyLabels[strategy]}
-                description={keyStrategyDescriptions[strategy]}
               />
-              <ExpandableExplanation label="What this means">
-                {keyStrategyExplanations[strategy]}
-              </ExpandableExplanation>
             </div>
           ))}
         </ChoiceGroup>
@@ -747,14 +645,10 @@ export function QuickSetupWorkspace({
     );
   } else if (draft.step === 4) {
     stepContent = (
-      <StepSection
-        step={4}
-        title="SSH and firewall"
-        description="Choose the target port and firewall plan. Neither proves provider or recovery readiness."
-      >
+      <StepSection step={4} title="SSH & firewall" description="">
         <div className="max-w-40 space-y-1.5">
           <label htmlFor={`${fieldPrefix}-port`} className="block text-sm">
-            Target SSH port
+            SSH port
           </label>
           <Input
             id={`${fieldPrefix}-port`}
@@ -787,10 +681,6 @@ export function QuickSetupWorkspace({
             {portError}
           </p>
         )}
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          High ports such as 52,022 are suggestions only. Check collisions and
-          ephemeral ranges on the server.
-        </p>
         <ChoiceGroup label="Firewall choice">
           {(["configure", "keep-current"] as const).map((choice) => (
             <ChoiceRow
@@ -805,28 +695,12 @@ export function QuickSetupWorkspace({
               label={ufwLabels[choice]}
               description={
                 choice === "configure"
-                  ? "Plan an allow rule before restrictive policy."
-                  : "Make no UFW plan; provider rules remain unknown."
+                  ? "Allow selected inbound ports."
+                  : "Leave existing rules unchanged."
               }
             />
           ))}
         </ChoiceGroup>
-        <div className="divide-y divide-border/70 border-y border-border/70">
-          <CheckRow
-            id={`${fieldPrefix}-recovery-acknowledged`}
-            label="I understand that provider firewall access, IPv4/IPv6 reachability and out-of-band recovery readiness are unverified."
-            checked={draft.access.recoveryAcknowledged}
-            onToggle={() =>
-              update((current) => ({
-                ...current,
-                access: {
-                  ...current.access,
-                  recoveryAcknowledged: !current.access.recoveryAcknowledged,
-                },
-              }))
-            }
-          />
-        </div>
         <QuickSetupFirewallControls
           draft={draft}
           currentPort={profile.port}
@@ -837,11 +711,7 @@ export function QuickSetupWorkspace({
     );
   } else if (draft.step === 5) {
     stepContent = (
-      <StepSection
-        step={5}
-        title="Application stack"
-        description="Choose what to install. Existing workloads are not inspected."
-      >
+      <StepSection step={5} title="Application stack" description="">
         <ChoiceGroup label="Application stack">
           {(["dokploy", "javascript", "containers", "skip"] as const).map(
             (choice) => (
@@ -850,14 +720,35 @@ export function QuickSetupWorkspace({
                 selected={draft.stack.choice === choice}
                 onClick={() => chooseStack(choice)}
                 label={stackLabels[choice]}
-                description={stackDescriptions[choice]}
+                status={
+                  choice === "skip" ? undefined : choice === "containers" ? (
+                    <QuickSetupPackageStatus
+                      id={draft.stack.engine ?? "containers"}
+                    />
+                  ) : (
+                    <QuickSetupPackageStatus
+                      id={choice === "javascript" ? "javascript-pm2" : choice}
+                      dependencies={
+                        choice === "javascript"
+                          ? ["nvm-node"]
+                          : choice === "dokploy"
+                            ? ["docker"]
+                            : []
+                      }
+                    />
+                  )
+                }
               />
             ),
           )}
         </ChoiceGroup>
         {draft.stack.choice !== "dokploy" && draft.stack.choice !== "skip" && (
           <div className="space-y-2">
-            <p className="text-sm font-medium">Container engine (optional)</p>
+            <p className="text-sm font-medium">
+              {draft.stack.choice === "containers"
+                ? "Container engine"
+                : "Container engine (optional)"}
+            </p>
             <fieldset aria-label="Container engine" className="min-w-0">
               <legend className="sr-only">Container engine</legend>
               <div className="grid grid-cols-3 gap-1.5">
@@ -892,7 +783,12 @@ export function QuickSetupWorkspace({
                       }
                       className="h-auto min-w-0 justify-between gap-2 rounded-none border border-border/70 px-2.5 py-2 text-left font-normal whitespace-normal aria-pressed:border-primary aria-pressed:text-foreground"
                     >
-                      <span className="min-w-0 text-sm">{option.label}</span>
+                      <span className="min-w-0 text-sm">
+                        {option.label}
+                        {option.value && (
+                          <QuickSetupPackageStatus id={option.value} />
+                        )}
+                      </span>
                       <span
                         aria-hidden="true"
                         className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${
@@ -921,11 +817,7 @@ export function QuickSetupWorkspace({
     );
   } else if (draft.step === 6) {
     stepContent = (
-      <StepSection
-        step={6}
-        title="Developer tools"
-        description="Choose the editor and utilities to plan. Existing configuration is preserved."
-      >
+      <StepSection step={6} title="Developer tools" description="">
         <div className="space-y-2">
           <p className="text-sm font-medium">Editor</p>
           <ChoiceGroup label="Editor">
@@ -940,17 +832,18 @@ export function QuickSetupWorkspace({
                     }))
                   }
                   label={editorLabels[editor]}
-                  description={editorDescriptions[editor]}
-                />
-                <PlannedSourceDisclosure
-                  entryId={
-                    editor === "none"
-                      ? ""
-                      : editor === "lazyvim"
-                        ? "lazyvim-starter"
-                        : editor
+                  status={
+                    editor === "none" ? undefined : (
+                      <QuickSetupPackageStatus
+                        id={editor === "lazyvim" ? "lazyvim-starter" : "neovim"}
+                        dependencies={
+                          editor === "lazyvim"
+                            ? ["neovim", "git", "ripgrep", "fd"]
+                            : []
+                        }
+                      />
+                    )
                   }
-                  className="px-2"
                 />
               </div>
             ))}
@@ -967,15 +860,24 @@ export function QuickSetupWorkspace({
                 <CheckRow
                   id={`${fieldPrefix}-utility-${id}`}
                   label={quickSetupCatalog[id].label}
-                  hint={
-                    id === "herdr"
-                      ? quickSetupHerdr.reason
-                      : quickSetupCatalog[id].description
+                  status={<QuickSetupPackageStatus id={id} />}
+                  checked={
+                    draft.tools.utilities.includes(id) ||
+                    (draft.tools.editor === "lazyvim" &&
+                      ["git", "ripgrep", "fd"].includes(id))
                   }
-                  checked={draft.tools.utilities.includes(id)}
+                  disabled={
+                    draft.tools.editor === "lazyvim" &&
+                    ["git", "ripgrep", "fd"].includes(id)
+                  }
+                  requiredNote={
+                    draft.tools.editor === "lazyvim" &&
+                    ["git", "ripgrep", "fd"].includes(id)
+                      ? "Required by LazyVim."
+                      : undefined
+                  }
                   onToggle={() => toggleUtility(id)}
                 />
-                <PlannedSourceDisclosure entryId={id} />
               </div>
             ))}
           </div>
@@ -984,11 +886,7 @@ export function QuickSetupWorkspace({
     );
   } else if (draft.step === 7) {
     stepContent = (
-      <StepSection
-        step={7}
-        title="Runtimes"
-        description="Choose user-scoped runtimes. Required dependencies are included once."
-      >
+      <StepSection step={7} title="Runtimes" description="">
         <div className="grid gap-3 md:grid-cols-2">
           {runtimeGroups.map((group) => {
             const headingId = `${fieldPrefix}-runtime-group-${group.id}`;
@@ -1001,9 +899,7 @@ export function QuickSetupWorkspace({
                 <h3 id={headingId} className="text-sm font-medium">
                   {group.title}
                 </h3>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  {group.description}
-                </p>
+
                 <div className="mt-1 divide-y divide-border/70">
                   {group.runtimes.map((id) => {
                     const required = requiredRuntimes.includes(id);
@@ -1013,7 +909,7 @@ export function QuickSetupWorkspace({
                         key={id}
                         id={`${fieldPrefix}-runtime-${id}`}
                         label={quickSetupCatalog[id].label}
-                        hint={quickSetupCatalog[id].description}
+                        status={<QuickSetupPackageStatus id={id} />}
                         requiredNote={
                           required ? "Required by JavaScript / PM2." : undefined
                         }
@@ -1028,134 +924,79 @@ export function QuickSetupWorkspace({
             );
           })}
         </div>
-        {draft.stack.choice === "javascript" && (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            NVM + Node.js is required by JavaScript / PM2 and is included once.
-          </p>
-        )}
-        {draft.tools.editor === "lazyvim" && (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            LazyVim adds Git, ripgrep and fd once.
-          </p>
-        )}
       </StepSection>
     );
-  } else {
-    stepContent = (
-      <StepSection
-        step={8}
-        title="Review and finish"
-        description="Saved choices for this server. Server provisioning has not been applied."
+  }
+
+  if (finished) {
+    const groups = [
+      { step: 5 as const, label: "Application stack" },
+      { step: 6 as const, label: "Developer tools" },
+      { step: 7 as const, label: "Runtimes" },
+    ];
+    return (
+      <section
+        aria-label="Quick Setup completion"
+        className="mx-auto max-w-[780px] space-y-5"
       >
-        <section aria-labelledby={`${fieldPrefix}-review-access`}>
-          <h3
-            id={`${fieldPrefix}-review-access`}
-            className="text-sm font-medium"
-          >
-            Access
-          </h3>
-          <dl className="divide-y divide-border/70 border-y border-border/70">
-            <DetailRow label="Target">
-              {profile.name} · {profile.username}@{profile.host}:{profile.port}
-            </DetailRow>
-            <DetailRow label="Connection">
-              {connected ? "Connected" : "Disconnected"}
-            </DetailRow>
-            <DetailRow label="Administrator">
-              {draft.administrator.username} ·{" "}
-              {adminModeLabels[draft.administrator.mode]}
-            </DetailRow>
-            <DetailRow label="SSH key">{keySelectionSummary(draft)}</DetailRow>
-            <DetailRow label="SSH port">{draft.access.port}</DetailRow>
-            <DetailRow label="Firewall">
-              {ufwLabels[draft.access.ufw]}
-            </DetailRow>
-            <DetailRow label="Planned rules">
-              {firewallPlan.apply
-                ? firewallPlan.rules.length
-                  ? firewallPlan.rules
-                      .map(
-                        (rule) =>
-                          `${rule.port}/${rule.protocol}${rule.protected ? " (protected)" : ""}`,
-                      )
-                      .join(", ")
-                  : "None"
-                : "No planned changes · choices retained"}
-            </DetailRow>
-            <DetailRow label="Rule sources">
-              {firewallPlan.apply ? "Any IPv4/IPv6 (planned)" : "Not planned"}
-            </DetailRow>
-            <DetailRow label="Default policy">
-              {firewallPlan.apply
-                ? "Inbound deny · outbound allow"
-                : "Current policy retained"}
-            </DetailRow>
-            <DetailRow label="Recovery">
-              {draft.access.recoveryAcknowledged
-                ? "Acknowledged · not a verified recovery check"
-                : "Not acknowledged"}
-            </DetailRow>
-          </dl>
-        </section>
-        <section aria-labelledby={`${fieldPrefix}-review-application`}>
-          <h3
-            id={`${fieldPrefix}-review-application`}
-            className="text-sm font-medium"
-          >
-            Application
-          </h3>
-          <dl className="divide-y divide-border/70 border-y border-border/70">
-            <DetailRow label="Stack">
-              {stackLabels[draft.stack.choice]}
-            </DetailRow>
-            <DetailRow label="Container engine">
-              {draft.stack.engine
-                ? quickSetupCatalogLabel(draft.stack.engine)
-                : "None"}
-            </DetailRow>
-          </dl>
-        </section>
-        <section aria-labelledby={`${fieldPrefix}-review-tools`}>
-          <h3
-            id={`${fieldPrefix}-review-tools`}
-            className="text-sm font-medium"
-          >
-            Tools
-          </h3>
-          <dl className="divide-y divide-border/70 border-y border-border/70">
-            <DetailRow label="Editor">
-              {editorLabels[draft.tools.editor]}
-            </DetailRow>
-            <DetailRow label="Utilities">
-              {draft.tools.utilities.length
-                ? draft.tools.utilities
-                    .map((id) => quickSetupCatalogLabel(id))
-                    .join(", ")
-                : "None"}
-            </DetailRow>
-            <DetailRow label="Runtimes">
-              {draft.runtimes.length
-                ? draft.runtimes
-                    .map((id) => quickSetupCatalogLabel(id))
-                    .join(", ")
-                : "None"}
-            </DetailRow>
-          </dl>
-        </section>
-        <QuickSetupResolvedSources items={plan.items} />
-        {plan.missing.map((message) => (
-          <p key={message} role="status" className="text-xs text-warning">
-            {message}
-          </p>
-        ))}
-        <p
-          role="status"
-          className="text-sm leading-relaxed text-muted-foreground"
-        >
-          Administrator access is applied and verified separately in the SSH key
-          step. SSH port, login-policy and UFW changes remain pending.
+        <h1 className="text-xl font-semibold">Setup summary</h1>
+        <p className="text-sm text-muted-foreground">
+          {profile.username}@{profile.host}:{profile.port}
         </p>
-      </StepSection>
+        <ul className="divide-y border-y text-sm">
+          <li className="flex items-center justify-between gap-3 py-3">
+            <span>Administrator & SSH key</span>
+            <Button variant="ghost" size="sm" onClick={() => changeStep(3)}>
+              Check access
+            </Button>
+          </li>
+          <li className="flex items-center justify-between gap-3 py-3">
+            <span>
+              SSH & firewall ·{" "}
+              {securityVerified ||
+              (!securityDraftChanged && currentStatus?.setupAccessVerified)
+                ? "Verified"
+                : "Unfinished"}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => changeStep(4)}>
+              Continue
+            </Button>
+          </li>
+          {groups.map((group) => {
+            const selected = stepItems({ ...draft, step: group.step });
+            const installed = selected.filter(
+              (item) =>
+                packages.items.find((row) => row.id === item.id)?.status ===
+                "installed",
+            ).length;
+            return (
+              <li
+                key={group.step}
+                className="flex items-center justify-between gap-3 py-3"
+              >
+                <span>
+                  {group.label} ·{" "}
+                  {selected.length
+                    ? `${installed}/${selected.length} installed`
+                    : "Skipped"}
+                </span>
+                {installed < selected.length && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => changeStep(group.step)}
+                  >
+                    Continue
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <Button variant="outline" onClick={() => changeStep(1)}>
+          Back to setup
+        </Button>
+      </section>
     );
   }
 
@@ -1179,27 +1020,57 @@ export function QuickSetupWorkspace({
           onChange={changeStep}
         />
         <div className="min-w-0 max-w-[620px] space-y-6">
-          {stepContent}
-          <QuickSetupExecution
-            profile={profile}
-            draft={draft}
-            visible={visible}
-            onStep={changeStep}
-          />
-          <TechnicalDetails />
+          <fieldset
+            disabled={packages.busy || securityBusy}
+            className="min-w-0 border-0 p-0"
+          >
+            {stepContent}
+          </fieldset>
+          <div hidden={draft.step !== 4}>
+            <QuickSetupSecurity
+              profile={profile}
+              draft={draft}
+              visible={visible && draft.step === 4}
+              onBusyChange={setSecurityBusy}
+              onVerified={setSecurityVerified}
+              onChange={(access) =>
+                update((current) => ({ ...current, access }))
+              }
+              onOpenProfile={onOpenProfile}
+            />
+          </div>
+          {draft.step >= 5 && (
+            <QuickSetupPackages
+              key={draft.step}
+              profile={profile}
+              draft={draft}
+              visible={visible}
+            />
+          )}
           <footer className="flex items-center justify-between gap-3 border-t border-border/70 pt-4">
             <Button
               type="button"
               variant="ghost"
-              disabled={draft.step === 1}
-              onClick={() => changeStep((draft.step - 1) as QuickSetupStepId)}
+              disabled={draft.step === 1 || securityBusy}
+              onClick={() =>
+                changeStep(
+                  quickSetupSteps[
+                    Math.max(0, quickSetupStepNumber(draft.step) - 2)
+                  ].id,
+                )
+              }
             >
               Back
             </Button>
-            {draft.step === 8 ? (
-              <p className="text-xs text-muted-foreground">
-                Saved preview only.
-              </p>
+            {draft.step === 7 ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setFinished(true)}
+                disabled={packages.busy || securityBusy}
+              >
+                Finish
+              </Button>
             ) : (
               <div className="flex flex-wrap items-center gap-3">
                 {forwardBlocked ? (
@@ -1210,9 +1081,13 @@ export function QuickSetupWorkspace({
                 ) : null}
                 <Button
                   type="button"
-                  disabled={forwardBlocked}
+                  disabled={forwardBlocked || securityBusy}
                   onClick={() =>
-                    changeStep((draft.step + 1) as QuickSetupStepId)
+                    changeStep(
+                      quickSetupSteps[
+                        Math.min(5, quickSetupStepNumber(draft.step))
+                      ].id,
+                    )
                   }
                 >
                   Next step
@@ -1223,5 +1098,20 @@ export function QuickSetupWorkspace({
         </div>
       </div>
     </section>
+  );
+}
+
+export function QuickSetupWorkspace(
+  props: Parameters<typeof QuickSetupWorkspaceContent>[0],
+) {
+  const { connectionId } = useConfiguration();
+  return (
+    <QuickSetupPackageProvider
+      key={`${props.profile.id}:${props.profile.revision}:${connectionId ?? "disconnected"}`}
+      profile={props.profile}
+      visible={props.visible ?? true}
+    >
+      <QuickSetupWorkspaceContent {...props} />
+    </QuickSetupPackageProvider>
   );
 }

@@ -9,17 +9,19 @@ export const quickSetupDraftMaxLength = 4096;
 export const quickSetupInvalidDraftSentinel =
   "vps-pilot:quick-setup-draft-invalid";
 
+// Keep persisted IDs stable so existing VPS drafts and access progress survive.
 export const quickSetupSteps = [
-  { id: 1, title: "Connect and inspect" },
-  { id: 2, title: "Administrator" },
-  { id: 3, title: "SSH key" },
-  { id: 4, title: "SSH and firewall" },
+  { id: 1, title: "Connection overview" },
+  { id: 3, title: "Administrator & SSH key" },
+  { id: 4, title: "SSH & firewall" },
   { id: 5, title: "Application stack" },
   { id: 6, title: "Developer tools" },
   { id: 7, title: "Runtimes" },
-  { id: 8, title: "Review and finish" },
 ] as const;
-export type QuickSetupStepId = (typeof quickSetupSteps)[number]["id"];
+export type QuickSetupStepId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export function quickSetupStepNumber(id: QuickSetupStepId) {
+  return quickSetupSteps.findIndex((step) => step.id === id) + 1;
+}
 
 export const quickSetupUtilities = [
   "git",
@@ -99,6 +101,8 @@ export interface QuickSetupDraft {
     port: number;
     ufw: QuickSetupUfwChoice;
     recoveryAcknowledged: boolean;
+    passwordLogin?: boolean;
+    rootLogin?: boolean;
     allowHttp: boolean;
     allowHttps: boolean;
     rules: QuickSetupFirewallRule[];
@@ -321,7 +325,13 @@ export function sanitizeQuickSetupDraft(
 
   const access = value.access;
   if (!isRecord(access)) return null;
-  const optionalAccessKeys = ["allowHttp", "allowHttps", "rules"] as const;
+  const optionalAccessKeys = [
+    "allowHttp",
+    "allowHttps",
+    "rules",
+    "passwordLogin",
+    "rootLogin",
+  ] as const;
   const presentOptionalAccessKeys = optionalAccessKeys.filter((key) =>
     Object.keys(access).includes(key),
   );
@@ -342,6 +352,9 @@ export function sanitizeQuickSetupDraft(
     typeof access.recoveryAcknowledged !== "boolean" ||
     (allowHttp !== undefined && typeof allowHttp !== "boolean") ||
     (allowHttps !== undefined && typeof allowHttps !== "boolean") ||
+    (access.passwordLogin !== undefined &&
+      typeof access.passwordLogin !== "boolean") ||
+    (access.rootLogin !== undefined && typeof access.rootLogin !== "boolean") ||
     firewallRules === null
   )
     return null;
@@ -389,7 +402,11 @@ export function sanitizeQuickSetupDraft(
 
   return {
     version: 1,
-    step: value.step as QuickSetupStepId,
+    step: (value.step === 2
+      ? 3
+      : value.step === 8
+        ? 7
+        : value.step) as QuickSetupStepId,
     administrator: {
       mode: administrator.mode as QuickSetupAdminMode,
       username: administrator.username,
@@ -406,6 +423,12 @@ export function sanitizeQuickSetupDraft(
       allowHttp: allowHttp === true,
       allowHttps: allowHttps === true,
       rules: firewallRules,
+      ...(access.passwordLogin === undefined
+        ? {}
+        : { passwordLogin: access.passwordLogin as boolean }),
+      ...(access.rootLogin === undefined
+        ? {}
+        : { rootLogin: access.rootLogin as boolean }),
     },
     stack: {
       choice: stack.choice as QuickSetupStackChoice,
