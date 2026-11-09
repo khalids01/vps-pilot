@@ -527,7 +527,9 @@ pub async fn ssh_setup_packages_prepare(
     identity(&service, &source).await?;
     let _lease = lease(&state, source.profile_id.clone())?;
     if source.kind == "firewall-apply" {
-        return Err("Use the SSH/firewall transaction with independent access verification.".into());
+        return Err(
+            "Use the SSH/firewall transaction with independent access verification.".into(),
+        );
     }
     let key = if let Some(intent) = &source.security {
         let profile = identity(&service, &source).await?;
