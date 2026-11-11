@@ -27,3 +27,29 @@ test("all supported installers have permanent latest-release download links",asy
   const names=["VPS-Pilot-linux-x64.deb","VPS-Pilot-linux-x64.AppImage","VPS-Pilot-linux-x64.rpm","VPS-Pilot-windows-x64-setup.exe","VPS-Pilot-windows-x64.msi","VPS-Pilot-macos-apple-silicon.dmg","VPS-Pilot-macos-intel.dmg"];
   for(const name of names)await expect(page.locator('#downloads a[href$="/'+name+'"]')).toHaveCount(1);
 });
+
+test("landing page uses generated local app screenshots and a single clear hero",async({page})=>{
+  const external:string[]=[];
+  page.on("request",request=>{
+    const url=new URL(request.url());
+    if(url.origin!=="http://127.0.0.1:1430")external.push(request.url());
+  });
+  await page.goto("/website/");
+  await expect(page.locator("h1")).toHaveCount(1);
+  await expect(page.locator(".product-frame img")).toHaveAttribute("src","assets/screenshots/overview.png");
+  await expect(page.locator(".preview")).toHaveCount(0);
+  await expect(page.locator("blockquote")).toHaveCount(0);
+  await page.locator("#screenshots").scrollIntoViewIfNeeded();
+  await page.waitForFunction(()=>[...document.images].every(image=>image.complete));
+  const images=page.locator("main img");
+  const count=await images.count();
+  expect(count).toBeGreaterThanOrEqual(5);
+  for(let index=0;index<count;index++){
+    const image=images.nth(index);
+    await expect(image).toHaveAttribute("alt",/./);
+    expect(await image.evaluate(element=>(element as HTMLImageElement).naturalWidth)).toBeGreaterThan(1000);
+  }
+  expect(external).toEqual([]);
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

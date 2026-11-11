@@ -12,7 +12,8 @@
     "lint": "biome lint .",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "update-readme": "bun run scripts/update-readme.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

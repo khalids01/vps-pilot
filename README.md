@@ -1,598 +1,148 @@
 # VPS Pilot
 
-A Tauri 2 desktop app using React and TypeScript for verified SSH connections,
-interactive terminal tabs/splits, SFTP files and reviewed text editing, and read-only Linux inspection. It supports
-passwords, private keys, encrypted keys, Unix agents, and SSH config discovery.
-Real server workspaces remain separate from clearly labeled sample workspaces.
+A desktop workspace for Linux VPS servers. VPS Pilot combines verified SSH
+connections, split terminals, live health, SFTP files, Docker management and a
+six-step provisioning wizard in one Tauri 2 app. Each server keeps its own tabs,
+sessions, charts and command activity, and the exact command behind every app
+action stays visible.
 
-**App-triggered changes are disabled in Rust in normal builds.** You can connect
-an important VPS for terminals and read-only inspections without enabling software
-installation, service changes, proxy edits, firewall changes, or cleanup. Commands
-you manually enter in an interactive terminal behave normally. No saved tab or
-layout reconnects, opens a shell, or replays a command automatically.
+![VPS Pilot server fleet](docs/screenshots/fleet-home.png)
+
+## Download
+
+Installers are published with every complete GitHub Release. These links always
+resolve to the latest published version; the page does not call the GitHub API.
+
+| Platform | Downloads |
+| --- | --- |
+| Linux x64 | [DEB](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-linux-x64.deb) · [AppImage](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-linux-x64.AppImage) · [RPM](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-linux-x64.rpm) |
+| Windows x64 | [Installer](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-windows-x64-setup.exe) · [MSI](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-windows-x64.msi) |
+| macOS | [Apple Silicon](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-macos-apple-silicon.dmg) · [Intel](https://github.com/khalids01/vps-pilot/releases/latest/download/VPS-Pilot-macos-intel.dmg) |
+
+All releases include `SHA256SUMS.txt` and immutable versioned assets.
+Windows installers are unsigned. macOS builds use ad-hoc signing and are not
+notarized.
+
+## What it does
+
+- **Multiple servers, isolated workspaces.** Fleet home organizes saved servers
+  by project, tag, environment and favorite. Each open VPS tab owns its own
+  terminal sessions, monitoring history, file browser and command console.
+- **Verified SSH access.** Compare host fingerprints before authentication, use
+  passwords, private keys, encrypted keys, a Unix agent or SSH config discovery,
+  and keep every connection independent. Credentials remain transient.
+- **Split remote terminals.** Open up to 12 SSH PTYs per VPS, split right or down,
+  group tabs, rename and maximize. Sessions survive navigation; restored layouts
+  never reconnect or replay commands automatically.
+- **Live health over SSH.** One lightweight Python sampler reads Linux `/proc`
+  and `/sys/block` counters for CPU, memory, root filesystem, disk I/O and
+  network at 1, 2 or 5 seconds. There is no daemon, listener or package install.
+- **Read-only Linux inspections.** Overview, software, Docker, proxy, services,
+  storage, firewall, network and processes produce timestamped tables and cards.
+  Missing tools and permissions stay visible as partial results.
+- **SFTP files and reviewed edits.** Browse, filter, select, copy, move, rename,
+  upload, download and create folders. Delete moves to private server trash with
+  session restore. Reviewed saves keep a protected backup and reject stale files.
+- **Docker in the same window.** Inspect containers, Compose projects, details,
+  one-shot stats, bounded live logs and container shells. Reviewed lifecycle,
+  deployment, resource and cleanup actions protect volumes, mounted data and
+  infrastructure workloads.
+- **Six-step Quick Setup.** Connection overview, administrator and SSH key,
+  SSH/firewall migration, application stack, developer tools and runtimes. Each
+  step applies its own changes with explicit command approvals and verification.
+
+## Screenshots
+
+`bun run update-readme` captures these views from the real React app with a
+strictly mocked desktop bridge and synthetic local data. It writes the PNGs to
+`docs/screenshots/` and copies the same files to `website/assets/screenshots/`.
+
+| Live overview | Docker inventory |
+| --- | --- |
+| ![Live server overview](docs/screenshots/overview.png) | ![Docker containers and inspector](docs/screenshots/docker.png) |
+
+| Remote files and editor | Terminal workspace |
+| --- | --- |
+| ![SFTP file browser with an open Compose file](docs/screenshots/files.png) | ![Remote terminal sessions](docs/screenshots/terminal.png) |
+
+## Current limits
+
+VPS Pilot is an early preview. The important boundaries are explicit:
+
+- Generic app-triggered systemd, proxy and firewall mutations remain disabled in
+  Rust in normal builds. Reviewed SFTP writes, Docker management and the narrow
+  `setup-provisioning` capability are separate, enabled policies.
+- Quick Setup accepts Debian 12/13 and Ubuntu 22.04/24.04/26.04/26.10 on
+  x86_64/arm64. Full provisioning and SSH/UFW recovery were validated on
+  Debian 12 arm64; every other accepted combination still needs release
+  validation.
+- Live monitoring requires Linux `/proc`, `/sys/block` and Python 3 for the SSH
+  user. Other Linux distributions are not certified by the current fixture.
+- SFTP text editing is UTF-8 and limited to 1 MiB per file, 32 MiB per transfer
+  and 1,000 directory entries. Existing-file replacement requires the OpenSSH
+  atomic-rename extension.
+- Docker lifecycle and cleanup require Python 3 and access to the host's local
+  Unix-socket Docker engine. Image builds and volume deletion are not enabled.
+- Native Tauri/WebKit interaction, sustained terminal throughput and the full
+  supported-distribution matrix still need release QA.
+- Passwords, private-key contents, terminal output and per-second metrics are
+  never stored in SQLite. Saved tabs do not reconnect automatically.
+
+See [supported systems and validation boundaries](agents/supported-systems.md)
+for the full matrix.
 
 ## Development
 
-Prerequisites: Bun, Rust, and Tauri 2 platform dependencies (WebKitGTK 4.1 and build tools on Linux).
-
-- `bun install --frozen-lockfile`
-- `bun run tauri dev` — desktop development
-- `bun run dev` — browser preview on localhost:1430
-- `bun run check` — formatting and lint checks
-- `bun run build` — frontend production build and typecheck
-- `bun test` — layout, preferences, measurement parsing and conflict-rule tests
-- `bun run test:e2e` — browser tests with a mocked desktop bridge
-- `cargo check --manifest-path src-tauri/Cargo.toml --locked` — Rust validation
-- `cargo test --manifest-path src-tauri/Cargo.toml --lib` — native tests using disposable local SSH fixtures
-- `bun run tauri build` — desktop build
-
-Run either desktop development or browser preview at a time. `bun run tauri dev`
-starts Vite itself; stop an existing browser preview with Ctrl+C before launching
-it. Both use port 1430.
-
-## Test Appearance and configuration discovery
-
-Run `bun run tauri dev` from this repository for real SSH testing. Browser preview
-has no native SSH bridge; automated browser scenarios supply their own fixtures.
-
-The tool sidebar uses the shared shadcn/Base UI sidebar components. It is 256 px
-wide when expanded and collapses to a 56 px icon rail using the button at the
-left of the stats bar. Collapse state survives restarts; tabs, terminal sessions
-and stats stay in place. Mobile navigation opens below the headers. The footer
-shows the running app version and, when available, the current/new update versions.
-
-Quick Setup now opens an eight-step wizard. Choose an administrator, key strategy,
-SSH/firewall preferences, application stack, editor and runtimes, then inspect the
-final summary. Draft choices are saved per server across restarts; the header
-shows Saving, Saved or a retryable save error. Saved means the latest document
-write was acknowledged. Failed writes retain the latest choices in memory for
-retry; unsaved choices cannot be guaranteed after a crash. Draft choices do not
-verify access or authorize provisioning. Invalid username/port fields block
-forward navigation. A corrupt/newer saved draft requires an explicit reset.
-Dokploy requires Docker; JavaScript/PM2 requires NVM/Node; LazyVim adds its shared
-dependencies once. Server provisioning remains unavailable until its recovery
-and installation adapters are validated. See [the provisioning plan](agents/quick-setup.md).
-
-**Administrator** selects a new or existing non-root account. With a connected
-root profile on Debian 12+ or Ubuntu 22.04+, the SSH key step now offers a reviewed
-administrator preparation action. A new account receives a sudo password only
-through encrypted SSH stdin; adopting an existing account never resets its
-password or changes its groups. Standard account tools, sudo and Python 3 must
-already be available. Unsafe or occupied new-home paths are refused.
-
-Prepare the administrator, review installation of the public key for that
-account, then choose **Apply and verify access**. A separate pinned-host,
-selected-key-only SSH connection must authenticate and prove sudo to root.
-**Promote administrator access** saves and opens that still-connected session as
-a separate profile, carrying over nonsecret setup choices. The original root
-profile and its sessions remain available. A failed verification cannot promote;
-a failed profile write retains the candidate for an explicit retry while its
-proof is valid. Passwords/passphrases are transient. Saved progress never
-restores a live proof after restart; verification must be repeated.
-
-This access increment keeps the current SSH port and does not reboot the server,
-disable password/root login or apply UFW changes. Those migration/recovery
-adapters remain pending, as do application/tool installation adapters.
-
-**SSH and firewall** shows proposed protected current/target SSH allow rules,
-HTTP/HTTPS choices and up to 16 custom TCP/UDP rules. Choices survive restarts;
-they do not apply UFW changes or report live/provider firewall state. **Keep the
-current firewall** plans no changes. **Review** displays package sources and
-official links directly; Application Stack keeps its choices free of source
-controls. Exact versions, checksums and commands still require installer review.
-Runtimes are grouped into JavaScript/TypeScript (Bun, Node.js through NVM),
-Python (uv, Python) and Go cards. Additional optional tools
-include tmux, bat, eza, rsync and direnv, all off by default.
-
-On Unix desktops, **SSH key → Generate a new key** creates an Ed25519 pair in
-`~/.ssh`. Choose a filename; its availability is checked against both the private
-file and its `.pub` partner, with conflicts shown below the input. Native creation
-rechecks and never overwrites either file, even after a successful UI check.
-Both passphrase fields may be empty for an unencrypted private key. A nonempty
-passphrase encrypts the file; keep it separately because the app cannot recover
-it. Backup labels reflect the actual protection state. Backup destinations are
-also never overwritten. The setup draft stores only an opaque key ID.
-
-**Use an existing key → Choose private key** opens the native file picker. Select
-a supported OpenSSH private key rather than its `.pub` file. Its contents and
-permissions are preserved; protected native metadata remembers the reference
-after restart and detects a changed key. No private bytes or passphrases enter
-SQLite or command history. Existing keys outside `~/.ssh` remain in place.
-Older keys in the app's `setup-keys` vault remain available. **Put in ~/.ssh**
-explicitly copies a legacy key into the standard directory, preserving its ID
-and original copy; conflicting destinations are refused.
-**Reload keys** discovers stored keys after a restart, including a generation
-that finished after leaving the step. Resetting a draft does not delete keys.
-Key generation is unavailable on Windows until native ACL support is implemented.
-Creating or selecting a local key does not install it on the server or prove
-SSH login works. Fully restart the desktop development app after native changes.
-
-For a selected key, **Test key on current connection** tests the current saved
-profile account and port in a separate SSH connection using that key alone.
-The planned administrator and port appear separately; **Verify new access**
-remains unavailable until provisioning adapters can apply those changes.
-Encrypted keys prompt for
-their passphrase; unencrypted keys do not. The original connection stays open.
-The server must already accept the public key for that account/port. A rejection
-does not change server settings or disable password authentication. A successful
-current-access test does not verify planned access, establish sudo access,
-disable passwords, or verify firewall recovery.
-
-If the selected public key is not installed yet, choose **Install public key**.
-Review the connected account, destination, fingerprint and backup plan, then
-confirm. On supported Linux servers with Python 3, this appends only the public
-key to that account's default `~/.ssh/authorized_keys`. Existing keys/options and
-file permissions are preserved, with a protected backup of an existing file.
-Unsafe files or changed review evidence are refused. An existing restricted key
-is not duplicated as an unrestricted entry. Custom `AuthorizedKeysFile` routes
-are not detected. Private keys and passphrases stay on your computer.
-
-Installation uses the existing authenticated connection and does not change
-password authentication, ports, the SSH daemon or firewall. Run **Test key on
-current connection** afterward; installation alone does not prove login.
-Application of the reviewed command and its result appear in the command console.
-
-After verification, choose an alias and **Review SSH config**, then explicitly
-**Save to SSH config**. The native preview contains only the proposed app-owned
-entry. Existing config bytes are backed up before replacement; unrelated entries
-are preserved, and collisions, unsafe files, stale reviews and unsupported config
-constructs are refused. Verification/reviews expire and are not restored after a
-restart. Saved keys and the saved config entry remain on disk. Config
-export does not replace the active app profile or automatically reconnect it.
-The connection picker can discover the saved alias. Native tests use temporary
-homes and loopback SSH servers, never your actual SSH directory or VPS.
-
-1. Open **Settings → Appearance**, choose Tokyo Night, One Dark Pro or GitHub
-   Dark, then check menus, inputs, an open terminal and an editor. Fully quit and
-   relaunch: the selected theme should return. Profiles and preferences should
-   remain; saved tabs do not reconnect automatically.
-2. Open a direct Linux SSH connection you control and verify its host fingerprint.
-   For the widest current detection coverage, use Debian/Ubuntu with Python 3
-   already installed. Missing tools or permissions should produce qualified
-   evidence, without installing anything.
-3. Open **Quick Setup**, then **Open server inspection**. Before pressing
-   **Inspect server**, it should show no inspection. Click once, then use
-   **View details** beside a category. Check
-   its observation time, grouped package versions/ownership, cached update
-   information and security units in the side panel. Escape closes the panel;
-   related tool links navigate without running another inspection.
-   Missing update metadata means unknown, rather than zero updates. Selection
-   review summarizes evidence; it does not apply configuration changes.
-4. Visit **SSH Access** and **Firewall**. They should reuse that snapshot. SSH
-   separates saved settings, server policy, local users and authorized public-key
-   fingerprints. Only the authenticated account's standard authorized_keys file
-   is inspected; comments, raw key blobs and restriction values are hidden.
-   Fingerprint presence does not prove a working login. Firewall evidence must
-   distinguish UFW/listeners from unknown cloud rules and Docker effects.
-5. Switch to Home, another VPS and back. The observation time should stay the
-   same, and existing shells should survive navigation. **Refresh configuration**
-   explicitly requests another snapshot. Disconnect/reconnect: earlier evidence
-   should be labeled stale until refreshed. The per-server Command console records
-   completion/partial summaries without persisting snapshot values.
-6. During an inspection or refresh, **Cancel inspection** cancels collection for
-   that request. **Canceling…** stays disabled while it settles. An older snapshot
-   keeps its timestamp and values; canceling the first inspection leaves it
-   uninspected. A failed cancellation is shown explicitly and can be retried.
-   Running shells stay open, and a new inspection requires an explicit click.
-   Fast inspections may finish before you can click Cancel; automated browser
-   fixtures hold requests open to exercise these cases reproducibly.
-7. After a successful inspection, select **Users and SSH** and **Essential
-   software**, then **Review selection**. The readiness review should show the
-   source observation time, review expiry, evidence blockers and next steps.
-   Even ready evidence cannot enable applying changes. **Recheck review** checks
-   the existing review against the current connection and cached snapshot; it
-   does not inspect the server again. Reviews expire after two minutes;
-   **Retry review** explicitly creates a new review. Source evidence older than
-   five minutes requires closing the dialog and refreshing the inspection.
-   Refreshing, reconnecting or changing the selection invalidates older reviews.
-
-Do not test SSH/firewall changes or installations against an important VPS.
-Those new workflows remain disabled pending recovery validation. Existing Files
-and Docker management have separate write policies; they are not needed for
-this walkthrough.
-
-Manrope is bundled locally for consistent typography without a network connection.
-
-## Review real SSH connections
-
-1. Run `bun tauri dev` and click **+**. **Connections** lists SSH config
-   entries and app-saved profiles; **New connection** opens the form. Paste
-   `ssh deploy@example.com -p 2222 -i ~/.ssh/deploy` and select **Fill details**,
-   or enter the fields yourself. Opening a workspace does not connect automatically.
-2. Select **Connect**. For a new host, independently compare its SHA256
-   fingerprint with a trusted source before accepting it.
-3. Leave **Password** blank to use your SSH agent, selected private key, or
-   default `~/.ssh/id_ed25519` / `~/.ssh/id_rsa`. If your server needs a password,
-   enter it. Encrypted keys have a separate **Key passphrase** field. The host
-   key is checked again before authentication. Neither credential is saved.
-4. Switch VPS tabs to check connection isolation. Disconnect explicitly, or close
-   the real tab and confirm disconnect. Saved profiles remain available.
-
-Connections alone do not open shells or run commands. Select Terminal and New
-shell to request a remote PTY, or select Inspect in a tool to run its fixed
-read-only inspection. Real tabs show measured data and never use sample metrics.
-The browser preview cannot make real SSH connections because it has no native bridge.
-
-Direct password, private-key, Unix SSH-agent, and server-supported `none`
-authentication are available. With an explicit identity, the agent is restricted
-to that key; otherwise up to three agent identities and two default key files
-are tried. Certificates, jump hosts, MFA/keyboard-interactive,
-and replacing a changed trusted host key remain later work. Changed host keys block
-authentication. Host pins belong to VPS Pilot; system `known_hosts` is unchanged.
-
-The picker reads `~/.ssh/config` and Include files using `ssh2-config`.
-Wildcards supply defaults, not individual rows. Refresh reloads the read-only list.
-Opening a config entry saves a metadata copy; later config edits do not change it.
-HostName, User, Port, the first IdentityFile, and the password-authentication policy
-are imported. Proxy/jump/interface requirements remain blocked. Match conditions,
-include cycles, and parse errors stop config discovery without hiding app profiles.
-Config commands are never executed; private keys are read only during an explicitly
-requested, host-verified authentication attempt.
-
-Command paste accepts a destination or config alias, `-p`, `-l`, `-i`, and SSH URLs.
-Quoted absolute key paths and `~/` paths are supported. Relative key paths require
-an absolute path so the app can locate them. Shell expansion, operators, remote
-commands, tunnels, and other SSH options are rejected. Pasted text only fills the
-form: it is never executed, recorded in command history, or saved as a command.
-Adding, editing, and deleting app profiles never writes to SSH config.
-
-Profiles and public host fingerprints are stored in `ssh-profiles.json` inside
-Tauri's app configuration directory. Unix files use mode 0600. Corrupt or externally
-changed storage is preserved; restart after another instance changes the file.
-No saved profile reconnects automatically after an application restart.
-
-## Real terminals and inspections
-
-The compact server header keeps connection state and the current action policy visible;
-**Connection details** reveals host, user, port and key metadata. Inspection results
-use resource cards, usage bars, and searchable/sortable tables with pagination.
-Permission failures and incomplete results are shown beside the affected section.
-
-A persistent **Command console** bar sits at the bottom of every real VPS
-workspace. Expand it for action status, readable inspection summaries, duration
-and cancellation. **Technical details** reveals the exact command and raw
-output. Drag the top separator to resize, or focus it and use Arrow Up/Down,
-Home or End. Height and collapsed state are saved separately for each server;
-commands and output are never saved with those preferences. Its recent history
-follows the selected server across tools; background monitoring has a separate
-group. History and output remain in memory only and are cleared when the
-workspace closes or the app restarts. Privileged approval dialogs still show
-the exact proposed command before approval.
-
-- Open Terminal on a connected real VPS, then New shell. Add tabs or split
-  right/down; drag panels to group them. Rename, previous/next, maximize/restore,
-  and confirmed closing are available. Up to 12 SSH streams per VPS are allowed.
-- Tool and VPS navigation preserves sessions. Restored layout panes have no live
-  SSH session until Start shell is selected. Disconnect ends channels; remote
-  child processes may continue running, so inspect before retrying work.
-- Overview, Software, Docker, Proxy, Services, Storage, Firewall, Network and
-  Processes have fixed read-only inspections. Missing tools and permission errors
-  remain visible as partial results. CPU usage needs two completed samples.
-- Live monitoring starts for each open, connected VPS by default, with 1-, 2-, or 5-second
-  intervals. Inventory snapshots refresh only on request. Snapshots are scoped
-  to their server, timestamped, and marked stale while disconnected.
-- Reviewed reads provide numbered UFW rules, the last 200 service/container log
-  lines and one-level directory scans that do not cross filesystem boundaries.
-  Logs and scans can contain sensitive application output; nothing is persisted.
-- Every sudo read requires a fresh approval showing server, exact command and
-  purpose, including when sudo authorization is cached. Passwords travel only
-  through SSH stdin after a sudo prompt. A missing/wrong password ends the attempt.
-- Software preflight includes Herdr, Docker/Compose, proxies, Dokploy and runtimes.
-  It reports conflicts and missing evidence, including stopped-container port
-  reservations. It does not install software or authorize a mutation.
-
-Command output is bounded; interactive output uses acknowledgements for
-backpressure. Cancellation reports that a remote process may still be running.
-Layouts and tool preferences store metadata only, without terminal input/output
-or credentials. Native controls reject another server's stream IDs.
-
-See [supported systems](agents/supported-systems.md), [the implementation
-plan](agents/plan.md), and [disposable fixture instructions](tests/fixtures/README.md).
-The fixture-tested systemd mutator is disabled in normal builds. Software changes,
-proxy changes, firewall changes and general system cleanup still need their
-ownership/recovery checks and disposable VM/VPS validation before being enabled.
-Dedicated reviewed Docker management/cleanup is fixture-validated as described
-below; the generic Docker-change endpoint remains disabled.
-The important user VPS must never be used as a destructive test fixture.
-
-## Review the terminal workspace
-
-Run `bun tauri dev` and select Terminal on Production or Staging. Output is
-read-only sample text; these sample tabs never start SSH connections or commands.
-
-1. Open shells or logs, split right/down, and drag tabs into another group.
-2. Resize a divider, select a session, rename it, and maximize/restore its group.
-3. Switch tools and VPS tabs; each VPS keeps its own sessions and layout.
-4. Restart the preview or close/reopen a VPS tab to restore its saved layout.
-5. Close all sample sessions, open a new one, or reset the layout with confirmation.
-
-Only layout metadata is saved locally. Terminal output is never saved. Reset
-affects only the selected VPS. Development shows the disconnected state.
-
-## Review workspace and helper flows
-
-- Drag a VPS tab by its grip. For keyboard reordering, focus the grip, press
-  Space, use arrow keys, then Space to drop or Escape to cancel.
-- Switch tools and Software categories, hide command output, then restart. Open
-  tabs, their order, the selected VPS, and each VPS's view preferences return.
-- Open Server helper and choose a sample state to inspect install/update/removal
-  reviews. Update and removal acknowledgments reset when each review closes.
-- Development demonstrates saved helper information while disconnected.
-- Manual helper removal shows a command-format placeholder. No verified command
-  exists yet, so copying and execution are disabled.
-
-TanStack Query and file-based TanStack Router are wired into the app. Zustand is available for future client state. Tailwind 4, shadcn/Base UI, Lucide, and Biome match Disk Vacuum's stack. Global styles copy its exact dark green theme. Shared Button, Input, Select, and Dialog components are ready to use.
-
-See [agents/goal.md](agents/goal.md) for product scope and safeguards. Release/updater setup is documented above; mutating server-management integrations remain gated. The app uses the user-selected VPS Pilot icon.
-
-## Landing page and downloads
-
-The independent static landing page lives in `website/`. Preview it with
-`python3 -m http.server 4174 --directory website`.
-Its download buttons use permanent GitHub latest-release URLs for all seven
-installer formats. Visitor browsers do not fetch a manifest or call the GitHub
-API, so stale metadata cannot select an older release.
-
-`.github/workflows/pages.yml` deploys that directory on main-branch changes.
-Set repository **Settings → Pages → Source** to **GitHub Actions**.
-The live custom domain is https://vpspilot.skycanvasstudio.com/.
-The custom domain is configured in GitHub Pages settings.
-
-### Publishing a desktop release
-
-1. Match versions in `package.json`, `src-tauri/tauri.conf.json`, and
-   `src-tauri/Cargo.toml` (including the Cargo lockfile).
-2. Run the checks below and commit the intended release changes.
-3. Push to `main` (or run the release workflow manually on main).
-
-The release workflow builds Linux x64 (DEB, RPM, AppImage), Windows x64
-(NSIS and MSI), and macOS Apple Silicon / Intel (DMG). It checks version
-consistency, frontend checks/tests, and native tests before packaging.
-All platform jobs upload to a draft; only a complete set is published, with
-`SHA256SUMS.txt`. A failed matrix leaves the draft unpublished.
-Each main-branch push builds an immutable release tag such as
-`v0.1.0-build.12`, bound to that commit. The successful release workflow then
-deploys the site with its download manifest, retaining the previous download
-release until the complete platform set succeeds. No manual tag is required.
-
-Release builds require VPS Pilot updater signing credentials; see the setup below.
-Windows packages are unsigned; macOS packages are ad-hoc signed, not notarized.
-Updater signing is separate from OS distribution signing.
-
-For a local Linux package: `bun tauri build --bundles deb,appimage`.
-Installers are written beneath `src-tauri/target/release/bundle/`.
-
-## Lightweight live metrics
-
-Connect a VPS and live metrics start automatically for its open workspace. Hover a
-badge for its label; click CPU, RAM, storage, disk I/O, or network to open the
-floating resource panel. Overview shows the same measurements as charts.
-The Settings page offers 1s, 2s, and 5s intervals; there is no additional sampler for
-charts, tooltips, or detail views.
-
-The target needs Linux /proc, /sys/block, and Python 3 available to the SSH user.
-VPS Pilot starts one Python process as the authenticated SSH user over the existing connection,
-with isolated startup, site-package hooks disabled, and no bytecode-cache writes.
-Nothing is uploaded or installed, no listener is opened, and no sudo is used.
-The process stops on SSH input EOF or after 30 seconds without requests.
-Missing prerequisites report an error; the app never installs them automatically.
-
-CPU, memory, base-device disk counters, and one network interface are sampled.
-Root filesystem capacity is cached for 60 seconds. The sampler does not enumerate
-processes, services, packages, containers, or directories. Network prefers the
-default IPv4 route's interface, with a non-loopback fallback; it is not a sum of
-virtual interfaces. Disk I/O excludes partitions and stacked/virtual devices to
-reduce double counting, and is not limited to the root filesystem.
-
-Each open, connected VPS keeps its sampler and chart history while you visit
-Home, Settings, or other VPS tabs. Whole-window inactivity pauses sampling;
-returning retains chart history. The saved monitoring preference applies after
-restart, but saved servers never automatically reconnect.
-Failed streams retry with 5–60 second backoff. Slow samples reduce the refresh
-rate, requests never overlap, and desktop acknowledgements bound delivery.
-Counter history is limited to 180 samples in memory; reconnects reset rate
-baselines. The command console retains only the latest counters for the sampler.
-
-See [monitoring validation](agents/monitoring-validation.md) for local benchmark
-results, the resource budget, and the limits of that evidence.
-
-## In-app updates
-
-VPS Pilot checks for signed updates after launch. Use **Check for updates** in the
-Settings to check manually, review release notes, or update and restart.
-Updating closes SSH connections and terminal sessions; finish your work first.
-See [self-updater setup](docs/self-updater.md) for signing credentials, release
-versions, supported installers, and validation requirements.
-
-### Local settings and data
-
-The desktop app always creates `vps-pilot.sqlite3` in its OS application-config
-directory. It uses bundled SQLite with one small versioned documents table.
-No database server, account, or VPS installation is needed.
-
-The Settings gear opens a dedicated page for automatic live stats, 1/2/5-second
-refresh intervals, visible CPU/RAM/storage/disk/network stats, and app zoom.
-Zoom also supports Ctrl/Cmd + plus/minus, Ctrl/Cmd + 0, and Ctrl/Cmd + scroll.
-These choices survive a restart. Hiding all stats stops sampling. The header
-uses larger fixed-width values and two columns for download/upload speeds.
-
-Saved SSH profiles and trusted host fingerprints migrate from the existing JSON
-file. Workspace tabs, tools, sanitized terminal layouts, and the skipped update
-version migrate from existing browser preferences. The old sources are retained;
-SQL data takes precedence afterward. Restored layouts never reconnect or replay
-commands. Passwords, private-key contents, terminal output, commands, and live
-metric samples are not saved to SQLite. Read or write errors are reported rather
-than silently resetting saved data. See [local database notes](agents/local-database.md).
-
-### Managing a fleet
-
-Use the Home button to see all saved servers grouped by project. Organize each
-server with a project, comma-separated tags, Production/Staging/Development
-environment, and favorite. Arrow buttons reorder servers within each project's
-favorite group. Search matches names, addresses, projects, tags and environments;
-the connection picker shares this organization and puts favorites first.
-Organization is stored locally without changing connection profiles or closing
-running terminals.
-
-Fleet health is explicitly cached and timestamped. It comes from monitoring in open connected
-workspaces, which continues while you browse Home; opening or refreshing fleet
-home never connects or scans additional servers. Fresh desktop installations start here, while existing workspaces keep
-their restored server selection.
-
-Press **Ctrl/Cmd + K** or the search button to open the command palette. Type a
-server, project/tag, or tool name, use arrow keys, and press Enter to navigate.
-Escape closes the palette. Choosing a server or tool does not connect it, open a
-shell, or execute an inspection. Existing terminal sessions stay mounted while
-you visit fleet home, Settings, or another server.
-
-
-### Remote Files
-
-Open **Files** in a connected VPS workspace. It loads root once, including hidden
-files. Use breadcrumbs, back/forward/up, or enter an absolute path and select
-**Go**. Listings stay open across Home/tools/VPS tabs and are capped at 1,000
-entries. Choose list/grid view, filter, or sort by name, size or modified time.
-Folder totals are calculated only when requested; cached totals show their
-observation time and whether the scan was incomplete.
-
-Click to open; checkboxes and Ctrl/Cmd-click select, Shift selects a range, and dragging empty
-space draws a selection rectangle. Copy/Cut/Paste also support Ctrl/Cmd+C/X/V.
-Move, rename, folder creation, paste and Delete require a server/path review.
-Existing destinations are never overwritten by these operations. **Delete moves
-to private server trash**, with a restore action for the latest result during
-the same SSH session. Trash retains disk space and is never automatically purged;
-copies remain at the reported paths after disconnecting.
-
-**Cancel operation** stops remaining work after the current bounded SFTP request;
-completed changes remain. Failed copies may retain a private stage, reported in
-the result. There is no automatic retry. System directories and their ancestors,
-login/credential paths, known database/container storage, and internal backup/
-staging/trash paths are protected by Rust. Moving/deleting mounted storage or a
-folder containing a mount point is blocked, using read-only Linux mount data.
-
-Single-click or press Enter to open a regular UTF-8 text file (up to 1 MiB) in the themed CodeMirror editor.
-JSON/YAML highlighting, line numbers, search and undo are available. Drafts stay
-in memory across tools, Home and VPS tabs. Changing/closing a dirty file asks
-before discarding. Save before closing the app; drafts are never stored in SQLite
-or command history.
-
-**Review changes** (or Ctrl/Cmd+S in the editor) shows the exact target and a diff before **Back up and save**.
-Native reviews expire after two minutes and are bound to the server connection,
-file revision and proposed bytes. Files are checked again before replacement.
-Existing owner/mode are preserved; ACLs, extended attributes and special mode bits
-are not supported for replacement. Editing does not validate app configuration or
-reload a service. System directories, SSH credentials and internal backups are
-protected from app writes.
-
-Backups are named in the review and success message, in a private adjacent
-`.vps-pilot-backup-<name>-<id>/original` file. The folder is mode 700 and
-Git-ignored; its original copy is mode 600. Staging also uses private Git-ignored
-folders. Failed/interrupted operations can retain a backup or staging folder;
-verify the destination before retrying. No backup is silently pruned.
-
-**Upload** selects a local file through the native file picker and requires a
-destination review; existing files get the same backup/stale checks. **Download**
-uses a native save dialog. **Download ZIP** supports selected files/folders, up
-to 100 roots, 10,000 entries and 256 MiB per batch; individual files are limited
-to 32 MiB. ZIP archives skip symlinks and reject special devices. Recursive copy
-preserves symlinks without following them, ordinary permission bits, and excludes
-private backup/staging/trash subtrees. Copies use the SSH user's ownership and
-do not preserve ACLs/xattrs. Folder scans have a 20-second budget. Directory paths
-are canonicalized. Existing-file replacement requires OpenSSH's atomic rename
-extension. SFTP runs as your authenticated SSH user without sudo or a helper.
-See [Files implementation notes](agents/files.md).
-
-
-Files uses compact breadcrumbs (Edit folder path reveals the address input),
-search and list/grid controls. Right-click an item for Open, Download, Copy,
-Cut, Rename, Move, View details or Move to trash; right-click empty space for
-folder actions. The overflow menu provides the same actions without right-click.
-Right-clicking a selected item preserves the whole selection. View details
-shows metadata in a side panel; folder sizes are calculated there on request.
-Per-item download/calculation controls and permission columns are hidden.
-Terminal/editor context behavior remains unchanged.
-
-### Docker workspace
-
-Open Docker to load containers automatically. Inventory includes stopped containers,
-state/health text, published ports and Compose project/service groups. There is
-no automatic Docker polling. Open a container for configuration, mounts and
-environment names; values are masked by the remote Docker format before SSH
-transmits them. Command arguments and health-check output are not requested.
-**Refresh resource snapshot** reads one CPU/memory/I/O/PID snapshot explicitly.
-
-**Review live logs** previews the exact server/container command before following
-the last 200 lines. The remote follow process has a 55-second limit; the existing
-client stream also enforces time, output and acknowledgment limits. The display
-retains at most 64 KiB. Stop closes that stream without disconnecting SSH. Log
-contents stay in the view, outside SQLite and command activity output.
-
-**Open container terminal** checks the full ID and current running state and
-opens an interactive /bin/sh using Docker's configured container user. There is
-no sudo or fallback to a host shell. Images without /bin/sh report the CLI error.
-Container terminals remain mounted across Home/tools/VPS navigation, with at most
-four container workspaces per VPS. Their layouts are not persisted or restored
-automatically. Normal terminal close confirmation and stream limits apply.
-
-Commands use the SSH user's effective Docker CLI context and socket permissions.
-No Docker daemon is installed or Docker group membership changed. Reviewed start/stop/restart and Docker management now use a separate native,
-engine-bound protocol validated in a disposable VM. The legacy generic action
-endpoint remains disabled. No volume deletion, force removal or system prune is
-provided. Images and volume inspections remain under Docker diagnostics.
-
-Docker's supported formatting functions are documented at
-[Docker CLI formatting](https://docs.docker.com/engine/cli/formatting/).
-
-
-Docker management adds **Run application**, **Images**, **Volumes**, **Networks**,
-**Cleanup** and **Activity** views. Start/stop/restart, image pulls and creation of
-bridge networks/volumes show fresh server/engine evidence before execution.
-Resource tabs load one shared inventory automatically on first visit.
-Use Refresh for newer data; switching tabs or returning Home does not reload it.
-
-Deploy through the form or Compose editor, or explicitly load an existing server
-Compose file into the in-memory editor. Create the application folder in Files
-first. Validation checks normalized configuration, resolved local image IDs,
-port reservations/listeners, protected paths and host privileges. Images must
-already be pulled; builds are not enabled. Existing configuration gets a private
-backup, and Activity can load that backup into the editor for a new review.
-Deployment waits for readiness for up to 20 seconds. This is configuration
-recovery, not automatic image/database rollback; external concurrent writers are
-not locked out.
-
-Cleanup considers only unreferenced untagged images, unused non-Compose bridge
-networks and eligible standalone stopped containers older than seven days.
-Mounted, infrastructure and orchestrator-managed containers remain protected.
-Removing a container also removes its writable layer/logs: back up needed files
-before confirming removal. All volumes and rollback image holds are protected.
-Cleanup groups images, stopped containers, networks and build cache; protected
-items stay hidden until requested. Select up to 20 eligible resources, review
-the exact list and type DELETE N. Cancel stops remaining steps and preserves
-completed outcomes. Per-item results distinguish removals, skipped items and
-uncertain outcomes.
-
-Advanced **Docker system prune** has its own review and typed PRUNE confirmation.
-It uses a fixed seven-day cutoff, leaves --all off by default and never removes
-volumes. It refuses possible scope that includes protected stopped workloads,
-managed networks or rollback-held images. Build cache is included; cache mounts
-can be cleared and future builds can take longer. Docker has no atomic dry run
-or exclusions against concurrent administrators. Once submitted, system prune
-cannot be canceled safely. Resource/cache sizes are estimates with shared layers;
-only Docker-reported reclaimed space is shown as an actual result. These paths
-were validated in the private disposable VM, including real BuildKit cache and
-preservation of volumes and running infrastructure.
-
-Plans bind the connection, profile revision, Docker engine, resource evidence and
-configuration hashes; they expire after two minutes and are single-use.
-Execution rechecks them. Mutations require a local Unix-socket engine on the SSH
-host, Python 3 and Docker/Compose access. Interruption can leave changes applied;
-inspect uncertain results before retrying. Operations are serialized per VPS;
-Activity retains bounded metadata in memory, without config/secrets/output in
-SQLite. Log search and pause affect only the cached display.
-
-
-Website download buttons use permanent GitHub latest-release installer filenames.
-Every release uploads all seven fixed-name copies and includes them in checksums
-before marking itself latest. Immutable versioned installers and signed updater
-URLs are preserved. The page does not fetch a download manifest or call the GitHub API at all, so
-cached or unavailable metadata cannot pin the buttons to an old build.
+Prerequisites: Bun, Rust, and Tauri 2 platform dependencies (WebKitGTK 4.1 and
+build tools on Linux).
+
+```sh
+bun install --frozen-lockfile
+bun run tauri dev          # desktop development
+bun run dev                # browser preview at http://localhost:1430
+bun run check              # Biome formatting and lint
+bun run build              # frontend production build and typecheck
+bun test                   # focused unit tests
+bun run test:e2e           # browser tests with a mocked desktop bridge
+bun run update-readme      # regenerate docs and website screenshots
+cargo check --manifest-path src-tauri/Cargo.toml --locked
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+bun run tauri build        # desktop packages
+```
+
+Run either desktop development or browser preview at a time; both use port 1430.
+The browser preview cannot make real SSH connections because it has no native
+bridge. Automated browser scenarios supply synthetic fixtures.
+
+## More documentation
+
+- [Application guide](docs/app-guide.md) — detailed workflows, safety behavior
+  and earlier increment notes.
+- [Quick Setup product direction](agents/quick-setup.md) and
+  [product goal](agents/goal.md).
+- [Implementation plan](agents/plan.md), [monitoring validation](agents/monitoring-validation.md)
+  and [disposable test fixtures](tests/fixtures/README.md).
+- [Self-updater setup](docs/self-updater.md) and [release notes](release-notes.md).
+
+## Landing page and releases
+
+The static product site lives in `website/` and is deployed to GitHub Pages from
+`main` by `.github/workflows/pages.yml`. Preview it locally with:
+
+```sh
+python3 -m http.server 4174 --directory website
+```
+
+Set repository **Settings → Pages → Source** to **GitHub Actions**. The live
+domain is <https://vpspilot.skycanvasstudio.com/>. The site uses permanent
+latest-release installer URLs and does not fetch download metadata in the
+visitor's browser.
+
+`.github/workflows/screenshots.yml` refreshes the product screenshots on relevant
+`main` changes and on manual dispatch, committing only generated PNGs when they
+change and deploying the updated website. It requires permission to push to
+`main`; branch rules that prevent bot commits will require a local capture and
+normal pull request instead. Install Chromium once with
+`bunx playwright install --with-deps chromium` before the first local capture.
+`.github/workflows/release.yml` builds all seven installer formats and publishes
+a release only after every platform artifact and checksum succeeds.

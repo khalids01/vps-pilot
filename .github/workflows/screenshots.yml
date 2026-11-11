@@ -1,0 +1,80 @@
+name: Update product screenshots
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "package.json"
+      - "bun.lock"
+      - "vite.config.ts"
+      - "index.html"
+      - "tests/screenshots/**"
+      - "playwright.screenshots.config.ts"
+      - "scripts/update-readme.ts"
+      - ".github/workflows/screenshots.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ steps.save.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run update-readme
+      - name: Commit changed screenshot outputs
+        id: save
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for name in fleet-home overview docker files terminal; do
+            git add -- "docs/screenshots/$name.png" "website/assets/screenshots/$name.png"
+          done
+          if git diff --cached --quiet; then
+            echo "Screenshots unchanged."
+            exit 0
+          fi
+          unexpected="$(git diff --cached --name-only | grep -Ev '^(docs/screenshots|website/assets/screenshots)/(fleet-home|overview|docker|files|terminal)\.png$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "Refusing to commit paths outside the screenshot allowlist:"
+            echo "$unexpected"
+            exit 1
+          fi
+          git fetch origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "Main changed during capture. Rerun to capture the current app."
+            exit 1
+          fi
+          git commit -m "chore: refresh product screenshots [skip ci]"
+          git push origin HEAD:main
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: update
+    if: needs.update.outputs.commit != ''
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      release_tag: ""
+      source_ref: ${{ needs.update.outputs.commit }}

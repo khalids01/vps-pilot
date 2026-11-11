@@ -1,20 +1,221 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#08110e">
-<meta name="description" content="A desktop workspace for your Linux servers. SSH terminals, clear resource reports, and a command console that keeps you informed.">
-<title>VPS Pilot — Your servers, in view</title>
-<link rel="icon" href="assets/icon.png"><link rel="stylesheet" href="styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#07120d">
+<meta name="description" content="VPS Pilot is a Tauri desktop workspace for Linux VPS servers: verified SSH, live health, split terminals, SFTP files, Docker and guided provisioning.">
+<title>VPS Pilot — A desktop workspace for Linux servers</title>
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="styles.css">
 <script src="downloads.js" defer></script>
 </head>
 <body>
-<header class="wrap"><a class="brand" href="#"><img src="assets/icon.png" alt="">VPS Pilot</a><nav aria-label="Main"><a href="#workspace">Workspace</a><a href="#safety">Safety</a><a href="#download">Download</a><a href="https://github.com/khalids01/vps-pilot">GitHub ↗</a></nav></header>
-<main>
-<section class="hero wrap"><div class="eyebrow">A DESKTOP HOME FOR YOUR VPS</div><h1>Your servers.<br><span>A clearer view.</span></h1><p>Keep your SSH sessions, server health, and Docker workloads together. Understand what is happening, and see the exact commands behind every app action.</p><div class="actions"><a class="button" href="#download">Get VPS Pilot <span aria-hidden="true">↓</span></a><a class="text-link" href="https://github.com/khalids01/vps-pilot">Explore the source ↗</a></div><div class="platforms">Linux · Windows · macOS <span> / </span> Early preview</div>
-<div class="preview" aria-label="Illustrative VPS Pilot workspace"><div class="tabs"><span class="active">● production</span><span>○ staging</span><span>＋</span><small>Illustrative workspace</small></div><div class="workspace"><aside><b>WORKSPACE</b><strong>◉ Overview</strong><span>▦ Docker</span><span>☷ Services</span><span>▤ Storage</span><span>›_ Terminals</span></aside><div class="screen"><div class="screen-heading"><b>Server overview</b><span>● Connected</span></div><div class="metrics"><div><small>CPU</small><b>12<span>%</span></b><i style="--usage:12%"></i></div><div><small>Memory</small><b>2.4 <span>/ 8 GB</span></b><i style="--usage:30%"></i></div><div><small>Root filesystem</small><b>38<span>%</span></b><i style="--usage:38%"></i></div></div><div class="table"><div><b>Service</b><b>Status</b></div><div><span>nginx.service</span><em>Running</em></div><div><span>docker.service</span><em>Running</em></div><div><span>ssh.service</span><em>Running</em></div></div></div></div><div class="console">⌘ Command console <span>Inspect overview · Completed</span><span>⌃</span></div></div></section>
-<section id="workspace" class="wrap section"><div class="eyebrow">LESS DIGGING. MORE UNDERSTANDING.</div><h2>One workspace for each server.</h2><div class="features"><article><span class="number">01 / CONNECT</span><h3>Keep your context.</h3><p>Switch between VPS tabs with separate terminals, inspection results, and command activity. Connect with SSH keys, an agent, or a password.</p></article><article><span class="number">02 / UNDERSTAND</span><h3>Read the server, clearly.</h3><p>Resource cards and searchable tables turn inspections into useful views. Explore containers, systemd services, storage, networks, and processes.</p></article><article><span class="number">03 / INSPECT</span><h3>See the command behind it.</h3><p>Expand the bottom console for the exact app command, live output, and exit status. Open split SSH terminals when you need a shell.</p></article></div></section>
-<section id="safety" class="wrap section safety"><div><div class="eyebrow">BUILT WITH YOUR SERVER IN MIND</div><h2>Stay informed.<br>Stay in control.</h2></div><div><p>Current builds keep app-triggered operations read-only. Privileged inspections ask for approval with the server, purpose, and exact command visible.</p><p>Interactive terminals run the commands you type with your normal SSH permissions. Installation, firewall edits, and automated cleanup are not enabled in this preview.</p><a class="text-link" href="https://github.com/khalids01/vps-pilot/blob/main/agents/supported-systems.md">Read the supported-systems guide ↗</a></div></section>
-<section id="download" class="wrap section"><div class="eyebrow">TAKE THE WORKSPACE WITH YOU</div><h2>Download VPS Pilot.</h2><p class="muted" id="release-status" role="status">Checking the latest release…</p><div class="downloads" id="downloads"></div><p class="muted">Early preview. Windows installers are unsigned; macOS builds use ad-hoc signing and are not notarized. Review your operating system’s security prompts before installing.</p><a class="text-link" href="https://github.com/khalids01/vps-pilot/releases">All releases &amp; checksums ↗</a><noscript><p>JavaScript is only needed to list downloads. <a href="https://github.com/khalids01/vps-pilot/releases">Download from GitHub Releases.</a></p></noscript></section>
-</main><footer class="wrap"><a class="brand" href="#">VPS Pilot</a><span>Built with Tauri &amp; Rust.</span><a href="https://github.com/khalids01/vps-pilot/issues">Report an issue ↗</a></footer>
-</body></html>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="#top" aria-label="VPS Pilot, back to top">
+      <img src="assets/icon.png" alt="" width="32" height="32">
+      <span>VPS Pilot</span>
+    </a>
+    <nav aria-label="Main">
+      <a href="#product">Product</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#safety">Safety</a>
+      <a href="#download">Download</a>
+      <a class="nav-github" href="https://github.com/khalids01/vps-pilot">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="wrap hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow">A desktop workspace for Linux servers</p>
+        <h1>SSH, files, and Docker.<br><span>One desktop workspace.</span></h1>
+        <p class="lead">VPS Pilot brings SSH sessions, live health, SFTP files, Docker and guided provisioning into one native desktop app. Each server keeps its own context, and the exact command behind every app action stays visible.</p>
+        <div class="hero-actions">
+          <a class="button" href="#download">Download VPS Pilot <span aria-hidden="true">↓</span></a>
+          <a class="text-link" href="https://github.com/khalids01/vps-pilot#readme">Read the documentation <span aria-hidden="true">↗</span></a>
+        </div>
+        <ul class="platform-list" aria-label="Supported desktop platforms">
+          <li>Linux x64</li>
+          <li>Windows x64</li>
+          <li>macOS Apple Silicon &amp; Intel</li>
+        </ul>
+      </div>
+
+      <figure class="product-frame">
+        <div class="frame-bar" aria-hidden="true">
+          <span class="frame-dots"><i></i><i></i><i></i></span>
+          <span>VPS Pilot · Storefront web</span>
+          <span class="frame-badge">SSH connected</span>
+        </div>
+        <img src="assets/screenshots/overview.png" width="1440" height="900" alt="VPS Pilot Overview showing live CPU, memory, storage, disk and network readings beside measured server resources.">
+        <figcaption>Live health from one lightweight SSH sampler, beside a measured server snapshot.</figcaption>
+      </figure>
+
+      <p class="hero-note">No VPS Pilot account. Connections run directly from your desktop.</p>
+    </div>
+  </section>
+
+  <section class="section wrap" id="product">
+    <div class="section-heading">
+      <p class="eyebrow">One workspace per server</p>
+      <h2>A workspace for each server.</h2>
+      <p>Open multiple VPS connections at once. Terminals, charts, files, Docker views and command activity stay scoped to the server that owns them.</p>
+    </div>
+    <div class="feature-grid">
+      <article class="feature">
+        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span>
+        <h3>Split remote terminals</h3>
+        <p>Open independent SSH PTYs, split right or down, group tabs, rename and maximize. Sessions survive navigation across tools, Home and other servers.</p>
+      </article>
+      <article class="feature">
+        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg></span>
+        <h3>Live health without an agent</h3>
+        <p>CPU, memory, root filesystem, disk I/O and network counters at 1, 2 or 5 seconds. One Python sampler runs over SSH — no daemon, listener or package install.</p>
+      </article>
+      <article class="feature">
+        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+        <h3>Verified before connected</h3>
+        <p>Compare the host fingerprint before authentication. Changed host keys block the connection. Passwords, keys and agent identities stay transient.</p>
+      </article>
+      <article class="feature">
+        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span>
+        <h3>Files with a way back</h3>
+        <p>Browse SFTP, select in groups, copy, move, rename, upload and download ZIPs. Reviewed saves keep a protected backup; Delete moves into private server trash.</p>
+      </article>
+      <article class="feature">
+        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m21 8-9-5-9 5 9 5 9-5Z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v9"/></svg></span>
+        <h3>Docker inside the workspace</h3>
+        <p>Inspect containers, Compose projects, details, one-shot stats, bounded logs and container shells. Cleanup protects volumes, mounted data and infrastructure workloads.</p>
+      </article>
+      <article class="feature">
+        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg></span>
+        <h3>Guided setup with limits in view</h3>
+        <p>A six-step Quick Setup covers administrator access, SSH keys, firewall changes, application stacks, developer tools and runtimes on supported Debian and Ubuntu systems.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section wrap" id="screenshots">
+    <div class="section-heading">
+      <p class="eyebrow">A closer look</p>
+      <h2>Real views from the desktop app.</h2>
+      <p>These screenshots are generated from the React app with synthetic server data. They are refreshed automatically when the interface changes.</p>
+    </div>
+    <div class="gallery">
+      <figure class="gallery-item">
+        <a href="assets/screenshots/fleet-home.png" aria-label="Open the server fleet screenshot">
+          <img src="assets/screenshots/fleet-home.png" width="1440" height="900" alt="Server fleet grouped by project with connection state, environment tags and cached readings." loading="lazy">
+        </a>
+        <figcaption><strong>Fleet home.</strong> Saved servers grouped by project, with timestamped cached readings from open workspaces.</figcaption>
+      </figure>
+      <figure class="gallery-item">
+        <a href="assets/screenshots/docker.png" aria-label="Open the Docker screenshot">
+          <img src="assets/screenshots/docker.png" width="1440" height="900" alt="Docker inventory with Compose containers and a container inspector showing configuration, mounts and actions." loading="lazy">
+        </a>
+        <figcaption><strong>Docker.</strong> Compose inventory, health, ports and a focused container inspector in the same workspace.</figcaption>
+      </figure>
+      <figure class="gallery-item">
+        <a href="assets/screenshots/files.png" aria-label="Open the Files screenshot">
+          <img src="assets/screenshots/files.png" width="1440" height="900" alt="SFTP file browser beside a YAML Compose file open in the reviewed text editor." loading="lazy">
+        </a>
+        <figcaption><strong>Files.</strong> SFTP browsing and a themed editor with change review and protected backups.</figcaption>
+      </figure>
+      <figure class="gallery-item">
+        <a href="assets/screenshots/terminal.png" aria-label="Open the terminal screenshot">
+          <img src="assets/screenshots/terminal.png" width="1440" height="900" alt="Split terminal workspace showing uptime and docker compose status output from a remote shell." loading="lazy">
+        </a>
+        <figcaption><strong>Terminal.</strong> Persistent remote shells with splits, tabs and the server-bound command console.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="section wrap" id="workflow">
+    <div class="section-heading">
+      <p class="eyebrow">How it fits together</p>
+      <h2>From connection to reviewed changes.</h2>
+    </div>
+    <ol class="steps">
+      <li>
+        <span class="step-number">01</span>
+        <h3>Connect with proof</h3>
+        <p>Import an SSH config entry or add a profile. Compare the host fingerprint, then use a password, private key, agent or none. Credentials are never saved.</p>
+      </li>
+      <li>
+        <span class="step-number">02</span>
+        <h3>See measured state</h3>
+        <p>Start live metrics or run a read-only inspection. Partial results and missing tools stay labeled; the app does not replace them with sample values.</p>
+      </li>
+      <li>
+        <span class="step-number">03</span>
+        <h3>Review the exact action</h3>
+        <p>Every app-triggered sudo command gets its own approval. The command console shows the command, live output and result. Separate policies cover SFTP, Docker and Quick Setup.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="section wrap safety" id="safety">
+    <div class="safety-copy">
+      <p class="eyebrow">Access and approvals</p>
+      <h2>Know what runs on your server.</h2>
+      <p>VPS Pilot treats an existing server as something to preserve. Read-only inspection, explicit reviews and visible uncertainty are defaults — not hidden settings.</p>
+      <a class="text-link" href="https://github.com/khalids01/vps-pilot/blob/main/agents/supported-systems.md">Read supported systems and limits <span aria-hidden="true">↗</span></a>
+    </div>
+    <ul class="check-list">
+      <li>Host identity is checked before authentication; changed keys block the connection.</li>
+      <li>Every app-triggered sudo command gets a fresh approval, even when sudo is cached.</li>
+      <li>The command console keeps the exact command, bounded output and result visible.</li>
+      <li>Passwords, private-key contents and terminal output stay out of local SQLite and history.</li>
+      <li>Partial, stale and unsupported evidence stays visible instead of becoming a green check.</li>
+      <li>App-managed profiles never rewrite your SSH config without a separate reviewed action.</li>
+    </ul>
+  </section>
+
+  <section class="section wrap limits" aria-labelledby="limits-title">
+    <div>
+      <p class="eyebrow">Current release</p>
+      <h2 id="limits-title">An early preview with explicit boundaries.</h2>
+    </div>
+    <div class="limits-copy">
+      <p>Generic app-triggered systemd, proxy and firewall mutations remain disabled in normal builds. Reviewed SFTP writes, Docker management and the narrow Quick Setup provisioning capability use separate policies.</p>
+      <p>Quick Setup accepts Debian 12/13 and Ubuntu 22.04/24.04/26.04/26.10 on x86_64/arm64. Full provisioning and SSH/UFW recovery were validated on Debian 12 arm64; other accepted combinations still need release validation. Live metrics require Linux <code>/proc</code> and Python 3.</p>
+      <p>Windows installers are unsigned. macOS builds use ad-hoc signing and are not notarized. Read the <a href="https://github.com/khalids01/vps-pilot/blob/main/README.md">README</a> for the complete current limits.</p>
+    </div>
+  </section>
+
+  <section class="section wrap download" id="download">
+    <div class="section-heading">
+      <p class="eyebrow">Linux, Windows, and macOS</p>
+      <h2>Download VPS Pilot.</h2>
+      <p class="muted" id="release-status" role="status">Download the latest published release.</p>
+    </div>
+    <div class="downloads" id="downloads"></div>
+    <div class="download-note">
+      <p>All links point to fixed installer names on the latest GitHub Release. The site does not fetch a manifest or call the GitHub API from your browser.</p>
+      <a class="text-link" href="https://github.com/khalids01/vps-pilot/releases">All releases &amp; checksums <span aria-hidden="true">↗</span></a>
+    </div>
+    <noscript><p>JavaScript is only needed to list downloads. <a href="https://github.com/khalids01/vps-pilot/releases">Download from GitHub Releases.</a></p></noscript>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <a class="brand" href="#top" aria-label="VPS Pilot, back to top">
+      <img src="assets/icon.png" alt="" width="28" height="28">
+      <span>VPS Pilot</span>
+    </a>
+    <p>A Tauri 2 desktop app for Linux servers.</p>
+    <nav aria-label="Footer">
+      <a href="https://github.com/khalids01/vps-pilot">GitHub</a>
+      <a href="https://github.com/khalids01/vps-pilot/issues">Report an issue</a>
+      <a href="https://github.com/khalids01/vps-pilot/blob/main/README.md">Documentation</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>

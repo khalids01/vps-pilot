@@ -6,6 +6,10 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      source_ref:
+        description: Exact source revision to deploy
+        type: string
+        required: false
       release_tag:
         description: Published release to display
         type: string
@@ -29,11 +33,19 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - name: Verify static site
         run: |
           test -f website/index.html
           test -f website/downloads.js
           test -f website/assets/icon.png
+          test -f website/assets/screenshots/overview.png
+          test -f website/assets/screenshots/fleet-home.png
+          test -f website/assets/screenshots/docker.png
+          test -f website/assets/screenshots/files.png
+          test -f website/assets/screenshots/terminal.png
+          test -f website/assets/fonts/manrope-latin-wght-normal.woff2
           ! grep -q '/src/main.tsx' website/index.html
       - name: Generate public download manifest
         uses: actions/github-script@v8
