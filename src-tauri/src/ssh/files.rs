@@ -11,7 +11,9 @@ use std::{
     io::{Read, Write},
 };
 use tauri_plugin_dialog::DialogExt;
+mod environment;
 mod operations;
+pub use environment::*;
 pub use operations::*;
 
 const TEXT_LIMIT: usize = 1024 * 1024;
@@ -637,6 +639,7 @@ impl SshService {
                 return Err("Existing files need owner/mode metadata and no special permission bits for safe replacement.".into());
             }
             let fingerprint=original.as_ref().map(|(bytes,attrs)|digest(bytes,attrs,&target,&session.connection));
+            if operation=="environment" && match expected {Some("missing")=>fingerprint.is_some(),Some(value)=>fingerprint.as_deref()!=Some(value),None=>true} {return Err("The environment file changed. Reload before saving.".into());}
             if operation=="edit" && (expected.is_none() || fingerprint.as_deref()!=expected) {return Err("The file changed since it was opened. Reload it and review your changes again.".into());}
             if original.is_some() && !session.extensions.get("posix-rename@openssh.com").is_some_and(|version|version=="1") {return Err("This server does not support atomic replacement. Existing files will not be overwritten.".into());}
             let short_name:String=target.rsplit('/').next().unwrap_or("file").chars().scan(0,|bytes,c|{*bytes+=c.len_utf8();Some((*bytes,c))}).take_while(|(bytes,_)|*bytes<=64).map(|(_,c)|c).collect();
@@ -706,6 +709,7 @@ impl SshService {
             }
             let stage=join(&workdir,"staged");
             let attrs=original.as_ref().map(|(_,attrs)|FileAttributes{permissions:attrs.permissions.map(|mode|mode & 0o777),uid:attrs.uid,gid:attrs.gid,..Default::default()}).unwrap_or(FileAttributes{permissions:Some(0o600),..Default::default()});
+            let attrs=if review.reply.operation=="environment"{FileAttributes{permissions:Some(0o600),..attrs}}else{attrs};
             session.create(&stage,&review.data,attrs).await?;
             let result=async {
                 let latest=session.optional_read(target,TRANSFER_LIMIT).await?;
@@ -1007,6 +1011,89 @@ mod tests {
         let listing = service.list_files(&profile.id, &directory).await.unwrap();
         assert_eq!(listing.entries.len(), 1);
         assert_eq!(listing.entries[0].kind, "file");
+        // Actual dotenv protocol: missing/create, owner-only mode, stale review,
+        // backup and source binding over the disposable SFTP connection.
+        let connection = service.runtime.lock().await.connection_ids[&profile.id].clone();
+        let envpath = join(&directory, ".env");
+        let empty = environment::read_environment(
+            &service,
+            profile.id.clone(),
+            profile.revision.clone(),
+            connection.clone(),
+            envpath.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(empty.revision, "missing");
+        let review = environment::review_environment(
+            &service,
+            profile.id.clone(),
+            profile.revision.clone(),
+            connection.clone(),
+            envpath.clone(),
+            empty.revision,
+            "FIXTURE_VALUE=first\n".into(),
+        )
+        .await
+        .unwrap();
+        service
+            .commit_file(&profile.id, &review.token)
+            .await
+            .unwrap();
+        let opened_env = environment::read_environment(
+            &service,
+            profile.id.clone(),
+            profile.revision.clone(),
+            connection.clone(),
+            envpath.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened_env.permissions.unwrap() & 0o777, 0o600);
+        let update = environment::review_environment(
+            &service,
+            profile.id.clone(),
+            profile.revision.clone(),
+            connection.clone(),
+            envpath.clone(),
+            opened_env.revision.clone(),
+            "FIXTURE_VALUE=second\n".into(),
+        )
+        .await
+        .unwrap();
+        let receipt = service
+            .commit_file(&profile.id, &update.token)
+            .await
+            .unwrap();
+        assert_eq!(
+            *session
+                .read(&receipt.backup_path.unwrap(), TEXT_LIMIT)
+                .await
+                .unwrap()
+                .0,
+            b"FIXTURE_VALUE=first\n"
+        );
+        assert!(environment::review_environment(
+            &service,
+            profile.id.clone(),
+            profile.revision.clone(),
+            connection.clone(),
+            envpath.clone(),
+            opened_env.revision,
+            "FIXTURE_VALUE=stale\n".into()
+        )
+        .await
+        .is_err());
+        assert!(environment::read_environment(
+            &service,
+            profile.id.clone(),
+            profile.revision.clone(),
+            "wrong-connection".into(),
+            envpath
+        )
+        .await
+        .is_err());
+
         let opened = service.read_text(&profile.id, &target).await.unwrap();
         assert_eq!(opened.content, "port: 3000\r\n");
         let plan = service

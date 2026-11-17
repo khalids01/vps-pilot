@@ -634,3 +634,19 @@ remain closed. Every privileged app command uses its own existing single-use sud
 approval. No client/important-VPS testing: use disposable policy and full-VM tests
 before enabling the narrow adapter. File-based Caddy only; API/resume services,
 custom command hooks/dropins/environments and unsafe paths are unsupported.
+
+## Project environment manager — authorized 2026-11-17
+
+Add Manage env to project action menus: masked key/value editing, add/remove,
+strict duplicate detection and bulk dotenv paste with explicit existing-key
+replacement decisions. This manages project .env files, not PM2's live env or
+system-wide environment. Use existing SFTP protections, a narrow application
+.env path allowlist, source revision/connection binding, missing-file creation,
+fresh single-use save review, stale-file detection, protected backup and atomic
+replacement. New/saved env files use owner-only mode. This is the user-authorized
+remote secret-file editing scope; do not persist values in local SQLite, browser
+storage, workflow definitions, command history or logs. Clear transient dialogs
+on close, inactive workspace, source changes and app visibility loss. Saving is
+separate from explicit restart/redeploy; no claim that PM2 auto-loads .env files.
+Use the maintained dotenv parse API without config/loading process.env; preserve
+untouched source and validate exact value round trips before saving.

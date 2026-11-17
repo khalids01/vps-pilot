@@ -47,3 +47,29 @@ failed workflows, from their beginning. No automatic Git/database rollback.
 The SSH count in the remote status header displays connected saved profiles and
 opens account/address/port details. It does not expose credentials or count PTY,
 SFTP and monitoring channels as separate server connections.
+
+## Manage env
+
+Project Actions → Manage env explicitly reads .env (or a selected named .env file)
+over SFTP. Values are masked; bulk paste previews keys and duplicate/existing-key
+conflicts, defaults to preserving existing values and supports explicit replacement.
+Existing file duplicates must be resolved before saving. Standard dotenv exports,
+comments, quoted/multiline values and literal substitutions are parsed without
+shell execution or expanding variables. Unchanged statements/comments and CRLF
+are retained; edited values must round-trip exactly or saving is refused.
+
+Save review names the remote file and variable count without displaying values.
+The existing SFTP transaction enforces fresh source/revision, stale content checks,
+private backup, atomic rename and owner-only mode. Missing files are created only
+on confirmed save. System/SSH/protected paths and symlinks remain blocked. Secrets
+stay in transient dialog/native review memory; no React Query/local-storage/SQLite
+cache, activity output or clipboard automation. Closing, changing workspaces or
+hiding the application clears the dialog; abandoned native reviews are rejected.
+Restart app is separate and goes through the ordinary PM2 review. Applications
+must actually load that file; frontend/build-time variables need redeployment.
+
+Validation: dotenv parser/round-trip tests; mocked browser paste/conflict/edit/
+confirm-save/masking/mobile checks; real disposable loopback OpenSSH SFTP test
+covering .env creation, mode 0600, backup, stale revisions and connection mismatch.
+No important or client VPS is used. Existing file-editor race/backup tests run
+alongside the environment additions in that fixture.

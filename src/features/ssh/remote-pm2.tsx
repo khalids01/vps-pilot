@@ -15,6 +15,7 @@ import { useConfiguration } from "./configuration-context";
 import { filesApi, type RemoteDirectory } from "./files-api";
 import { Pm2Deployments } from "./pm2-deployments";
 import { ProjectCommandRunner, ProjectMenu } from "./pm2-project-actions";
+import { ProjectEnv } from "./project-env";
 
 interface Process {
   runFolder?: string;
@@ -30,12 +31,18 @@ interface Process {
 export function RemotePm2({
   profile,
   connected,
+  active = true,
 }: {
   profile: ServerProfile;
   connected: boolean;
+  active?: boolean;
 }) {
   const { connectionId } = useConfiguration();
   const folderId = useId();
+  const [envProject, setEnvProject] = useState<{
+    process: Process;
+    folder: string;
+  } | null>(null);
   const generation = useRef(0);
   const [availability, setAvailability] = useState("checking");
   const [commandRequest, setCommandRequest] = useState<{
@@ -47,6 +54,9 @@ export function RemotePm2({
     process: Process;
     nonce: number;
   } | null>(null);
+  useEffect(() => {
+    if (!active) setEnvProject(null);
+  }, [active]);
   const [rows, setRows] = useState<Process[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -100,6 +110,7 @@ export function RemotePm2({
     }
   }, [profile.id, profile.revision, connectionId]);
   useEffect(() => {
+    setEnvProject(null);
     setSelected(null);
     setReview(null);
     setCommandRequest(null);
@@ -341,6 +352,9 @@ export function RemotePm2({
                             restart,
                           })
                         }
+                        onEnv={(folder) =>
+                          setEnvProject({ process: p, folder })
+                        }
                         onLogs={() => logs(p)}
                         onRestart={() => prepare(p, true)}
                         onEdit={() =>
@@ -419,6 +433,17 @@ export function RemotePm2({
               connectionId={connectionId}
               request={commandRequest}
               onClose={() => setCommandRequest(null)}
+            />
+          )}
+          {envProject && (
+            <ProjectEnv
+              key={`${profile.id}:${profile.revision}:${connectionId}:${envProject.process.id}:${envProject.folder}`}
+              profile={profile}
+              connectionId={connectionId}
+              folder={envProject.folder}
+              name={envProject.process.name}
+              onClose={() => setEnvProject(null)}
+              onRestart={() => restartMany([envProject.process])}
             />
           )}
           <Dialog

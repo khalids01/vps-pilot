@@ -46,6 +46,8 @@ pub fn run() {
             ssh::files::ssh_files_size,
             ssh::files::ssh_files_list,
             ssh::files::ssh_file_read,
+            ssh::files::ssh_project_env_read,
+            ssh::files::ssh_project_env_review,
             ssh::files::ssh_file_review,
             ssh::files::ssh_file_commit,
             ssh::files::ssh_file_reject,

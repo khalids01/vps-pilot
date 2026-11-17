@@ -30,7 +30,7 @@ export interface FileReview {
   serverName: string;
   path: string;
   backupPath: string | null;
-  operation: "edit" | "upload";
+  operation: "edit" | "upload" | "environment";
   bytes: number;
   expiresInSeconds: number;
 }

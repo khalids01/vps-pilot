@@ -32,6 +32,7 @@ export function ProjectMenu({
   onLogs,
   onRestart,
   onEdit,
+  onEnv,
 }: {
   profileId: string;
   process: Pm2Process;
@@ -40,6 +41,7 @@ export function ProjectMenu({
   onLogs: () => void;
   onRestart: () => void;
   onEdit: () => void;
+  onEnv: (folder: string) => void;
 }) {
   const saved = useProjectCommands();
   let commands: string[] = [];
@@ -92,6 +94,7 @@ export function ProjectMenu({
         ))}
         <MenuItem onClick={onRestart}>Restart</MenuItem>
         <MenuItem onClick={onLogs}>Logs</MenuItem>
+        <MenuItem onClick={() => onEnv(runFolder)}>Manage env</MenuItem>
         <MenuItem onClick={onEdit}>Edit commands</MenuItem>
       </MenuContent>
     </Menu>

@@ -363,7 +363,11 @@ function RemoteWorkspaceContent({
               )}
               {pm2Opened && (
                 <div className={selectedTool === "pm2" ? "block" : "hidden"}>
-                  <RemotePm2 profile={profile} connected={connected} />
+                  <RemotePm2
+                    profile={profile}
+                    connected={connected}
+                    active={active && tool === "PM2" && !settingsOpen}
+                  />
                 </div>
               )}
               {dockerOpened && (

@@ -317,3 +317,22 @@ unsafe configuration are refused. Configuration validation runs as `caddy`; only
 the fixed systemctl action runs privileged after approval. The adapter never
 writes config, site builds or TLS files. Generic Caddy/Nginx/Traefik service gates
 stay protected; future proxy adapters need their own detection and safety tests.
+
+### Project environment editor
+
+The existing ignored `disposable_openssh_sftp_files_are_backed_up_stale_checked_and_connection_bound`
+fixture now exercises the actual environment read/review/commit protocol as well:
+missing .env creation, mode 0600, backup contents, stale revisions and mismatched
+connection rejection. Use the same generated-key/pinned-fingerprint loopback SSH
+fixture above. For Docker on macOS, publish SSH only on a loopback host port;
+ensure the disposable authorized_keys is owned by its guest account (Docker cp
+may preserve a macOS uid). No host home or real VPS is an integration target.
+
+`env-model.test.ts` checks dotenv exports, quoted/multiline/literal values,
+duplicates, malformed-input errors, source-span edits, CRLF and exact value
+round trips. Browser cases cover paste preview, explicit replacement, duplicate
+resolution, masked values, add/remove/save confirmation, no secret local-storage
+persistence, mobile layout and clearing on visibility loss. The dotenv library
+is used only through parse; its filesystem/process.env loading API is never called.
+The browser build externalizes its unused Node-only imports; the exercised parsing
+path remains browser-compatible. Native env operations never use a remote shell.

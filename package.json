@@ -1,7 +1,7 @@
 {
   "name": "vps-pilot",
   "private": true,
-  "version": "0.2.12",
+  "version": "0.2.13",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -39,6 +39,7 @@
     "cn": "^0.2.5",
     "codemirror": "^6.0.2",
     "dockview-react": "^8.7.1",
+    "dotenv": "17.4.2",
     "lucide-react": "^1.41.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

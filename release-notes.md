@@ -1,7 +1,8 @@
-# VPS Pilot 0.2.12
+# VPS Pilot 0.2.13
 
-- Add Caddy detection and reviewed reload/restart actions to Proxy, with an adapter boundary for future proxy managers.
-- Read the active service configuration path, validate as the Caddy account before changing service state, reject stale reviews and verify the result.
-- Preserve Caddy configuration, backup files, TLS material and static-site builds. Generic infrastructure-service protections remain enabled.
+- Add Manage env to project action menus: masked variable editing, add/remove and bulk .env paste with duplicate detection and explicit existing-value replacement.
+- Support project .env and named .env files, preserving untouched statements/comments and verifying exact value round trips before saving.
+- Require explicit save confirmation, protect against stale files/connections, retain private backups and atomically save with owner-only permissions.
+- Keep values out of local storage, saved workflows and logs; close transient env dialogs when the workspace or app becomes inactive.
 
-Currently supports standard active, file-configured systemd Caddy. Custom hooks, overrides, environment-dependent configuration, external imports, API/resume mode and unsafe/unreadable paths remain unsupported. Validated with real Caddy on a disposable Debian 12 arm64 VM; other environments and native WebKit still require release QA. Nginx and Traefik management are not included in this release.
+This edits the remote project file, not PM2’s live environment. Build/restart is separate and the application must load the selected file. Validated with parser/browser tests and a real disposable OpenSSH SFTP fixture. No client VPS was used for testing.
