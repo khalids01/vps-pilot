@@ -213,7 +213,7 @@ export function ProjectEnv({
     >
       <DialogContent
         showCloseButton={!busy}
-        className="max-h-[90dvh] overflow-auto sm:max-w-3xl"
+        className="max-h-[90dvh] overflow-auto sm:max-w-[min(90vw,90rem)]"
       >
         <DialogHeader>
           <DialogTitle>Manage env · {name}</DialogTitle>
@@ -251,7 +251,10 @@ export function ProjectEnv({
           <>
             <div className="space-y-2">
               {entries.map((e) => (
-                <div className="flex gap-2" key={e.id}>
+                <div
+                  className="flex gap-2 sm:grid sm:grid-cols-[minmax(12rem,1fr)_minmax(0,2fr)_auto_auto]"
+                  key={e.id}
+                >
                   <Input
                     aria-label="Variable name"
                     autoComplete="off"
