@@ -262,3 +262,29 @@ outside those claims. No important VPS was contacted.
 After validation, stop/remove the exact fixture container, then remove its private
 `fixture_dir` (including generated keys and disks). Never run global Docker prune.
 The test tools/image may be retained for reuse.
+
+### PM2 deployment adapter
+
+Stage `src-tauri/src/ssh/pm2_*.py` plus `pm2-integration.py` as `test.py` in a private
+local `/tmp` directory. Build `pm2.Containerfile` as `vps-pilot-pm2-fixture` and run:
+
+```sh
+docker run --rm --network none --label org.vps-pilot.fixture=true \
+  -v /tmp/vps-pilot-pm2-fixture:/source:ro vps-pilot-pm2-fixture \
+  python3 -B /source/test.py
+```
+
+The fixture requires an unprivileged Docker guest. It starts a real PM2 6.0.14
+process, runs the bundled adapters, checks ordered commands and restart/online
+verification, failed-step short circuit, process identity mismatch, recent logs
+and interrupted child-group termination. It never contacts a VPS. Tested Debian
+12 arm64 / Node 24; other environments are not implied certified. Browser coverage
+checks shared workflow persistence, server bindings and pause/skip batch behavior;
+native tests check bounded typed input and SQLite compare-and-swap. These do not
+promise transactional Git/database rollback or HTTP application health. A deliberate
+retry reruns the full workflow; commands must not contain saved secrets. Each step
+gets the project cwd and a new Bash process; use explicit commands rather than
+relying on `cd`/`export` persisting between steps. No automatic connections or sudo
+passwords. Stop after current prevents subsequent deployments, without killing a
+migration in progress. SSH loss/timeouts can leave an uncertain remote outcome;
+inspect before manually retrying. Output remains in bounded workspace memory.

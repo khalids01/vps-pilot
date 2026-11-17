@@ -9,6 +9,7 @@
     "core:default",
     "dialog:allow-open",
     "ssh-connection",
+    "pm2-management",
     "local-data",
     "setup-keys",
     "setup-access",

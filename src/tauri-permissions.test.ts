@@ -26,9 +26,9 @@ test("main window permissions cover registered application IPC commands", () => 
   const source = readFileSync(new URL("src/lib.rs", native), "utf8");
   const handlers = source.match(/tauri::generate_handler!\[([\s\S]*?)\]/)?.[1];
   expect(handlers).toBeDefined();
-  const registered = [...handlers.matchAll(/(?:[a-z_]+::)+([a-z_]+)/g)].map(
-    (match) => match[1],
-  );
+  const registered = [
+    ...handlers.matchAll(/(?:[a-z_][a-z_0-9]*::)+([a-z_][a-z_0-9]*)/g),
+  ].map((match) => match[1]);
   expect(registered.length).toBeGreaterThan(0);
   expect(registered.filter((command) => !allowed.has(command))).toEqual([]);
 });

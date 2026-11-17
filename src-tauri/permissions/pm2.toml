@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "pm2-management"
+description = "Account-scoped PM2 projections and bounded, single-use server/connection-bound reviewed user-authored deployment workflows. No automatic privilege elevation or stored output/credentials."
+commands.allow = [
+  "ssh_pm2_status",
+  "ssh_pm2_workflows_load",
+  "ssh_pm2_workflows_save",
+  "ssh_pm2_review",
+  "ssh_pm2_apply",
+]

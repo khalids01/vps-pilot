@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod docker;
 pub mod files;
 pub mod monitor;
+pub mod pm2;
 mod services;
 pub mod setup_access;
 pub mod setup_packages;

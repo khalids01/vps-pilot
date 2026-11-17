@@ -21,6 +21,7 @@ const tools: Record<ToolId, string> = {
   files: "Files",
   software: "Software",
   docker: "Docker",
+  pm2: "PM2",
   proxy: "Proxy",
   services: "Services",
   storage: "Storage",

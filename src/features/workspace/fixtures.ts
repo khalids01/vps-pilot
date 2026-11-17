@@ -7,6 +7,7 @@ export const toolIds = [
   "files",
   "software",
   "docker",
+  "pm2",
   "proxy",
   "services",
   "storage",

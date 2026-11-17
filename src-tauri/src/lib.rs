@@ -27,6 +27,7 @@ pub fn run() {
             app.manage(db);
             Ok(())
         })
+        .manage(ssh::pm2::Pm2State::default())
         .invoke_handler(tauri::generate_handler![
             database::app_apply_zoom,
             database::app_bootstrap,
@@ -58,6 +59,11 @@ pub fn run() {
             ssh::ssh_profiles,
             ssh::ssh_config_hosts,
             ssh::ssh_parse_command,
+            ssh::pm2::ssh_pm2_status,
+            ssh::pm2::ssh_pm2_workflows_load,
+            ssh::pm2::ssh_pm2_workflows_save,
+            ssh::pm2::ssh_pm2_review,
+            ssh::pm2::ssh_pm2_apply,
             ssh::ssh_save_profile,
             ssh::ssh_delete_profile,
             ssh::ssh_inspect,

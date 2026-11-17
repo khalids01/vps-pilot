@@ -23,11 +23,12 @@ import { UpdateSidebarNotice } from "@/features/updates/update-control";
 import type { ToolId } from "@/features/workspace/fixtures";
 import { CommandActivityProvider } from "./command-activity";
 import { ConfigurationProvider } from "./configuration-context";
-
 import { LiveMetricsProvider } from "./live-metrics";
 import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
+import { RemotePm2 } from "./remote-pm2";
+import { SshConnections } from "./ssh-connections";
 
 const ConfigurationWorkspace = lazy(() =>
   import("./configuration-workspace").then((module) => ({
@@ -133,6 +134,7 @@ function RemoteWorkspaceContent({
     files: "Files",
     software: "Software",
     docker: "Docker",
+    pm2: "PM2",
     proxy: "Proxy",
     services: "Services",
     storage: "Storage",
@@ -142,6 +144,7 @@ function RemoteWorkspaceContent({
     processes: "Processes",
   };
   const tool = labels[selectedTool];
+  const [pm2Opened, setPm2Opened] = useState(selectedTool === "pm2");
   const [dockerOpened, setDockerOpened] = useState(selectedTool === "docker");
   const [filesOpened, setFilesOpened] = useState(selectedTool === "files");
   const [terminalOpened, setTerminalOpened] = useState(
@@ -151,6 +154,7 @@ function RemoteWorkspaceContent({
     if (selectedTool === "terminal") setTerminalOpened(true);
     if (selectedTool === "files") setFilesOpened(true);
     if (selectedTool === "docker") setDockerOpened(true);
+    if (selectedTool === "pm2") setPm2Opened(true);
   }, [selectedTool]);
   const [phase, setPhase] = useState<
     "inspect" | "identity" | "password" | null
@@ -220,6 +224,7 @@ function RemoteWorkspaceContent({
           <SidebarTrigger aria-label="Toggle tool sidebar" />
         </div>
         <LiveMetricsBar />
+        <SshConnections />
         <div className="flex shrink-0 items-center gap-2">
           <details className="group relative">
             <summary className="cursor-pointer list-none rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
@@ -283,6 +288,7 @@ function RemoteWorkspaceContent({
                   { label: "Terminal", icon: Terminal },
                   { label: "Files", icon: Folder },
                   { label: "Docker", icon: Container },
+                  { label: "PM2", icon: Workflow },
                   { label: "Proxy", icon: Network },
                   { label: "Services", icon: Workflow },
                   { label: "Firewall", icon: Shield },
@@ -347,6 +353,11 @@ function RemoteWorkspaceContent({
                   </Suspense>
                 </div>
               )}
+              {pm2Opened && (
+                <div className={selectedTool === "pm2" ? "block" : "hidden"}>
+                  <RemotePm2 profile={profile} connected={connected} />
+                </div>
+              )}
               {dockerOpened && (
                 <div className={tool === "Docker" ? "w-full" : "hidden"}>
                   <Suspense fallback={<p>Loading Docker workspace…</p>}>
@@ -393,6 +404,7 @@ function RemoteWorkspaceContent({
                   tool === "Terminal" ||
                   tool === "Files" ||
                   tool === "Docker" ||
+                  tool === "PM2" ||
                   tool === "Server helper"
                     ? "hidden"
                     : "block"

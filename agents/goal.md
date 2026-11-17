@@ -567,3 +567,48 @@ Command Code was attempted through its bundled CLI and failed authentication
 before editing. Codex implemented and independently checked this increment directly.
 Actual validation and its distribution/architecture limits are recorded in
 `agents/supported-systems.md` and `tests/fixtures/README.md`.
+
+## PM2 management and reusable deployments — authorized 2026-11-15
+
+Add compact PM2 inventory/restart/logs and reusable ordered deployment workflows,
+with project-folder selection, per-server bindings and sequential multi-server/app
+batches. User-authored commands are explicitly reviewed before execution, run as
+the connected account without automatic sudo, stop on failure and never auto-retry
+migrations. Preserve process environment secrets; project selection never scans
+file contents. No important-VPS integration tests. Validate native identity,
+concurrency, cancellation and partial failures with disposable fixtures before
+claiming deployment completion. Keep commands/output/credentials out of history
+and persist only explicitly saved non-secret workflow definitions.
+
+PM2 implementation now includes explicit refresh with bounded projections/recent
+logs, reviewed single/multiple process restart, typed SQLite workflow storage and
+per-server bindings, folder browsing and ordered user commands. Multi-server/app
+batches capture their reviewed inputs, run sequentially, pause on failure, and
+support deliberate full-workflow retry or skip/continue. Stop after current does
+not interrupt an in-flight migration. Navigation retains the mounted PM2 view.
+PM2 deployment permission is separate from generic management actions. No sudo
+commands/passwords are supplied; existing generic mutation gates stay unchanged.
+Real adapter tests passed in an unprivileged disposable Debian 12 arm64 container
+with Node 24 / PM2 6.0.14: ordered execution, restart/online check, failed-step stop,
+identity mismatch, bounded recent logs and interrupted process-group cleanup.
+Native tests cover typed bounds, workflow shape and stale-save protection; browser
+tests cover multi-server save/reload, failed batch pause/skip, restart approval,
+failed-save retry and narrow layout. No important VPS was contacted. PM2 online
+verification is not an HTTP health check or database rollback guarantee.
+
+## Project actions and bulk commands — authorized 2026-11-17
+
+User requested project-centered PM2 menus, configurable individual commands,
+drag/drop command ordering (with keyboard reorder), arbitrary selected-project
+command lists and an active SSH connection count/details in the status bar.
+PM2 is detected on first opening and connection changes; absence hides management
+and shows an account-scoped message. PM2 cwd supplies each project's directory.
+Saved per-server directory overrides remain supported. Dedicated helper mode
+runs the exact reviewed list without an implicit restart; legacy deployment
+requests retain their restart behavior. Bulk failures stop that project's remaining
+commands but continue other selected projects, superseding the prior pause-all
+rule. Retry deliberately selects failures only. Commands, results and output are
+never automatically replayed after reconnect. User edits/reviews exact operations.
+SSH count uses existing local connection-status data without extra remote probes.
+Command Code was attempted using its default model; authentication failed before
+edits, so Codex implemented directly. No model or account configuration changed.
