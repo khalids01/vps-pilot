@@ -4,6 +4,7 @@ mod catalog;
 mod command;
 mod config;
 pub mod configuration;
+pub mod connections;
 pub mod discovery;
 pub mod docker;
 pub mod files;

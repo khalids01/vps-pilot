@@ -650,3 +650,15 @@ on close, inactive workspace, source changes and app visibility loss. Saving is
 separate from explicit restart/redeploy; no claim that PM2 auto-loads .env files.
 Use the maintained dotenv parse API without config/loading process.env; preserve
 untouched source and validate exact value round trips before saving.
+
+## Local release and fleet corrections — authorized 2026-11-17
+
+Prepare one release draft and pass its ID to all builds and the publisher; verify
+its tag, commit and draft state before publishing. No release rerun or push is
+authorized for this increment. Home addresses reveal only on hover/focus/tap.
+Project-group suggestions reuse existing names case-insensitively after trimming.
+The SSH badge now takes a bounded unprivileged /proc TCP snapshot on the selected
+VPS rather than counting connected app profiles. It covers the current SSH listener
+port (including other devices and pre-authentication TCP connections), shows its
+scope/time and supports explicit refresh. Other SSH listener ports are not inferred.
+No user/session authentication claim, sudo, process scan or periodic poll is added.

@@ -12,7 +12,10 @@ jobs:
   prepare:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     outputs:
+      release_id: ${{ steps.version.outputs.release_id }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
@@ -34,6 +37,18 @@ jobs:
             const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
             const tag = `v${version}-build.${context.runNumber}`;
             core.setOutput('tag', tag);
+            const {owner, repo} = context.repo;
+            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo});
+            const matches = releases.filter(r => r.tag_name === tag);
+            if (matches.length > 1) throw new Error('Multiple release drafts for this tag');
+            let release = matches[0];
+            if (release && (!release.draft || release.target_commitish !== context.sha)) throw new Error('Release identity mismatch');
+            if (!release) {
+              release = (await github.rest.repos.createRelease({owner, repo, tag_name: tag,
+                target_commitish: context.sha, name: `VPS Pilot ${tag}`, draft: true, prerelease: true,
+                body: 'Early preview. Windows installers are unsigned; macOS builds are ad-hoc signed and not notarized. See README.md for supported systems.'})).data;
+            }
+            core.setOutput('release_id', String(release.id));
   build:
     needs: prepare
     permissions:
@@ -92,6 +107,9 @@ jobs:
       - run: bun run check
       - run: bun run build
       - run: bun test
+      - name: Check incoming SSH connection snapshot
+        if: runner.os == 'Linux'
+        run: python3 tests/fixtures/ssh-connections.test.py
       - name: Check database backup adapter
         if: runner.os == 'Linux'
         run: python3 tests/fixtures/docker-database.test.py
@@ -107,6 +125,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
           releaseCommitish: ${{ github.sha }}
           releaseName: VPS Pilot ${{ needs.prepare.outputs.tag }}
@@ -128,14 +147,16 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/github-script@v8
         env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         with:
           script: |
             const {owner, repo} = context.repo;
             const tag = process.env.RELEASE_TAG;
-            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo});
-            const release = releases.find(r => r.tag_name === tag);
-            if (!release) throw new Error('Release draft missing');
+            const releaseId = Number(process.env.RELEASE_ID);
+            if (!Number.isSafeInteger(releaseId) || releaseId <= 0) throw new Error('Invalid release ID');
+            const {data: release} = await github.rest.repos.getRelease({owner, repo, release_id: releaseId});
+            if (release.tag_name !== tag || !release.draft || release.target_commitish !== context.sha) throw new Error('Release identity mismatch');
             const assets = await github.paginate(github.rest.repos.listReleaseAssets, {owner, repo, release_id: release.id});
             for (const suffix of ['_amd64.deb', '_amd64.AppImage', '.x86_64.rpm', '_x64-setup.exe', '_x64_en-US.msi', '_aarch64.dmg', '_x64.dmg']) {
               if (!assets.some(a => a.name.endsWith(suffix))) throw new Error('Missing ' + suffix);

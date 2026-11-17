@@ -227,7 +227,7 @@ function RemoteWorkspaceContent({
           <SidebarTrigger aria-label="Toggle tool sidebar" />
         </div>
         <LiveMetricsBar />
-        <SshConnections />
+        <SshConnections profile={profile} status={status} active={active} />
         <div className="flex shrink-0 items-center gap-2">
           <details className="group relative">
             <summary className="cursor-pointer list-none rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">

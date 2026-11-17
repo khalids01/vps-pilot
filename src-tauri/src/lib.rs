@@ -90,6 +90,7 @@ pub fn run() {
             ssh::setup_access::admin_commands::ssh_setup_admin_reject,
             ssh::setup_access::admin_commands::ssh_setup_admin_verify,
             ssh::setup_access::admin_commands::ssh_setup_admin_promote,
+            ssh::connections::ssh_incoming_connections,
             ssh::monitor::ssh_monitor_start,
             ssh::monitor::ssh_monitor_describe,
             ssh::streams::ssh_terminal_open,

@@ -252,9 +252,7 @@ export function FleetHome({
                             >
                               <span className="truncate">{profile.name}</span>
                             </Button>
-                            <p className="mt-1 break-all text-xs text-muted-foreground">
-                              {address(profile)}
-                            </p>
+                            <MaskedAddress profile={profile} />
                           </div>
                           <Button
                             variant="ghost"
@@ -381,5 +379,23 @@ export function FleetHome({
         </div>
       </div>
     </main>
+  );
+}
+
+function MaskedAddress({ profile }: { profile: ServerProfile }) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <button
+      type="button"
+      className="mt-1 block break-all text-left text-xs text-muted-foreground"
+      aria-label={revealed ? undefined : "Reveal server address"}
+      onMouseEnter={() => setRevealed(true)}
+      onMouseLeave={() => setRevealed(false)}
+      onFocus={() => setRevealed(true)}
+      onBlur={() => setRevealed(false)}
+      onClick={() => setRevealed(true)}
+    >
+      {revealed ? address(profile) : `${profile.username}@••••:${profile.port}`}
+    </button>
   );
 }

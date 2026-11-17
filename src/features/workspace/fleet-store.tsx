@@ -152,6 +152,13 @@ export function FleetProvider({ children }: { children: ReactNode }) {
           key={editing.id}
           profile={editing}
           value={metadata(editing.id)}
+          groups={[
+            ...new Set(
+              Object.values(data.servers)
+                .map((item) => item.project.trim())
+                .filter(Boolean),
+            ),
+          ]}
           onSave={async (patch, name) => {
             await rename(editing, name);
             update(editing.id, patch);
@@ -209,11 +216,13 @@ function OrganizationField({
 function OrganizationEditor({
   profile,
   value,
+  groups,
   onSave,
   onClose,
 }: {
   profile: ServerProfile;
   value: Organization;
+  groups: string[];
   onSave: (metadata: Organization, name: string) => Promise<void>;
   onClose: () => void;
 }) {
@@ -255,7 +264,11 @@ function OrganizationEditor({
             }
             const next = {
               ...draft,
-              project: draft.project.trim(),
+              project:
+                groups.find(
+                  (group) =>
+                    group.toLowerCase() === draft.project.trim().toLowerCase(),
+                ) ?? draft.project.trim(),
               tags: [
                 ...new Set(
                   tags
@@ -317,6 +330,29 @@ function OrganizationEditor({
                 setDraft({ ...draft, project: event.target.value })
               }
             />
+            <fieldset
+              className="flex flex-wrap gap-1"
+              aria-label="Existing project groups"
+            >
+              {groups
+                .filter((group) =>
+                  group
+                    .toLowerCase()
+                    .includes(draft.project.trim().toLowerCase()),
+                )
+                .map((group) => (
+                  <Button
+                    key={group}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={saving}
+                    onClick={() => setDraft({ ...draft, project: group })}
+                  >
+                    {group}
+                  </Button>
+                ))}
+            </fieldset>
           </OrganizationField>
           <OrganizationField
             id="fleet-tags"

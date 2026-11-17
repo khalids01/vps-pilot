@@ -662,6 +662,7 @@ test.beforeEach(async ({ page }) => {
             existing.passwordAllowed=input.passwordAllowed!==false;
             return {...existing};
           }
+          if (cmd === "ssh_incoming_connections") return {port:args.profileId===first?22:2222,connections:Array.from({length:args.profileId===first?3:1},(_,i)=>({peer:`192.0.2.${i+1}`,port:50000+i,local:"203.0.113.1"}))};
           if (cmd === "ssh_statuses") return profiles.map((profile) => ({ profileId: profile.id, connectionId: (window as any).__configurationDisconnected && profile.id===first ? null : `connection-${profile.id}-${(window as any).__connectionGeneration??1}`, status: (window as any).__configurationDisconnected && profile.id===first ? "disconnected" : "connected", error: null }));
           if(cmd === "ssh_configuration_describe") {
             if((window as any).__holdConfigurationDescribe) await new Promise(resolve=>{(window as any).__releaseConfigurationDescribe=resolve;});
@@ -1420,7 +1421,22 @@ test("fleet project groups flow side by side and wrap without horizontal overflo
     await editor.getByRole("button",{name:"Save organization",exact:true}).click();
     await expect(editor).toHaveCount(0);
   };
+  const card=fleet.getByRole("article",{name:"Fixture Alpha server"});
+  await expect(card).not.toContainText("alpha.invalid");
+  await card.getByRole("button",{name:"Reveal server address"}).hover();
+  await expect(card).toContainText("tester@alpha.invalid:22");
+  await fleet.getByRole("heading",{name:"Server fleet",exact:true}).hover();
+  await expect(card).not.toContainText("alpha.invalid");
+  await card.getByRole("button",{name:"Reveal server address"}).focus();
+  await expect(card).toContainText("tester@alpha.invalid:22");
   await assign("Fixture Alpha","Alpha group");
+  await fleet.getByRole("button",{name:"Organize Fixture Beta",exact:true}).click();
+  const suggestions=page.getByRole("dialog",{name:"Organize Fixture Beta"});
+  await suggestions.getByRole("button",{name:"Alpha group",exact:true}).click();
+  await expect(suggestions.getByLabel("Project grouping",{exact:true})).toHaveValue("Alpha group");
+  await suggestions.getByLabel("Project grouping",{exact:true}).fill(" alpha GROUP ");
+  await suggestions.getByRole("button",{name:"Save organization",exact:true}).click();
+  await expect(fleet.getByRole("region",{name:"Project Alpha group"}).getByRole("article")).toHaveCount(2);
   await assign("Fixture Beta","Beta group");
   const alpha=fleet.getByRole("region",{name:"Project Alpha group"});
   const beta=fleet.getByRole("region",{name:"Project Beta group"});
@@ -4814,7 +4830,8 @@ test("PM2 project command does not implicitly restart and SSH count opens detail
  await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied?.length??0)).toBe(1);
  expect(await page.evaluate(()=>(window as any).__pm2Applied[0].restart)).toBe(false);
  await dialog.getByRole("button",{name:"Done",exact:true}).click();
- await page.getByText("SSH · 2",{exact:true}).filter({visible:true}).click();await expect(page.getByText("tester@beta.invalid:2222",{exact:true}).filter({visible:true})).toBeVisible();
+ await page.getByText("SSH · 3",{exact:true}).filter({visible:true}).click();await expect(page.getByText("192.0.2.1:50000",{exact:true}).filter({visible:true})).toBeVisible();
+ await expect(page.getByText("Fixture Alpha · Incoming SSH",{exact:true})).toBeVisible();
 });
 
 
