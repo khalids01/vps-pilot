@@ -621,3 +621,16 @@ restricts agent attempts to that key and returns after that file's authenticatio
 it does not fall back to unrelated default keys. Preserve OpenSSH's distinction:
 IdentitiesOnly restricts key identities, not password authentication. Require a
 selected/config-resolved key for this option; reject unsupported/duplicate options.
+
+## Extensible proxy management, Caddy first — authorized 2026-11-17
+
+Add a Proxy manager adapter boundary, starting with standard systemd Caddy.
+Detect the actual service configuration and state; offer reviewed reload/restart,
+validate as the Caddy service account before mutation, recheck source identity and
+snapshot, serialize changes and verify service status afterward. Do not edit
+Caddyfile, Caddyfile.save, TLS material or app builds. Nginx/Traefik remain future
+adapters, not generic systemctl exceptions. Existing generic infrastructure gates
+remain closed. Every privileged app command uses its own existing single-use sudo
+approval. No client/important-VPS testing: use disposable policy and full-VM tests
+before enabling the narrow adapter. File-based Caddy only; API/resume services,
+custom command hooks/dropins/environments and unsafe paths are unsupported.

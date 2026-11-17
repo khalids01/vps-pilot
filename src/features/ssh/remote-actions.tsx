@@ -30,6 +30,7 @@ import { type StreamEvent, streamApi } from "./streams";
 import { StructuredReport } from "./structured-report";
 
 type AppAction =
+  | { type: "proxyChange"; manager: "caddy"; operation: "reload" | "restart" }
   | { type: "ufwStatus" }
   | {
       type: "serviceChange";
@@ -73,6 +74,9 @@ export function RemoteActions({
     setTargets((all) => ({ ...all, [tool]: value }));
   const resultReport = resultReports[tool];
   const activity = activities[tool];
+  const [proxyOperation, setProxyOperation] = useState<"reload" | "restart">(
+    "reload",
+  );
   const [serviceOperation, setServiceOperation] = useState<
     "logs" | "start" | "stop" | "restart" | "enable" | "disable"
   >("logs");
@@ -122,23 +126,25 @@ export function RemoteActions({
   }
   async function review() {
     const action: AppAction | null =
-      tool === "Software"
-        ? { type: "softwarePreflight", software }
-        : tool === "Firewall"
-          ? { type: "ufwStatus" }
-          : tool === "Services"
-            ? serviceOperation === "logs"
-              ? { type: "serviceLogs", unit: target.trim() }
-              : {
-                  type: "serviceChange",
-                  unit: target.trim(),
-                  operation: serviceOperation,
-                }
-            : tool === "Docker"
-              ? { type: "dockerLogs", container: target.trim() }
-              : tool === "Storage"
-                ? { type: "diskScan", path: target }
-                : null;
+      tool === "Proxy"
+        ? { type: "proxyChange", manager: "caddy", operation: proxyOperation }
+        : tool === "Software"
+          ? { type: "softwarePreflight", software }
+          : tool === "Firewall"
+            ? { type: "ufwStatus" }
+            : tool === "Services"
+              ? serviceOperation === "logs"
+                ? { type: "serviceLogs", unit: target.trim() }
+                : {
+                    type: "serviceChange",
+                    unit: target.trim(),
+                    operation: serviceOperation,
+                  }
+              : tool === "Docker"
+                ? { type: "dockerLogs", container: target.trim() }
+                : tool === "Storage"
+                  ? { type: "diskScan", path: target }
+                  : null;
     if (!action) return;
     reviewSoftware.current = tool === "Software" ? software : null;
     setReport(null);
@@ -249,9 +255,16 @@ export function RemoteActions({
         });
         if (reviewSoftware.current)
           setReport(softwareSafety(text, reviewSoftware.current));
-        publish(
-          `${event.message}${event.code !== null ? ` Exit ${event.code}.` : ""}`,
-        );
+        let message = `${event.message}${event.code !== null ? ` Exit ${event.code}.` : ""}`;
+        if (tool === "Proxy") {
+          try {
+            const result = JSON.parse(
+              text.trim().split("\n").slice(-1)[0] ?? "{}",
+            );
+            message = result.error ?? result.message ?? message;
+          } catch {}
+        }
+        publish(message);
         stream.current = null;
         setBusy(false);
         void streamApi.close(profile.id, event.id).catch(() => {});
@@ -276,6 +289,7 @@ export function RemoteActions({
     }
   }
   const available = [
+    "Proxy",
     "Software",
     "Firewall",
     "Services",
@@ -289,17 +303,35 @@ export function RemoteActions({
     >
       {available && (
         <div className="space-y-3 rounded-lg border p-4">
-          <h3 className="text-sm font-medium">
-            {tool === "Software"
-              ? "Software preflight"
-              : tool === "Firewall"
-                ? "Privileged UFW inspection"
-                : tool === "Services"
-                  ? "Service journal"
-                  : tool === "Docker"
-                    ? "Container logs"
-                    : "Directory scan"}
+          <h3 className={tool === "Proxy" ? "hidden" : "text-sm font-medium"}>
+            {tool === "Proxy"
+              ? "Caddy"
+              : tool === "Software"
+                ? "Software preflight"
+                : tool === "Firewall"
+                  ? "Privileged UFW inspection"
+                  : tool === "Services"
+                    ? "Service journal"
+                    : tool === "Docker"
+                      ? "Container logs"
+                      : "Directory scan"}
           </h3>
+          {tool === "Proxy" && (
+            <Select
+              value={proxyOperation}
+              onValueChange={(v) => {
+                if (v === "reload" || v === "restart") setProxyOperation(v);
+              }}
+            >
+              <SelectTrigger aria-label="Caddy action">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="reload">Reload</SelectItem>
+                <SelectItem value="restart">Restart</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           {tool === "Services" && (
             <Select
               value={serviceOperation}
@@ -385,7 +417,7 @@ export function RemoteActions({
               )}
             </>
           )}
-          {tool !== "Firewall" && tool !== "Software" && (
+          {tool !== "Proxy" && tool !== "Firewall" && tool !== "Software" && (
             <label
               className="block text-xs text-muted-foreground"
               htmlFor={`action-target-${profile.id}`}
@@ -418,12 +450,21 @@ export function RemoteActions({
               !connected ||
               busy ||
               reviewing ||
-              (tool !== "Firewall" && tool !== "Software" && !target)
+              (tool !== "Proxy" &&
+                tool !== "Firewall" &&
+                tool !== "Software" &&
+                !target)
             }
             onClick={() => void review()}
           >
             <ShieldCheck />
-            {reviewing ? "Preparing review…" : "Review command"}
+            {reviewing
+              ? "Preparing review…"
+              : tool === "Proxy"
+                ? proxyOperation === "reload"
+                  ? "Reload"
+                  : "Restart"
+                : "Review command"}
           </Button>
         </div>
       )}

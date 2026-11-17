@@ -328,6 +328,8 @@ test.beforeEach(async ({ page }) => {
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           // No credentials or user terminal input are retained by the mock.
           calls.push({ cmd, profileId: args.profileId, ...(cmd==="app_save_document"?{key:args.key}:{}), ...(cmd.startsWith("app_setup_key")?{...(typeof args.fileName==="string"?{fileName:args.fileName}:{}),...(typeof args.keyId==="string"?{keyId:args.keyId}:{})}:{}), ...(cmd==="ssh_docker_query"?{query:args.query}:{}), ...(cmd==="ssh_terminal_open"&&args.container?{container:args.container}:{}), ...(cmd === "ssh_monitor_start" ? {intervalSeconds: args.intervalSeconds} : {}), ...(cmd.startsWith("ssh_configuration_") ? {connectionId:args.connectionId, operationId:args.operationId, ...(args.snapshotId?{snapshotId:args.snapshotId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(Array.isArray(args.selected)?{selected:args.selected}:{})} : {}), ...(cmd.startsWith("ssh_setup_") ? {connectionId:args.connectionId, ...(args.profileRevision?{profileRevision:args.profileRevision}:{}), ...(args.keyId?{keyId:args.keyId}:{}), ...(args.proofId?{proofId:args.proofId}:{}), ...(args.reviewId?{reviewId:args.reviewId}:{}), ...(args.alias?{alias:args.alias}:{}), ...(typeof args.username==="string"?{username:args.username}:{}), ...(typeof args.port==="number"?{port:args.port}:{})} : {}) });
+          if(cmd==="ssh_proxy_detect")return (window as any).__noCaddy?{manager:"caddy",installed:false,status:"Not installed",supported:false}:{manager:"caddy",installed:true,status:"active",supported:true,config:"/etc/caddy/Caddyfile"};
+          if(cmd==="ssh_action_review"&&args.action.type==="proxyChange")return {id:"caddy-plan",profileId:args.profileId,serverName:"Fixture Alpha",address:"tester@alpha.invalid:22",command:"sudo -- python3 fixed-caddy-adapter "+args.action.operation,purpose:"Validate Caddy configuration and "+args.action.operation,privileged:true,expiresInSeconds:120,evidence:"Configuration snapshot"};
           if(cmd==="ssh_pm2_workflows_load")return localStorage.getItem("__pm2Workflows")??'{"version":1,"apps":[]}';
           if(cmd==="ssh_pm2_workflows_save"){
             if((window as any).__pm2SaveFailure)throw new Error("Workflow save failed");
@@ -4825,4 +4827,12 @@ test("PM2 bulk commands reorder and continue after a project failure",async({pag
  await expect(dialog.getByRole("textbox",{name:"Run command 1",exact:true})).toHaveValue("bun i");
  await dialog.getByRole("button",{name:"Run commands",exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied?.length??0)).toBe(2);await expect(dialog).toContainText("Succeeded");await expect(dialog).toContainText("Failed");
  expect(await page.evaluate(()=>(window as any).__pm2Applied[1].folder)).toBe("/home/tester/api");await dialog.getByRole("button",{name:"Retry failed projects",exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied.length)).toBe(3);
+});
+
+
+test("Caddy proxy detection gates reviewed reload actions",async({page})=>{
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Proxy",exact:true}).click();const proxy=page.getByRole("region",{name:"Proxy managers",exact:true});
+ await expect(proxy.getByRole("button",{name:"Reload",exact:true})).toHaveCount(0);await proxy.getByRole("button",{name:"Detect",exact:true}).click();await expect(proxy).toContainText("/etc/caddy/Caddyfile");
+ await proxy.getByRole("button",{name:"Reload",exact:true}).click();const review=page.getByRole("dialog",{name:"Approve this sudo command?",exact:true});await expect(review).toContainText("fixed-caddy-adapter reload");expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_action_execute").length)).toBe(0);await review.getByRole("button",{name:"Reject",exact:true}).click();
+ await page.evaluate(()=>{(window as any).__noCaddy=true;});await proxy.getByRole("button",{name:"Detect",exact:true}).click();await expect(proxy).toContainText("Not installed");await expect(proxy.getByRole("button",{name:"Reload",exact:true})).toHaveCount(0);
 });

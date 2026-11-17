@@ -9,6 +9,10 @@ pub(super) const SUDO_PROMPT: &str = "[VPS Pilot sudo password] ";
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum AppAction {
     UfwStatus {},
+    ProxyChange {
+        manager: proxy::Manager,
+        operation: proxy::Operation,
+    },
     ServiceChange {
         unit: String,
         operation: services::ServiceOperation,
@@ -54,6 +58,7 @@ pub(super) struct PendingApproval {
     pub(super) issued: Instant,
     pub(super) precondition: Option<(String, String)>,
     output_format: Option<structured::Format>,
+    proxy_change: bool,
 }
 fn unit(value: &str) -> Result<&str, String> {
     if value.len() > 200
@@ -89,6 +94,7 @@ impl AppAction {
                 if services::protected(name) { return Err("This connection-critical, platform, proxy, or infrastructure service is protected. Use its integration or the terminal.".into()); }
                 (format!("/usr/bin/systemctl {} -- {}", operation.verb(), quote(name)), format!("{} {name}. This can interrupt the selected application and its dependents. Boot changes do not immediately start or stop the service. No automatic retry or rollback is performed.", operation.verb()), true)
             },
+            Self::ProxyChange{manager,operation}=>({match manager {proxy::Manager::Caddy=>proxy::command(Some(*operation),"")}},"Validate the running Caddy configuration, then apply the selected service action. Restart can briefly interrupt traffic. No configuration files are changed.".into(),true),
             Self::SoftwarePreflight { software } => (software.preflight(), format!("Inspect {} installation ownership, system support, listeners, inactive container port reservations, and deployment platform ownership. No software is installed or changed.", software.binary()), false),
             Self::UfwStatus {} => ("/usr/sbin/ufw status numbered".into(), "Read UFW status and numbered rules. No firewall rules will change.".into(), true),
             Self::ServiceLogs { unit: name } => (format!("/usr/bin/journalctl --no-pager -n 200 -u {}", quote(unit(name)?)), format!("Read the last 200 journal entries for {name}. Output may contain application secrets; it stays in memory."), true),
@@ -116,7 +122,7 @@ impl SshService {
         if matches!(action, AppAction::ServiceChange { .. }) && !self.changes_enabled {
             return Err("This build is read-only for app actions. Service changes require disposable-server validation before they can be enabled. SSH terminals and read-only inspections remain available.".into());
         }
-        let (command, purpose, privileged) = action.describe()?;
+        let (mut command, purpose, privileged) = action.describe()?;
         let mut runtime = self.runtime.lock().await;
         let profile = self.profile(profile_id)?;
         let connection_id = runtime
@@ -158,6 +164,16 @@ impl SshService {
             let snapshot = services::collect(&runtime, profile_id, &command).await?;
             services::validate(&snapshot, unit, *operation)?;
             Some((command, snapshot))
+        } else if let AppAction::ProxyChange {
+            manager: _,
+            operation,
+        } = &action
+        {
+            let probe = proxy::command(None, "");
+            let observed = services::collect(&runtime, profile_id, &probe).await?;
+            let snapshot = proxy::snapshot(&observed)?;
+            command = proxy::command(Some(*operation), &snapshot);
+            Some((probe, observed))
         } else {
             None
         };
@@ -195,6 +211,7 @@ impl SshService {
                 revision: profile.revision,
                 plan: plan.clone(),
                 precondition,
+                proxy_change: matches!(action, AppAction::ProxyChange { .. }),
                 output_format: match action {
                     AppAction::UfwStatus {} => Some(structured::Format::Firewall),
                     AppAction::DiskScan { .. } => Some(structured::Format::Directory),
@@ -237,7 +254,7 @@ impl SshService {
             );
         }
         let mutation = pending.precondition.is_some();
-        if mutation && !self.changes_enabled {
+        if mutation && !pending.proxy_change && !self.changes_enabled {
             return Err("App-triggered changes are disabled in this read-only build.".into());
         }
         if mutation {

@@ -60,6 +60,7 @@ pub fn run() {
             ssh::ssh_config_hosts,
             ssh::ssh_parse_command,
             ssh::pm2::ssh_pm2_status,
+            ssh::proxy::ssh_proxy_detect,
             ssh::pm2::ssh_pm2_workflows_load,
             ssh::pm2::ssh_pm2_workflows_save,
             ssh::pm2::ssh_pm2_review,

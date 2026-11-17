@@ -28,6 +28,7 @@ import { LiveMetricsBar } from "./live-metrics-view";
 import { RemoteActions } from "./remote-actions";
 import { RemoteInspection } from "./remote-inspection";
 import { RemotePm2 } from "./remote-pm2";
+import { RemoteProxy } from "./remote-proxy";
 import { SshConnections } from "./ssh-connections";
 
 const ConfigurationWorkspace = lazy(() =>
@@ -144,6 +145,7 @@ function RemoteWorkspaceContent({
     processes: "Processes",
   };
   const tool = labels[selectedTool];
+  const [proxyOpened, setProxyOpened] = useState(selectedTool === "proxy");
   const [pm2Opened, setPm2Opened] = useState(selectedTool === "pm2");
   const [dockerOpened, setDockerOpened] = useState(selectedTool === "docker");
   const [filesOpened, setFilesOpened] = useState(selectedTool === "files");
@@ -155,6 +157,7 @@ function RemoteWorkspaceContent({
     if (selectedTool === "files") setFilesOpened(true);
     if (selectedTool === "docker") setDockerOpened(true);
     if (selectedTool === "pm2") setPm2Opened(true);
+    if (selectedTool === "proxy") setProxyOpened(true);
   }, [selectedTool]);
   const [phase, setPhase] = useState<
     "inspect" | "identity" | "password" | null
@@ -353,6 +356,11 @@ function RemoteWorkspaceContent({
                   </Suspense>
                 </div>
               )}
+              {proxyOpened && (
+                <div className={tool === "Proxy" ? "block" : "hidden"}>
+                  <RemoteProxy profile={profile} connected={connected} />
+                </div>
+              )}
               {pm2Opened && (
                 <div className={selectedTool === "pm2" ? "block" : "hidden"}>
                   <RemotePm2 profile={profile} connected={connected} />
@@ -405,6 +413,7 @@ function RemoteWorkspaceContent({
                   tool === "Files" ||
                   tool === "Docker" ||
                   tool === "PM2" ||
+                  tool === "Proxy" ||
                   tool === "Server helper"
                     ? "hidden"
                     : "block"

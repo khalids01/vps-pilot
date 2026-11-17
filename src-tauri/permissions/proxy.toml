@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "proxy-management"
+description = "Read-only fixed proxy adapter discovery. Caddy service changes use the existing server-bound single-use sudo approval protocol and native fixed commands, configuration validation and revalidation; no configuration writes or generic proxy executor."
+commands.allow = ["ssh_proxy_detect"]

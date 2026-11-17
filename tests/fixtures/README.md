@@ -288,3 +288,32 @@ relying on `cd`/`export` persisting between steps. No automatic connections or s
 passwords. Stop after current prevents subsequent deployments, without killing a
 migration in progress. SSH loss/timeouts can leave an uncertain remote outcome;
 inspect before manually retrying. Output remains in bounded workspace memory.
+
+### Caddy proxy adapter
+
+`python3 -B tests/fixtures/proxy.test.py` runs seven local policy tests without
+contacting a server or changing services. Native `proxy::tests` cover typed
+manager/operation allowlists and snapshot handling; existing SSH approval tests
+cover the shared single-use, connection/revision-bound sudo protocol.
+
+`proxy-vm.py` requires a root Docker container, a marked disposable Debian VM
+booted by `setup-vm-boot.py`, its generated `/fixture/key` and pinned known_hosts.
+Stage the bundled `src-tauri/src/ssh/proxy.py` as `/fixture/proxy.py`, stage
+`proxy-vm.py` in that directory and run it inside the fixture tools container.
+Use only the generated loopback VM. It installs distro Caddy and modifies only
+that guest's `/etc/caddy/Caddyfile` and a fixture directory under `/srv`. It checks
+root/unprivileged snapshot consistency, real reload/restart and invocation IDs,
+static HTTP responses, updates visible without reload, invalid config preventing
+reload, and preservation of a mode-0600 Caddyfile.save. Stop/remove the exact
+fixture container and delete its private keys/disks afterward. Never use a client
+or important VPS for this fixture. Debian 12 arm64 is the observed environment;
+other systemd/distribution and native WebKit combinations require release QA.
+
+Caddy management currently requires a standard active `caddy.service` running as
+`caddy`, a trusted `/usr/bin/caddy`, matching file-based run/reload commands and
+root-owned, non-writable service/config paths. Custom dropins, environment files,
+command hooks, lifecycle dependents, API/resume mode, external imports and
+unsafe configuration are refused. Configuration validation runs as `caddy`; only
+the fixed systemctl action runs privileged after approval. The adapter never
+writes config, site builds or TLS files. Generic Caddy/Nginx/Traefik service gates
+stay protected; future proxy adapters need their own detection and safety tests.

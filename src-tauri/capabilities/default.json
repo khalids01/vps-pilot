@@ -10,6 +10,7 @@
     "dialog:allow-open",
     "ssh-connection",
     "pm2-management",
+    "proxy-management",
     "local-data",
     "setup-keys",
     "setup-access",
