@@ -612,3 +612,12 @@ never automatically replayed after reconnect. User edits/reviews exact operation
 SSH count uses existing local connection-status data without extra remote probes.
 Command Code was attempted using its default model; authentication failed before
 edits, so Codex implemented directly. No model or account configuration changed.
+
+## SSH command import correction — 2026-11-17
+
+Accept the user's -i key plus -o IdentitiesOnly=yes input, including joined and
+quoted forms, without executing it. Explicit identity authentication already
+restricts agent attempts to that key and returns after that file's authentication;
+it does not fall back to unrelated default keys. Preserve OpenSSH's distinction:
+IdentitiesOnly restricts key identities, not password authentication. Require a
+selected/config-resolved key for this option; reject unsupported/duplicate options.

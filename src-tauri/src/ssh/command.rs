@@ -21,6 +21,7 @@ pub fn parse(command: &str, home: &Path, default_user: &str) -> Result<ProfileIn
     let mut port = None;
     let mut identity = None;
     let mut target = None;
+    let mut identities_only = false;
     let mut options = true;
     let mut index = 1;
     while index < words.len() {
@@ -32,8 +33,8 @@ pub fn parse(command: &str, home: &Path, default_user: &str) -> Result<ProfileIn
         }
         if options && word.starts_with('-') {
             let flag = word.get(..2).ok_or("Unsupported SSH option.")?;
-            if !matches!(flag, "-p" | "-l" | "-i") {
-                return Err("Supported options: -p (port), -l (user), and -i (private key). Remote commands, proxies, and tunnels are not supported here.".into());
+            if !matches!(flag, "-p" | "-l" | "-i" | "-o") {
+                return Err("Supported options: -p (port), -l (user), -i (private key), and -o IdentitiesOnly=yes. Remote commands, proxies, and tunnels are not supported here.".into());
             }
             let value = if word.len() > 2 {
                 word[2..].to_owned()
@@ -45,6 +46,23 @@ pub fn parse(command: &str, home: &Path, default_user: &str) -> Result<ProfileIn
                     .ok_or("An SSH option is missing its value.")?
             };
             match flag {
+                "-o" => {
+                    let option = value.trim();
+                    let (name, setting) = option
+                        .split_once('=')
+                        .or_else(|| option.split_once(char::is_whitespace))
+                        .ok_or("Use -o IdentitiesOnly=yes. Other SSH options are not supported.")?;
+                    if !name.trim().eq_ignore_ascii_case("IdentitiesOnly")
+                        || !setting.trim().eq_ignore_ascii_case("yes")
+                    {
+                        return Err("Only -o IdentitiesOnly=yes is supported. Other SSH options were not imported.".into());
+                    }
+                    if identities_only {
+                        return Err("Specify IdentitiesOnly once.".into());
+                    }
+                    identities_only = true;
+                }
+
                 "-p" => {
                     if port.is_some() {
                         return Err("Specify the port once.".into());
@@ -113,13 +131,17 @@ pub fn parse(command: &str, home: &Path, default_user: &str) -> Result<ProfileIn
     if let Some(reason) = resolved.blocked_reason {
         return Err(reason);
     }
+    let identity = identity.or(resolved.identity_file);
+    if identities_only && identity.as_ref().is_none_or(|path| path.trim().is_empty()) {
+        return Err("IdentitiesOnly=yes requires a private key: add -i ~/.ssh/your-key.".into());
+    }
     let input = ProfileInput {
         id: None,
         name: host,
         host: resolved.host,
         port: port.or(uri_port).unwrap_or(resolved.port),
         username: user.or(target_user).unwrap_or(resolved.username),
-        identity_file: identity.or(resolved.identity_file),
+        identity_file: identity,
         password_allowed: resolved.password_allowed,
     };
     let validated = input.validate()?;
@@ -161,6 +183,35 @@ mod tests {
                 .username,
             "root"
         );
+    }
+    #[test]
+    fn imports_identities_only_with_the_selected_key() {
+        let home = tempfile::tempdir().unwrap();
+        for option in [
+            "-o IdentitiesOnly=yes",
+            "-oIdentitiesOnly=yes",
+            "-o 'IdentitiesOnly yes'",
+            "-o identitiesonly=YES",
+        ] {
+            let parsed = parse(
+                &format!("ssh -i ~/.ssh/dev-vps {option} dev@209.38.29.117"),
+                home.path(),
+                "local",
+            )
+            .unwrap();
+            assert_eq!(parsed.host, "209.38.29.117");
+            assert_eq!(parsed.username, "dev");
+            assert_eq!(parsed.port, 22);
+            assert_eq!(parsed.identity_file.as_deref(), Some("~/.ssh/dev-vps"));
+        }
+        for command in [
+            "ssh -o IdentitiesOnly=yes dev@example.com",
+            "ssh -i ~/.ssh/key -o IdentitiesOnly=no dev@example.com",
+            "ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o IdentitiesOnly=yes dev@example.com",
+            "ssh -i ~/.ssh/key -o StrictHostKeyChecking=no dev@example.com",
+        ] {
+            assert!(parse(command, home.path(), "local").is_err());
+        }
     }
     #[test]
     fn resolves_aliases_without_mutating_config_or_running_commands() {
