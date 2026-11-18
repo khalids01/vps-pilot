@@ -15,6 +15,7 @@ import { useConfiguration } from "./configuration-context";
 import { filesApi, type RemoteDirectory } from "./files-api";
 import { Pm2Deployments } from "./pm2-deployments";
 import { ProjectCommandRunner, ProjectMenu } from "./pm2-project-actions";
+import { usePm2Runs } from "./pm2-run-panel";
 import { ProjectEnv } from "./project-env";
 
 interface Process {
@@ -39,6 +40,7 @@ export function RemotePm2({
 }) {
   const { connectionId } = useConfiguration();
   const folderId = useId();
+  const runs = usePm2Runs(profile, connectionId);
   const [envProject, setEnvProject] = useState<{
     process: Process;
     folder: string;
@@ -367,6 +369,7 @@ export function RemotePm2({
               </tbody>
             </table>
           </div>
+          {runs.panel}
           {selected && !review && (
             <div className="space-y-3 rounded-lg border p-4">
               <h2>{selected.name}</h2>
@@ -430,7 +433,7 @@ export function RemotePm2({
           {commandRequest && (
             <ProjectCommandRunner
               profile={profile}
-              connectionId={connectionId}
+              onRun={runs.start}
               request={commandRequest}
               onClose={() => setCommandRequest(null)}
             />
@@ -486,6 +489,7 @@ export function RemotePm2({
           <Pm2Deployments seed={editProject} profileId={profile.id} />
         </>
       )}
+      {availability !== "ready" && runs.panel}
       {output && (
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border p-3 text-xs">
           {output}

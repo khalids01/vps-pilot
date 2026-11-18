@@ -1,7 +1,7 @@
 import { DragDropProvider } from "@dnd-kit/react";
 import { isSortable } from "@dnd-kit/react/sortable";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -102,14 +102,14 @@ export function ProjectMenu({
 }
 export function ProjectCommandRunner({
   profile,
-  connectionId,
   request,
   onClose,
+  onRun,
 }: {
   profile: ServerProfile;
-  connectionId: string | null | undefined;
   request: { projects: Pm2Process[]; commands: string[]; restart: boolean };
   onClose: () => void;
+  onRun: (projects: Pm2Process[], commands: string[], restart: boolean) => void;
 }) {
   const saved = useProjectCommands();
   const cache = useQueryClient();
@@ -122,10 +122,8 @@ export function ProjectCommandRunner({
       value.split("\n").map((text) => ({ id: crypto.randomUUID(), text })),
     );
   const [restart, setRestart] = useState(request.restart);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [output, setOutput] = useState("");
-  const [results, setResults] = useState<Record<number, string>>({});
+
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   async function save() {
@@ -152,49 +150,17 @@ export function ProjectCommandRunner({
       setSaving(false);
     }
   }
-  async function run(retry = false) {
-    setBusy(true);
-    setError("");
-    for (const p of request.projects) {
-      if (retry && results[p.id] !== "Failed") continue;
-      setResults((old) => ({ ...old, [p.id]: "Running" }));
-      try {
-        const reviewId = await invoke<string>("ssh_pm2_review", {
-          deployment: {
-            profileId: profile.id,
-            profileRevision: profile.revision,
-            connectionId,
-            folder: p.runFolder ?? p.folder,
-            process: p.id,
-            name: p.name,
-            cwd: p.folder,
-            steps: text.split("\n").filter((s) => s.trim()),
-            restart,
-          },
-        });
-        const output = new Channel<{
-          step?: number;
-          status: string;
-          text?: string;
-          message?: string;
-        }>();
-        output.onmessage = (e) =>
-          setOutput((old) =>
-            (
-              old +
-              (e.text ??
-                e.message ??
-                `${p.name} · ${e.step === undefined ? e.status : `step ${e.step + 1}: ${e.status}`}\n`)
-            ).slice(-64000),
-          );
-        await invoke("ssh_pm2_apply", { reviewId, output });
-        setResults((old) => ({ ...old, [p.id]: "Succeeded" }));
-      } catch (e) {
-        setResults((old) => ({ ...old, [p.id]: "Failed" }));
-        setError(safeError(e));
-      }
+  function run() {
+    try {
+      onRun(
+        request.projects,
+        list.map((item) => item.text).filter((text) => text.trim()),
+        restart,
+      );
+      onClose();
+    } catch (error) {
+      setError(safeError(error));
     }
-    setBusy(false);
   }
   let templates: App[] = [];
   try {
@@ -204,7 +170,7 @@ export function ProjectCommandRunner({
     <Dialog
       open
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        if (!v) onClose();
       }}
     >
       <DialogContent className="max-h-[85dvh] overflow-auto">
@@ -222,18 +188,10 @@ export function ProjectCommandRunner({
                 {p.folder}
               </span>
             </span>
-            <span>{results[p.id]}</span>
           </div>
         ))}
         <Menu>
-          <MenuTrigger
-            render={
-              <Button
-                variant="outline"
-                disabled={busy || Object.keys(results).length > 0}
-              />
-            }
-          >
+          <MenuTrigger render={<Button variant="outline" disabled={saving} />}>
             Use saved list
           </MenuTrigger>
           <MenuContent>
@@ -257,13 +215,7 @@ export function ProjectCommandRunner({
         <DragDropProvider
           onDragEnd={(event) => {
             const source = event.operation.source;
-            if (
-              busy ||
-              Object.keys(results).length ||
-              event.canceled ||
-              !isSortable(source)
-            )
-              return;
+            if (saving || event.canceled || !isSortable(source)) return;
             const next = [...list];
             const from = next.findIndex((s) => s.id === String(source.id));
             if (from < 0 || source.index < 0 || source.index >= next.length)
@@ -278,7 +230,7 @@ export function ProjectCommandRunner({
               <SortableCommand key={s.id} id={s.id} index={i}>
                 <Input
                   aria-label={`Run command ${i + 1}`}
-                  disabled={busy || Object.keys(results).length > 0}
+                  disabled={saving}
                   value={s.text}
                   onChange={(e) =>
                     setList((old) =>
@@ -291,7 +243,7 @@ export function ProjectCommandRunner({
                 <Button
                   aria-label={`Move run command ${i + 1} up`}
                   variant="ghost"
-                  disabled={busy || i === 0 || Object.keys(results).length > 0}
+                  disabled={saving || i === 0}
                   onClick={() => {
                     const next = [...list];
                     [next[i - 1], next[i]] = [next[i], next[i - 1]];
@@ -303,7 +255,7 @@ export function ProjectCommandRunner({
                 <Button
                   aria-label={`Remove run command ${i + 1}`}
                   variant="ghost"
-                  disabled={busy || Object.keys(results).length > 0}
+                  disabled={saving}
                   onClick={() =>
                     setList((old) => old.filter((a) => a.id !== s.id))
                   }
@@ -316,9 +268,7 @@ export function ProjectCommandRunner({
         </DragDropProvider>
         <Button
           variant="outline"
-          disabled={
-            busy || Object.keys(results).length > 0 || list.length >= 20
-          }
+          disabled={saving || list.length >= 20}
           onClick={() =>
             setList((old) => [...old, { id: crypto.randomUUID(), text: "" }])
           }
@@ -331,7 +281,7 @@ export function ProjectCommandRunner({
         >
           <Checkbox
             id="pm2-run-restart"
-            disabled={busy || Object.keys(results).length > 0}
+            disabled={saving}
             checked={restart}
             onCheckedChange={(v) => setRestart(!!v)}
           />
@@ -346,7 +296,7 @@ export function ProjectCommandRunner({
           />
           <Button
             variant="outline"
-            disabled={saving || !name.trim() || busy}
+            disabled={saving || !name.trim()}
             onClick={save}
           >
             Save list
@@ -357,27 +307,13 @@ export function ProjectCommandRunner({
             {error}
           </p>
         )}
-        {output && (
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">
-            {output}
-          </pre>
-        )}
         <DialogFooter>
-          <Button disabled={busy} variant="outline" onClick={onClose}>
+          <Button disabled={saving} variant="outline" onClick={onClose}>
             Done
           </Button>
-          {Object.values(results).includes("Failed") ? (
-            <Button disabled={busy} onClick={() => run(true)}>
-              Retry failed projects
-            </Button>
-          ) : (
-            <Button
-              disabled={busy || Object.keys(results).length > 0 || !text.trim()}
-              onClick={() => run()}
-            >
-              Run commands
-            </Button>
-          )}
+          <Button disabled={!text.trim() || saving} onClick={run}>
+            Run commands
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

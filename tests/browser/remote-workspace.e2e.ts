@@ -347,7 +347,11 @@ test.beforeEach(async ({ page }) => {
           if(cmd==="ssh_pm2_apply"){
             const w=window as any;w.__pm2Applied??=[];w.__pm2Applied.push(w.__pm2Reviews[args.reviewId]);
             args.output.onmessage({step:0,status:"running"});
-            if(w.__pm2Fail&&w.__pm2Applied.length===1)throw "Fixture build failed";
+            if(w.__pm2Hold) { args.output.onmessage({step:0,status:"output",text:"fixture streaming output\n"}); await new Promise<void>(resolve=>{w.__pm2Release=resolve;}); }
+            if(w.__pm2Fail&&w.__pm2Applied.length===1) {
+              if(w.__pm2Detailed) {args.output.onmessage({step:0,status:"succeeded",code:0});args.output.onmessage({step:1,status:"running"});args.output.onmessage({step:1,status:"output",text:"fixture build diagnostic\n"});args.output.onmessage({step:1,status:"failed",code:1});}
+              throw "Fixture build failed";
+            }
             args.output.onmessage({status:"succeeded"});return null;
           }
           if (cmd === "app_bootstrap") {
@@ -4823,13 +4827,19 @@ test("PM2 restart requires approval and workflow save failures retain the draft"
 
 
 test("PM2 project command does not implicitly restart and SSH count opens details",async({page})=>{
+ await page.evaluate(()=>{(window as any).__pm2Hold=true;});
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"PM2",exact:true}).click();
  const manager=page.getByRole("region",{name:"PM2",exact:true});await expect(manager.getByRole("cell",{name:"online",exact:true})).toBeVisible();
  await manager.getByRole("button",{name:"Actions for web",exact:true}).click();await page.getByRole("menuitem",{name:"git pull --ff-only",exact:true}).click();
  const dialog=page.getByRole("dialog",{name:"Run commands · 1 projects",exact:true});await expect(dialog.getByRole("checkbox",{name:"Restart after commands",exact:true})).not.toBeChecked();await dialog.getByRole("button",{name:"Run commands",exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied?.length??0)).toBe(1);
+ const running=manager.getByRole("region",{name:"Command runs"});await expect(dialog).toHaveCount(0);await expect(running.getByRole("tab")).toContainText("Running");await expect(running).toContainText("fixture streaming output");
+ await running.getByRole("button",{name:"Collapse",exact:true}).click();await running.getByRole("button",{name:"Expand",exact:true}).click();
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"PM2",exact:true}).click();await expect(running).toContainText("fixture streaming output");
+ await page.evaluate(()=>{(window as any).__pm2Release();});await expect(running.getByRole("tab")).toContainText("Succeeded");
  expect(await page.evaluate(()=>(window as any).__pm2Applied[0].restart)).toBe(false);
- await dialog.getByRole("button",{name:"Done",exact:true}).click();
+ await expect(dialog).toHaveCount(0);
+ await expect(manager.getByRole("region",{name:"Command runs"}).getByRole("tab")).toHaveCount(1);
  await page.getByText("SSH · 3",{exact:true}).filter({visible:true}).click();await expect(page.getByText("192.0.2.1:50000",{exact:true}).filter({visible:true})).toBeVisible();
  await expect(page.getByText("Fixture Alpha · Incoming SSH",{exact:true})).toBeVisible();
 });
@@ -4841,13 +4851,14 @@ test("PM2 absent hides management",async({page})=>{
 
 
 test("PM2 bulk commands reorder and continue after a project failure",async({page})=>{
- await page.evaluate(()=>{(window as any).__pm2Extra=true;(window as any).__pm2Fail=true;});
+ await page.evaluate(()=>{(window as any).__pm2Extra=true;(window as any).__pm2Fail=true;(window as any).__pm2Detailed=true;});
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"PM2",exact:true}).click();const manager=page.getByRole("region",{name:"PM2",exact:true});await expect(manager.getByRole("cell",{name:"online",exact:true})).toHaveCount(2);
  for(const checkbox of await manager.getByRole("table").getByRole("checkbox").all())await checkbox.check();await manager.getByRole("button",{name:"Run commands",exact:true}).click();const dialog=page.getByRole("dialog",{name:"Run commands · 2 projects",exact:true});
  const first=dialog.getByRole("button",{name:"Drag command 1",exact:true});const second=dialog.getByRole("button",{name:"Drag command 2",exact:true});const a=await first.boundingBox();const b=await second.boundingBox();if(!a||!b)throw new Error("Missing drag handles");await page.mouse.move(a.x+a.width/2,a.y+a.height/2);await page.mouse.down();await page.mouse.move(b.x+b.width/2,b.y+b.height/2,{steps:12});await page.mouse.up();
  await expect(dialog.getByRole("textbox",{name:"Run command 1",exact:true})).toHaveValue("bun i");
- await dialog.getByRole("button",{name:"Run commands",exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied?.length??0)).toBe(2);await expect(dialog).toContainText("Succeeded");await expect(dialog).toContainText("Failed");
- expect(await page.evaluate(()=>(window as any).__pm2Applied[1].folder)).toBe("/home/tester/api");await dialog.getByRole("button",{name:"Retry failed projects",exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied.length)).toBe(3);
+ await dialog.getByRole("button",{name:"Run commands",exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied?.length??0)).toBe(2);await expect(dialog).toHaveCount(0);const runs=manager.getByRole("region",{name:"Command runs"});await expect(runs.getByRole("tab")).toHaveCount(2);await expect(runs.getByRole("tab").filter({hasText:"Succeeded"})).toHaveCount(1);await expect(runs.getByRole("tab").filter({hasText:"Failed"})).toHaveCount(1);
+ expect(await page.evaluate(()=>(window as any).__pm2Applied[1].folder)).toBe("/home/tester/api");await runs.getByRole("tab").filter({hasText:"Failed"}).click();await expect(runs.getByRole("alert")).toBeVisible();await expect(runs).toContainText("fixture build diagnostic");await expect(runs).toContainText("exit 1");await runs.getByRole("button",{name:"Retry project",exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__pm2Applied.length)).toBe(3);await expect(runs.getByRole("tab")).toHaveCount(3);
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Overview",exact:true}).click();await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"PM2",exact:true}).click();await expect(runs.getByRole("tab")).toHaveCount(3);
 });
 
 

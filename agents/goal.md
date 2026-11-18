@@ -662,3 +662,14 @@ VPS rather than counting connected app profiles. It covers the current SSH liste
 port (including other devices and pre-authentication TCP connections), shows its
 scope/time and supports explicit refresh. Other SSH listener ports are not inferred.
 No user/session authentication claim, sudo, process scan or periodic poll is added.
+
+## PM2 execution tabs — authorized 2026-11-18
+
+Run commands closes its configuration modal and opens one in-page execution tab
+per selected app immediately below the PM2 process list, including single-app runs.
+Each run captures its reviewed inputs and keeps bounded per-step output, status,
+exit code and timing in memory only. Bulk jobs remain sequential and continue
+other apps after failure. Failed-project retry creates a new run tab and reruns
+the captured command list deliberately. No automatic replay or reconnect retry.
+Navigation and collapse retain running jobs; close applies only to finished tabs.
+No backend execution permissions, command policy or production-server testing changed.
