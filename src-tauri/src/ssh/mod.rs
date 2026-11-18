@@ -11,6 +11,7 @@ pub mod files;
 pub mod monitor;
 pub mod pm2;
 pub mod proxy;
+pub mod proxy_workspace;
 mod services;
 pub mod setup_access;
 pub mod setup_packages;

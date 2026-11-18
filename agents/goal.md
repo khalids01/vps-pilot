@@ -673,3 +673,41 @@ other apps after failure. Failed-project retry creates a new run tab and reruns
 the captured command list deliberately. No automatic replay or reconnect retry.
 Navigation and collapse retain running jobs; close applies only to finished tabs.
 No backend execution permissions, command policy or production-server testing changed.
+
+## Proxy configuration workspace — authorized 2026-11-18
+
+Extend the existing Proxy page for Caddy, Nginx and Traefik system services and
+local Docker containers. This supersedes the earlier Caddy-only/no-config-writes
+scope for the narrow proxy workspace; generic infrastructure mutation gates stay
+closed. Detect exact unit/container/command/image/mount identities, show config
+ownership, provide in-page file/editor tabs and templates, and review diffs before
+applying. Configuration contents, sudo passwords and logs remain transient and
+travel only on private SSH stdin, never shell arguments, history or SQLite.
+Every privileged operation has a native, expiring, single-use server/connection-
+bound approval. Root operations serialize through the existing proxy lock.
+
+System configuration editing uses standard /etc/{caddy,nginx,traefik} sources;
+Docker editing uses bounded, detected host directory bind mounts on the local
+Unix Docker daemon. Single-file mounts are view-only because atomic replacement
+would leave their container mount pointing at the old inode. Broad/protected host
+mounts, API/resume Caddy and custom service overrides remain restricted. Label,
+image-generated and named-volume sources show ownership/limitations rather than
+pretending to edit a live source; no Compose recreation or image edits are added.
+
+Caddy/Nginx candidates validate in private isolated filesystems before replacement,
+with Docker validators additionally bounded by memory/CPU/PIDs and removed after
+completion. System validators have read-only mounts, private PID/proc/dev and
+writable private scratch directories. Native syntax engines supply errors.
+Traefik has no equivalent offline test: an explicit acknowledgement precedes save
+and restart; watched file configs can apply immediately. Verify process state,
+not all routes/upstreams. Save detects stale content/metadata, writes protected
+backups and atomically replaces one file, preserving other drafts. Failure restores
+only our exact replacement; a stopped service can be detected and restarted for
+recovery. Restore is explicit and refuses externally changed targets. Never replay
+changes after reconnect or automatically retry interrupted operations.
+
+Validated locally on disposable Debian 12 arm64 systemd and Docker 29 nested
+fixtures with real Caddy 2.6.2, Nginx 1.22.1 and Traefik 3.6.0: candidate rejection,
+save/apply, HTTP behavior, stale rejection, protected backup, restore, reload/
+restart and failed Traefik startup recovery. Both real sudo prompt and NOPASSWD
+transports and wrong-password rejection passed. No important/client VPS contacted.

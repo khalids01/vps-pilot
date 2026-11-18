@@ -110,6 +110,9 @@ jobs:
       - name: Check incoming SSH connection snapshot
         if: runner.os == 'Linux'
         run: python3 tests/fixtures/ssh-connections.test.py
+      - name: Check proxy workspace policy
+        if: runner.os == 'Linux'
+        run: python3 tests/fixtures/proxy-workspace.test.py
       - name: Check database backup adapter
         if: runner.os == 'Linux'
         run: python3 tests/fixtures/docker-database.test.py

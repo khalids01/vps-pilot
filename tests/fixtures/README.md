@@ -336,3 +336,23 @@ persistence, mobile layout and clearing on visibility loss. The dotenv library
 is used only through parse; its filesystem/process.env loading API is never called.
 The browser build externalizes its unused Node-only imports; the exercised parsing
 path remains browser-compatible. Native env operations never use a remote shell.
+
+### Proxy workspace fixtures (2026-11-18)
+
+`proxy-workspace.test.py` is daemon-free policy/CAS coverage. The system, Docker
+and transport scripts require a disposable container plus the explicit
+`/tmp/vps-pilot-proxy-disposable` marker containing `proxy-workspace-fixture`.
+Never run them on a client VPS or the default production Docker daemon.
+The Docker script requires a nested local Unix-socket daemon and a fixture image
+named `vps-pilot-proxy-fixture:local` containing Python, Caddy, Nginx and Traefik.
+The system script requires a private systemd PID-1 container with test ports
+8091/8092/8093 and standard service units. Transport installs/removes a fixture-only
+sudo rule and tests private stdin, NOPASSWD, prompted sudo and wrong-password paths.
+
+Observed passing: Debian 12 arm64, Caddy 2.6.2, Nginx 1.22.1, Traefik 3.6.0,
+Docker 29. Caddy/Nginx validators run on a private candidate; running HTTP responses
+survive invalid candidates. Docker validators use read-only mounts plus private
+scratch dirs (including Debian Nginx cache paths) and only the CHOWN capability for
+Nginx's private cache ownership. Tests verify stale-save refusal, apply/restore,
+real HTTP output, stopped Traefik recovery and protected backups. No claim of
+upstream/TLS health verification or universal custom-service compatibility.

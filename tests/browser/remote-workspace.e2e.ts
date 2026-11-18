@@ -332,6 +332,26 @@ test.beforeEach(async ({ page }) => {
           if(cmd==="ssh_project_env_review"){(window as any).__envDraft=args.content;return {token:"env-review",profileId:args.profileId,path:args.path,operation:"environment",bytes:args.content.length,backupPath:args.path+".backup",expiresInSeconds:120};}
           if(cmd==="ssh_file_commit"&&args.token==="env-review"){(window as any).__envContent=(window as any).__envDraft;(window as any).__envRevision=2;return {path:"/home/tester/.env",revision:"2",backupPath:"/home/tester/.backup"};}
           if(cmd==="ssh_file_reject"&&args.token==="env-review")return null;
+          if(cmd==="ssh_proxy_workspace_review") {
+            const w=window as any;w.__proxyReviews??={};const id=crypto.randomUUID();w.__proxyReviews[id]=args.request;
+            return {id,command:"sudo -- fixed-proxy-worker",operation:args.request.operation,path:args.request.path??"",instanceId:args.request.instanceId??""};
+          }
+          if(cmd==="ssh_proxy_workspace_reject") {delete (window as any).__proxyReviews?.[args.reviewId];return null;}
+          if(cmd==="ssh_proxy_workspace_execute") {
+            const w=window as any;const r=w.__proxyReviews?.[args.reviewId];if(!r)throw "Review expired";delete w.__proxyReviews[args.reviewId];w.__proxyExecuted??=[];w.__proxyExecuted.push(r.operation);
+            const instances=[{id:"system:caddy",identity:"a".repeat(64),manager:"caddy",kind:"system",name:"caddy.service",status:"active",config:"/etc/caddy/Caddyfile",roots:[{host:"/etc/caddy",container:"/etc/caddy",directory:true}],editable:true,actions:true},{id:"docker:"+"b".repeat(64),identity:"b".repeat(64),manager:"nginx",kind:"docker",name:"web-proxy",status:"running",config:"/etc/nginx/nginx.conf",roots:[{host:"/var/apps/nginx",container:"/etc/nginx",directory:true}],editable:true,actions:true,composeProject:"fixture",composeService:"proxy"},{id:"system:traefik",identity:"c".repeat(64),manager:"traefik",kind:"system",name:"traefik.service",status:"active",config:"/etc/traefik/traefik.yml",roots:[{host:"/etc/traefik",container:"/etc/traefik",directory:true}],editable:true,actions:true}];
+            const instance=instances.find(i=>i.id===r.instanceId)??instances[0];
+            if(r.operation==="inventory")return {instances:w.__noCaddy?[]:instances,warnings:[]};
+            if(r.operation==="logs")return {logs:"fixture proxy logs"};
+            if(r.operation==="save"&&w.__proxySaveFail)throw "Configuration changed outside VPS Pilot. Reopen configurations before saving.";
+            if(r.operation==="save"&&instance.manager==="traefik"&&!args.acknowledgeTraefik)throw "Acknowledge validation limits";
+            if(r.operation==="open"||r.operation==="save") {
+              const path=instance.roots[0].host+"/"+instance.config.split("/").pop();
+              w.__proxyContent??={};if(r.operation==="save")w.__proxyContent[r.path]=r.content;
+              return {instance,files:[{path,content:w.__proxyContent[path]??(instance.manager==="caddy"?":8080 {\n respond \"fixture config secret\"\n}\n":instance.manager==="nginx"?"events {}\nhttp {}\n":"entryPoints: {}\n"),revision:r.operation==="save"?"d".repeat(64):"a".repeat(64),editable:true}],treeRevision:r.operation==="save"?"d".repeat(64):"a".repeat(64),...(r.operation==="save"?{message:"Proxy reloaded. Backup saved.",backupId:"123"}:{})};
+            }
+            return {message:r.operation==="restore"?"Previous file restored. Validate and reload to apply it.":"Proxy operation completed"};
+          }
           if(cmd==="ssh_proxy_detect")return (window as any).__noCaddy?{manager:"caddy",installed:false,status:"Not installed",supported:false}:{manager:"caddy",installed:true,status:"active",supported:true,config:"/etc/caddy/Caddyfile"};
           if(cmd==="ssh_action_review"&&args.action.type==="proxyChange")return {id:"caddy-plan",profileId:args.profileId,serverName:"Fixture Alpha",address:"tester@alpha.invalid:22",command:"sudo -- python3 fixed-caddy-adapter "+args.action.operation,purpose:"Validate Caddy configuration and "+args.action.operation,privileged:true,expiresInSeconds:120,evidence:"Configuration snapshot"};
           if(cmd==="ssh_pm2_workflows_load")return localStorage.getItem("__pm2Workflows")??'{"version":1,"apps":[]}';
@@ -4862,12 +4882,25 @@ test("PM2 bulk commands reorder and continue after a project failure",async({pag
 });
 
 
-test("Caddy proxy detection gates reviewed reload actions",async({page})=>{
+test("Proxy workspace detects system and Docker instances and reviews config changes",async({page},testInfo)=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Proxy",exact:true}).click();const proxy=page.getByRole("region",{name:"Proxy managers",exact:true});
- await expect(proxy.getByRole("button",{name:"Reload",exact:true})).toHaveCount(0);await proxy.getByRole("button",{name:"Detect",exact:true}).click();await expect(proxy).toContainText("/etc/caddy/Caddyfile");
- await proxy.getByRole("button",{name:"Reload",exact:true}).click();const review=page.getByRole("dialog",{name:"Approve this sudo command?",exact:true});await expect(review).toContainText("fixed-caddy-adapter reload");expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==="ssh_action_execute").length)).toBe(0);await review.getByRole("button",{name:"Reject",exact:true}).click();
- await page.evaluate(()=>{(window as any).__noCaddy=true;});await proxy.getByRole("button",{name:"Detect",exact:true}).click();await expect(proxy).toContainText("Not installed");await expect(proxy.getByRole("button",{name:"Reload",exact:true})).toHaveCount(0);
+ await proxy.getByRole("button",{name:"Detect",exact:true}).click();let approval=page.getByRole("dialog");await expect(approval).toContainText("Approve proxy inventory");await approval.getByRole("button",{name:"Approve",exact:true}).click();
+ await expect(proxy.getByRole("article")).toHaveCount(3);const caddy=proxy.getByRole("article",{name:"caddy caddy.service"});const nginx=proxy.getByRole("article",{name:"nginx web-proxy"});await expect(nginx).toContainText("Compose · fixture / proxy");
+ await caddy.getByRole("button",{name:"Configs",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();const editor=proxy.getByRole("region",{name:"Proxy configurations"});await expect(editor).toBeVisible();
+ await editor.getByLabel("Proxy configuration editor",{exact:true}).fill(':8080 {\n respond "changed"\n}\n');await editor.getByRole("button",{name:"Review & apply",exact:true}).click();approval=page.getByRole("dialog",{name:"Review configuration changes",exact:true});await expect(approval.getByLabel("Proxy configuration diff",{exact:true})).toContainText('changed');expect(await page.evaluate(()=>(window as any).__proxyExecuted.filter((v:string)=>v==="save").length)).toBe(0);await approval.getByRole("button",{name:"Save & apply",exact:true}).click();await expect(proxy.getByRole("status")).toContainText("Backup saved");
+ await proxy.getByRole("button",{name:"Restore last backup",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Restore file",exact:true}).click();await expect(proxy.getByRole("status")).toContainText("Previous file restored");
+ await nginx.getByRole("button",{name:"Logs",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();await expect(proxy.getByRole("region",{name:"Proxy logs"})).toContainText("fixture proxy logs");
+ await page.setViewportSize({width:430,height:900});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:testInfo.outputPath("proxy-workspace-mobile.png"),animations:"disabled"});
+ expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain("fixture config secret");
 });
+
+test("Proxy workspace keeps failed drafts and clears configs on hiding",async({page})=>{
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Proxy",exact:true}).click();const proxy=page.getByRole("region",{name:"Proxy managers"});await proxy.getByRole("button",{name:"Detect",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();
+ const traefik=proxy.getByRole("article",{name:"traefik traefik.service"});await expect(traefik.getByRole("button",{name:"Reload",exact:true})).toHaveCount(0);await traefik.getByRole("button",{name:"Configs",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();
+ const editor=proxy.getByRole("region",{name:"Proxy configurations"});await editor.getByLabel("Proxy configuration editor",{exact:true}).fill("entryPoints: {web: {address: ':8080'}}");await editor.getByRole("button",{name:"Review & apply",exact:true}).click();const approval=page.getByRole("dialog");await expect(approval.getByRole("button",{name:"Save & apply",exact:true})).toBeDisabled();await approval.getByRole("checkbox").check();await page.evaluate(()=>{(window as any).__proxySaveFail=true;});await approval.getByRole("button",{name:"Save & apply",exact:true}).click();await expect(proxy.getByRole("alert")).toContainText("Configuration changed outside");await expect(editor.getByLabel("Proxy configuration editor",{exact:true})).toContainText("8080");
+ await page.evaluate(()=>{Object.defineProperty(document,"hidden",{configurable:true,get:()=>true});document.dispatchEvent(new Event("visibilitychange"));});await expect(editor).toHaveCount(0);expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain("8080");
+});
+
 
 
 test("Manage env previews dotenv conflicts and saves only after confirmation",async({page},testInfo)=>{

@@ -1,6 +1,12 @@
 import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import {
+  HighlightStyle,
+  StreamLanguage,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import { nginx } from "@codemirror/legacy-modes/mode/nginx";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { unifiedMergeView } from "@codemirror/merge";
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -55,7 +61,11 @@ export function TextEditor({
       ? json()
       : /\.ya?ml$/i.test(path)
         ? yaml()
-        : [];
+        : path.toLowerCase().endsWith(".toml")
+          ? StreamLanguage.define(toml)
+          : path.includes("/nginx/") || path.endsWith("nginx.conf")
+            ? StreamLanguage.define(nginx)
+            : [];
     const view = new EditorView({
       parent: host.current,
       doc: initial.current,

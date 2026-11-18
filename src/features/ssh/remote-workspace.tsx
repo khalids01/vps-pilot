@@ -358,7 +358,11 @@ function RemoteWorkspaceContent({
               )}
               {proxyOpened && (
                 <div className={tool === "Proxy" ? "block" : "hidden"}>
-                  <RemoteProxy profile={profile} connected={connected} />
+                  <RemoteProxy
+                    profile={profile}
+                    connected={connected}
+                    active={active && tool === "Proxy" && !settingsOpen}
+                  />
                 </div>
               )}
               {pm2Opened && (

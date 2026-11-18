@@ -28,6 +28,7 @@ pub fn run() {
             Ok(())
         })
         .manage(ssh::pm2::Pm2State::default())
+        .manage(ssh::proxy_workspace::ProxyWorkspaceState::default())
         .invoke_handler(tauri::generate_handler![
             database::app_apply_zoom,
             database::app_bootstrap,
@@ -63,6 +64,9 @@ pub fn run() {
             ssh::ssh_parse_command,
             ssh::pm2::ssh_pm2_status,
             ssh::proxy::ssh_proxy_detect,
+            ssh::proxy_workspace::ssh_proxy_workspace_review,
+            ssh::proxy_workspace::ssh_proxy_workspace_execute,
+            ssh::proxy_workspace::ssh_proxy_workspace_reject,
             ssh::pm2::ssh_pm2_workflows_load,
             ssh::pm2::ssh_pm2_workflows_save,
             ssh::pm2::ssh_pm2_review,
