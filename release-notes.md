@@ -1,5 +1,6 @@
-# VPS Pilot 0.2.16
+# VPS Pilot 0.2.17
 
+- Fix screenshot automation for the incoming SSH connection indicator.
 - Show PM2 command runs in per-app tabs with live step logs, failure details and retry.
 - Manage standard Caddy, Nginx and Traefik system services and Docker proxies from the Proxy page.
 - Add configuration editing, templates, diff approval, protected backups and restore for supported file sources.

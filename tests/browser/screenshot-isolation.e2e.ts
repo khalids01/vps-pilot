@@ -88,6 +88,8 @@ test("screenshot bridge never reaches non-local network or real app storage", as
     page.getByRole("navigation", { name: "Storefront web tools" }),
   ).toBeVisible({ timeout: 15_000 });
 
+  await expect(page.getByText("SSH · 2", {exact:true})).toBeVisible();
+
   const fetchBlocked = await page.evaluate(async () => {
     try {
       await fetch("https://example.com/marketing-isolation", {

@@ -24,6 +24,7 @@ export const marketingAllowedCommands = [
   "plugin:updater|check",
   "ssh_profiles",
   "ssh_statuses",
+  "ssh_incoming_connections",
   "ssh_monitor_describe",
   "ssh_monitor_start",
   "ssh_stream_ack",
@@ -488,6 +489,18 @@ export async function installMarketingMock(
                 authenticationMethod: "key",
                 setupAccessVerified: true,
               }));
+            }
+            if (cmd === "ssh_incoming_connections") {
+              const index = profiles.findIndex(profile => profile.id === args.profileId);
+              if (index < 0 || args.connectionId !== `connection-${index}`)
+                throw new Error("Unknown synthetic SSH connection");
+              return {
+                port: profiles[index].port,
+                connections: [
+                  { peer: "198.51.100.24", port: 51422, local: `203.0.113.${10 + index}` },
+                  { peer: "198.51.100.25", port: 51423, local: `203.0.113.${10 + index}` },
+                ],
+              };
             }
             if (cmd === "ssh_monitor_describe") {
               return "exec python3 -I -S -B -u -c '# read-only /proc sampler'";
