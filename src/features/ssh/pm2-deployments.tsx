@@ -146,15 +146,18 @@ export function Pm2Deployments({
             steps: ["git pull --ff-only", "bun i", "bun run build"].map(
               (text) => ({ id: crypto.randomUUID(), text, enabled: true }),
             ),
-            targets: [
-              {
-                profileId,
-                folder: process.folder,
-                cwd: process.folder,
-                name: process.name,
-                process: process.id,
-              },
-            ],
+            targets:
+              process.id < 0
+                ? []
+                : [
+                    {
+                      profileId,
+                      folder: process.folder,
+                      cwd: process.folder,
+                      name: process.name,
+                      process: process.id,
+                    },
+                  ],
           },
     );
   }, [seed, saved.data, profileId]);
@@ -322,8 +325,17 @@ export function Pm2Deployments({
     }
   }
   return (
-    <section className="space-y-3 border-t pt-4" aria-label="Deployments">
-      <div className="flex flex-wrap items-center gap-2">
+    <section
+      className={apps.length ? "space-y-3 border-t pt-4" : ""}
+      aria-label="Deployments"
+    >
+      <div
+        className={
+          apps.length || editing
+            ? "flex flex-wrap items-center gap-2"
+            : "hidden"
+        }
+      >
         <h2 className="mr-auto font-semibold">Deployments</h2>
         <Button
           variant="outline"
@@ -353,7 +365,7 @@ export function Pm2Deployments({
             })
           }
         >
-          New app
+          {profileId ? "New workflow" : "New app"}
         </Button>
         <Button disabled={busy || !chosen.length} onClick={prepare}>
           Deploy selected

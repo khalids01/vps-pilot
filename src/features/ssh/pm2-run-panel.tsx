@@ -1,10 +1,25 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import Ansi from "ansi-to-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type ServerProfile, safeError } from "./api";
 import type { Pm2Process } from "./pm2-deployments";
 
+const colors = {
+  Succeeded: "text-emerald-400",
+  Failed: "text-destructive",
+  Running: "text-sky-400",
+  Queued: "text-muted-foreground",
+  Skipped: "text-muted-foreground",
+};
+const icons = {
+  Succeeded: "✓",
+  Failed: "✕",
+  Running: "◉",
+  Queued: "◷",
+  Skipped: "−",
+};
 type Status = "Queued" | "Running" | "Succeeded" | "Failed" | "Skipped";
 interface Step {
   id: string;
@@ -188,7 +203,7 @@ export function usePm2Runs(
       <section
         ref={panelRef}
         aria-label="Command runs"
-        className="min-w-0 rounded-xl border bg-card"
+        className="min-w-0 space-y-3"
       >
         <div className="flex items-center justify-between border-b px-3 py-2">
           <h2 className="text-sm font-medium">Command runs</h2>
@@ -206,27 +221,28 @@ export function usePm2Runs(
             onValueChange={(value) => setSelected(String(value))}
           >
             <TabsList className="overflow-x-auto border-b px-2">
-              {runs.map((run, i) => (
+              {runs.map((run) => (
                 <TabsTrigger key={run.id} value={run.id} className="shrink-0">
-                  {run.name} · {i + 1}{" "}
-                  <span
-                    className={
-                      run.status === "Failed"
-                        ? "text-destructive"
-                        : "text-muted-foreground"
-                    }
-                  >
-                    {run.status}
+                  {icons[run.status]} {run.name}{" "}
+                  <span className={colors[run.status]}>
+                    {run.status} ·{" "}
+                    {run.steps.some(
+                      (s) => s.status === "Running" || s.status === "Failed",
+                    )
+                      ? run.steps.findIndex(
+                          (s) =>
+                            s.status === "Running" || s.status === "Failed",
+                        ) + 1
+                      : run.steps.filter((s) => s.status === "Succeeded")
+                          .length}
+                    /{run.steps.length}
                   </span>
                 </TabsTrigger>
               ))}
             </TabsList>
             {runs.map((run) => (
               <TabsContent key={run.id} value={run.id}>
-                <div
-                  className="min-h-48 max-h-[65vh] resize-y overflow-auto p-3"
-                  style={{ height: "22rem" }}
-                >
+                <div className="space-y-3 py-3">
                   <p className="mb-3 break-all text-xs text-muted-foreground">
                     {run.profile.name} · {run.folder}
                   </p>
@@ -236,30 +252,45 @@ export function usePm2Runs(
                       open={
                         step.status === "Running" || step.status === "Failed"
                       }
-                      className="mb-2 rounded-md border"
+                      className="mb-2 border-b border-border/60"
                     >
                       <summary className="cursor-pointer break-all px-3 py-2 font-mono text-xs">
                         {i + 1}. {step.command} ·{" "}
-                        <span
-                          className={
-                            step.status === "Failed"
-                              ? "text-destructive"
-                              : "text-muted-foreground"
-                          }
-                        >
-                          {step.status}
+                        <span className={colors[step.status]}>
+                          {icons[step.status]} {step.status}
                         </span>
                         {step.duration !== undefined
                           ? ` · ${(step.duration / 1000).toFixed(1)}s`
                           : ""}
                         {step.code !== undefined ? ` · exit ${step.code}` : ""}
                       </summary>
-                      <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all border-t bg-background p-3 text-xs">
-                        {step.output ||
-                          (step.status === "Running"
-                            ? "Waiting for output…"
-                            : "No output.")}
+                      <pre
+                        className={`whitespace-pre-wrap break-all bg-background/50 p-4 font-mono text-xs leading-6 ${step.status === "Failed" ? "text-destructive" : "text-foreground"}`}
+                      >
+                        {step.output ? (
+                          <Ansi>{step.output}</Ansi>
+                        ) : (
+                          <span className={colors[step.status]}>
+                            {step.status === "Running"
+                              ? "Waiting for output…"
+                              : step.status === "Succeeded"
+                                ? step.command.startsWith("pm2 restart")
+                                  ? "✓ Restart completed · process online"
+                                  : "✓ Completed successfully · no output"
+                                : step.status === "Skipped"
+                                  ? "Skipped after an earlier failure"
+                                  : "No output."}
+                          </span>
+                        )}
                       </pre>
+                      {step.output && step.status === "Succeeded" && (
+                        <p className="px-4 py-2 text-xs text-emerald-400">
+                          ✓ Completed successfully
+                          {step.code !== undefined
+                            ? ` · exit ${step.code}`
+                            : ""}
+                        </p>
+                      )}
                     </details>
                   ))}
                   {run.error && (

@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { Ellipsis, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { type ServerProfile, safeError } from "./api";
 import { useConfiguration } from "./configuration-context";
 import { filesApi, type RemoteDirectory } from "./files-api";
@@ -242,34 +244,72 @@ export function RemotePm2({
     <section className="space-y-4" aria-label="PM2">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">PM2</h1>
-        {checked.length > 0 && (
+        <div className="ml-auto flex items-center gap-2">
           <Button
-            disabled={busy || !connected}
             variant="outline"
-            onClick={() =>
-              restartMany(rows.filter((p) => checked.includes(p.id)))
-            }
-          >
-            Restart selected
-          </Button>
-        )}
-        {checked.length > 0 && (
-          <Button
             disabled={busy || !connected}
             onClick={() =>
-              setCommandRequest({
-                projects: rows.filter((p) => checked.includes(p.id)),
-                commands: ["git pull --ff-only", "bun i"],
-                restart: false,
+              setEditProject({
+                process: {
+                  id: -1,
+                  name: "",
+                  folder: "",
+                  status: "",
+                  uptime: null,
+                  restarts: 0,
+                  cpu: 0,
+                  memory: 0,
+                },
+                nonce: Date.now(),
               })
             }
           >
-            Run commands
+            New app
           </Button>
-        )}
-        <Button disabled={!connected || busy} onClick={refresh}>
-          Refresh
-        </Button>
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Selected app actions"
+                  disabled={busy || !connected || checked.length === 0}
+                />
+              }
+            >
+              <Ellipsis />
+            </MenuTrigger>
+            <MenuContent>
+              <MenuItem
+                onClick={() =>
+                  setCommandRequest({
+                    projects: rows.filter((p) => checked.includes(p.id)),
+                    commands: ["git pull --ff-only", "bun i"],
+                    restart: false,
+                  })
+                }
+              >
+                Run commands
+              </MenuItem>
+              <MenuItem
+                onClick={() =>
+                  restartMany(rows.filter((p) => checked.includes(p.id)))
+                }
+              >
+                Restart selected
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Refresh"
+            disabled={!connected || busy}
+            onClick={refresh}
+          >
+            <RefreshCw className={busy ? "animate-spin" : ""} />
+          </Button>
+        </div>
       </div>
       {error && (
         <p role="alert" className="text-sm text-destructive">
@@ -369,6 +409,7 @@ export function RemotePm2({
               </tbody>
             </table>
           </div>
+          <Pm2Deployments seed={editProject} profileId={profile.id} />
           {runs.panel}
           {selected && !review && (
             <div className="space-y-3 rounded-lg border p-4">
@@ -486,7 +527,6 @@ export function RemotePm2({
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Pm2Deployments seed={editProject} profileId={profile.id} />
         </>
       )}
       {availability !== "ready" && runs.panel}

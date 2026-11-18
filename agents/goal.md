@@ -721,3 +721,18 @@ Track actual layout/notice height, window resize and browser/native zoom rather
 than a fixed header offset. Keep existing modal focus trapping and outside
 interaction blocking, so readable server tabs do not become navigation controls
 while a modal is open. No server/action behavior changes.
+
+## PM2 run presentation — authorized 2026-11-18
+
+Use a compact refresh icon and adjacent selection actions menu. Keep New app in
+the PM2 header and saved workflows above runs. Execution tabs and steps show
+colored status and step progress. Runs expand in normal page flow without nested
+vertical scroll containers; render emitted ANSI colors safely as React elements.
+Quiet completion is successful only after native execution confirms success.
+
+## Public download page — authorized 2026-11-18
+
+Keep the landing page small and independent, with GitHub dark styling, concise
+product copy, README screenshots, and Linux/macOS/Windows installer cards. Deploy
+on every main push and after release publication. Embed one published release
+snapshot so the displayed version and exact installer URLs remain consistent.

@@ -10,6 +10,10 @@ action stays visible.
 
 ## Download
 
+[Visit the download page](https://khalids01.github.io/vps-pilot/) for screenshots,
+the published version and platform installers. The static page deploys on every
+main push and after release publication; its version and links share one release snapshot.
+
 Installers are published with every complete GitHub Release. These links always
 resolve to the latest published version; the page does not call the GitHub API.
 

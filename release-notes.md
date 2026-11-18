@@ -1,9 +1,6 @@
-# VPS Pilot 0.2.17
+# VPS Pilot 0.2.18
 
-- Fix screenshot automation for the incoming SSH connection indicator.
-- Show PM2 command runs in per-app tabs with live step logs, failure details and retry.
-- Manage standard Caddy, Nginx and Traefik system services and Docker proxies from the Proxy page.
-- Add configuration editing, templates, diff approval, protected backups and restore for supported file sources.
-- Keep the VPS tab bar visible and sharp while dialogs blur only the area below it.
-
-Docker configuration editing requires directory bind mounts. Generated and label-based configuration remains with its owning deployment. Traefik explains its offline validation limits before applying changes.
+- Refresh the PM2 toolbar with a compact refresh icon, selected-app actions menu and New app in the header.
+- Expand command runs into the page with colored statuses, step progress, ANSI log colors and explicit successful completion messages.
+- Redesign the public download page with GitHub dark styling, app screenshots and platform installer cards.
+- Deploy the landing page on every main push and after release publication, keeping its displayed version and installer links tied to the same published release.

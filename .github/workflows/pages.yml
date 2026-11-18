@@ -2,7 +2,6 @@ name: Deploy landing page
 on:
   push:
     branches: [main]
-    paths: ["website/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -75,10 +74,12 @@ jobs:
               core.info('No release published yet; keeping the first-release message.');
             }
             fs.writeFileSync('website/downloads.json', JSON.stringify(manifest, null, 2) + '\n');
+      - name: Build static landing page
+        run: node scripts/build-website.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: _site
       - name: Verify Pages deployment identity
         uses: actions/github-script@v8
         with:

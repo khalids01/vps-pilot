@@ -35,3 +35,7 @@ dist-ssr
 # Browser validation artifacts
 test-results/
 playwright-report/
+
+# Static site build and browser previews
+_site/
+.playwright-cli/

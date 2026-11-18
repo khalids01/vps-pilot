@@ -1,1 +1,33 @@
-null
+{
+  "tag_name": "v0.2.17-build.39",
+  "assets": [
+    {
+      "name": "VPS-Pilot-linux-x64.AppImage",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-linux-x64.AppImage"
+    },
+    {
+      "name": "VPS-Pilot-linux-x64.deb",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-linux-x64.deb"
+    },
+    {
+      "name": "VPS-Pilot-linux-x64.rpm",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-linux-x64.rpm"
+    },
+    {
+      "name": "VPS-Pilot-macos-apple-silicon.dmg",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-macos-apple-silicon.dmg"
+    },
+    {
+      "name": "VPS-Pilot-macos-intel.dmg",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-macos-intel.dmg"
+    },
+    {
+      "name": "VPS-Pilot-windows-x64-setup.exe",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-windows-x64-setup.exe"
+    },
+    {
+      "name": "VPS-Pilot-windows-x64.msi",
+      "browser_download_url": "https://github.com/khalids01/vps-pilot/releases/download/v0.2.17-build.39/VPS-Pilot-windows-x64.msi"
+    }
+  ]
+}
