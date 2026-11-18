@@ -711,3 +711,13 @@ fixtures with real Caddy 2.6.2, Nginx 1.22.1 and Traefik 3.6.0: candidate reject
 save/apply, HTTP behavior, stale rejection, protected backup, restore, reload/
 restart and failed Traefik startup recovery. Both real sudo prompt and NOPASSWD
 transports and wrong-password rejection passed. No important/client VPS contacted.
+
+## Modal backdrop boundary — authorized 2026-11-18
+
+Every app modal, including global dialogs and the command palette, leaves the
+VPS tab bar sharp and visible. Shared dialog backdrop starts at the measured
+bottom of that bar; dialogs center and scroll within the remaining viewport.
+Track actual layout/notice height, window resize and browser/native zoom rather
+than a fixed header offset. Keep existing modal focus trapping and outside
+interaction blocking, so readable server tabs do not become navigation controls
+while a modal is open. No server/action behavior changes.

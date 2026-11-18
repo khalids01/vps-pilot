@@ -4915,3 +4915,37 @@ test("Manage env previews dotenv conflicts and saves only after confirmation",as
 test("Manage env blocks duplicate names and clears on app hiding",async({page})=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"PM2",exact:true}).click();const manager=page.getByRole("region",{name:"PM2",exact:true});await manager.getByRole("button",{name:"Actions for web",exact:true}).click();await page.getByRole("menuitem",{name:"Manage env",exact:true}).click();const env=page.getByRole("dialog",{name:"Manage env · web",exact:true});await expect(env.getByLabel("Variable name",{exact:true})).toHaveCount(2);await env.getByLabel("Variable name",{exact:true}).nth(1).fill("API_URL");await expect(env.getByRole("alert")).toContainText("Duplicate keys: API_URL");await expect(env.getByRole("button",{name:"Review changes",exact:true})).toBeDisabled();await page.evaluate(()=>{Object.defineProperty(document,"hidden",{configurable:true,get:()=>true});document.dispatchEvent(new Event("visibilitychange"));});await expect(env).toHaveCount(0);expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain("fixture-env-secret");
 });
+
+
+test("all modals stay below the VPS tab bar at different zooms", async ({page}, testInfo) => {
+  await page.getByRole("navigation", {name:"Fixture Alpha tools"}).getByRole("button", {name:"PM2",exact:true}).click();
+  const manager=page.getByRole("region",{name:"PM2",exact:true});
+  await manager.getByRole("button",{name:"Actions for web",exact:true}).click();
+  await page.getByRole("menuitem",{name:"Manage env",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"Manage env · web",exact:true});
+  await expect(dialog.getByLabel("Value for TOKEN",{exact:true})).toBeVisible();
+  for(const zoom of [1, .8, 1.5]) {
+    await page.evaluate(zoom=>{document.documentElement.style.zoom=String(zoom);},zoom);
+    await expect.poll(async()=>{
+      const bar=await page.locator('[data-slot="vps-tab-bar"]').boundingBox();
+      const backdrop=await page.locator('[data-slot="dialog-overlay"]').last().boundingBox();
+      return bar&&backdrop?Math.abs(backdrop.y-bar.y-bar.height):999;
+    }).toBeLessThan(2);
+    const bar=(await page.locator('[data-slot="vps-tab-bar"]').boundingBox())!;
+    const box=(await dialog.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(bar.y+bar.height);
+    expect(box.y+box.height).toBeLessThanOrEqual(901);
+    expect(Math.abs(box.y+box.height/2-(900+bar.y+bar.height)/2)).toBeLessThan(3);
+    await page.keyboard.press("Tab");
+    expect(await dialog.evaluate(el=>el.contains(document.activeElement))).toBe(true);
+  }
+  await page.evaluate(()=>{document.documentElement.style.zoom="1";});
+  await page.setViewportSize({width:430,height:700});
+  await page.screenshot({path:testInfo.outputPath("modal-below-tabs.png"),animations:"disabled"});
+  await dialog.getByRole("button",{name:"Done",exact:true}).click();
+  await page.getByRole("button",{name:"Open command palette",exact:true}).click();
+  const palette=page.getByRole("dialog",{name:"Go to…",exact:true});await expect(palette).toBeVisible();
+  const bar=(await page.locator('[data-slot="vps-tab-bar"]').boundingBox())!;
+  expect((await page.locator('[data-slot="dialog-overlay"]').last().boundingBox())!.y).toBeCloseTo(bar.y+bar.height,0);
+  await page.keyboard.press("Escape");await expect(palette).toHaveCount(0);
+});

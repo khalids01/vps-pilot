@@ -32,6 +32,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useModalBoundary } from "@/components/ui/modal-boundary";
 import {
   Sidebar,
   SidebarContent,
@@ -475,6 +476,7 @@ export function Workspace() {
   );
 }
 function WorkspaceContent() {
+  const modalBoundary = useModalBoundary();
   const fleet = useFleet();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { preferences, setPreferences, notice } = useWorkspacePreferences();
@@ -620,7 +622,11 @@ function WorkspaceContent() {
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="flex shrink-0 items-end gap-2 border-b bg-shell px-3 pt-2">
+        <div
+          ref={modalBoundary}
+          data-slot="vps-tab-bar"
+          className="flex shrink-0 items-end gap-2 border-b bg-shell px-3 pt-2"
+        >
           <div className="mb-2 mr-2 flex shrink-0 items-center gap-2 px-2 text-primary">
             <img
               src="/app-icon.png"
