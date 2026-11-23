@@ -9,7 +9,6 @@ import {
   statIds,
   useAppSettings,
 } from "./app-settings";
-
 import { ThemePicker } from "./theme-picker";
 
 const labels: Record<StatId, string> = {
@@ -24,157 +23,146 @@ export function SettingsPage() {
   return (
     <main
       aria-label="Application settings"
-      className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8"
+      className="min-h-0 flex-1 overflow-y-auto px-5 py-7 sm:px-9 sm:py-9"
     >
-      <div className="w-full space-y-7">
-        <div>
-          <h1 className="text-2xl font-medium">Settings</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Saved on this device. No cloud account or sync required.
-          </p>
-        </div>
+      <div className="mx-auto w-full max-w-4xl">
+        <header className="border-b border-border/70 pb-6">
+          <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        </header>
         <DeviceSecuritySettings />
         <section
-          className="space-y-3 rounded-xl border bg-card p-5"
-          aria-labelledby="updates-heading"
-        >
-          <h2 id="updates-heading" className="font-medium">
-            Application updates
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Check for a new version of VPS Pilot and review changes before
-            updating.
-          </p>
-          <UpdateControl />
-        </section>
-        <section
-          aria-labelledby="live-settings-heading"
-          className="space-y-5 rounded-xl border bg-card p-5"
-        >
-          <h2 id="live-settings-heading" className="font-medium">
-            Live stats
-          </h2>
-          <label
-            htmlFor="live-stats-enabled"
-            className="flex items-center gap-3 text-sm"
-          >
-            <Checkbox
-              id="live-stats-enabled"
-              checked={settings.liveStats}
-              onCheckedChange={(liveStats) => update({ liveStats })}
-            />
-            Enable live stats automatically
-          </label>
-          <p className="text-xs text-muted-foreground">
-            Every open, connected VPS keeps sampling across Home, Settings, and
-            other VPS tabs. Sampling pauses when the app is inactive. Live
-            measurements stay in memory.
-          </p>
-          <fieldset className="space-y-3">
-            <legend className="text-sm">Refresh interval</legend>
-            <div className="flex gap-2">
-              {[1, 2, 5].map((value) => (
-                <Button
-                  key={value}
-                  size="sm"
-                  variant={
-                    settings.intervalSeconds === value ? "secondary" : "outline"
-                  }
-                  aria-pressed={settings.intervalSeconds === value}
-                  onClick={() => update({ intervalSeconds: value })}
-                >
-                  {value} second{value === 1 ? "" : "s"}
-                </Button>
-              ))}
-            </div>
-          </fieldset>
-          <fieldset className="space-y-3">
-            <legend className="text-sm">Visible stats</legend>
-            {statIds.map((id) => (
-              <label
-                key={id}
-                htmlFor={`visible-stat-${id}`}
-                className="flex items-center gap-3 text-sm"
-              >
-                <Checkbox
-                  id={`visible-stat-${id}`}
-                  checked={settings.visibleStats.includes(id)}
-                  onCheckedChange={(checked) =>
-                    update((old) => ({
-                      ...old,
-                      visibleStats: checked
-                        ? [...old.visibleStats, id]
-                        : old.visibleStats.filter((value) => value !== id),
-                    }))
-                  }
-                />
-                {labels[id]}
-              </label>
-            ))}
-          </fieldset>
-          <p className="text-xs text-muted-foreground">
-            Hide all stats to stop sampling. Choosing a stat changes both the
-            header and detail charts.
-          </p>
-        </section>
-        <section
           aria-labelledby="appearance-heading"
-          className="space-y-4 rounded-xl border bg-card p-5"
+          className="space-y-5 border-b border-border/70 py-6"
         >
-          <h2 id="appearance-heading" className="font-medium">
+          <h2 id="appearance-heading" className="text-sm font-semibold">
             Appearance
           </h2>
           <ThemePicker />
-          <div className="flex flex-wrap items-center gap-3 border-t pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <span className="text-sm">App zoom</span>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="Zoom out"
-              disabled={settings.zoomPercent <= 50}
-              onClick={() =>
-                update((old) => ({
-                  ...old,
-                  zoomPercent: Math.max(50, old.zoomPercent - 10),
-                }))
-              }
-            >
-              <Minus />
-            </Button>
-            <output
-              className="w-14 text-center text-sm tabular-nums"
-              aria-label="Zoom level"
-            >
-              {settings.zoomPercent}%
-            </output>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="Zoom in"
-              disabled={settings.zoomPercent >= 200}
-              onClick={() =>
-                update((old) => ({
-                  ...old,
-                  zoomPercent: Math.min(200, old.zoomPercent + 10),
-                }))
-              }
-            >
-              <Plus />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => update({ zoomPercent: 100 })}
-            >
-              Reset zoom
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Zoom out"
+                disabled={settings.zoomPercent <= 50}
+                onClick={() =>
+                  update((old) => ({
+                    ...old,
+                    zoomPercent: Math.max(50, old.zoomPercent - 10),
+                  }))
+                }
+              >
+                <Minus />
+              </Button>
+              <output
+                className="w-12 text-center text-xs tabular-nums"
+                aria-label="Zoom level"
+              >
+                {settings.zoomPercent}%
+              </output>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="Zoom in"
+                disabled={settings.zoomPercent >= 200}
+                onClick={() =>
+                  update((old) => ({
+                    ...old,
+                    zoomPercent: Math.min(200, old.zoomPercent + 10),
+                  }))
+                }
+              >
+                <Plus />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => update({ zoomPercent: 100 })}
+              >
+                Reset zoom
+              </Button>
+            </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Ctrl/Cmd + plus or minus to zoom, Ctrl/Cmd + 0 to reset. Ctrl/Cmd +
-            scroll also works.
-          </p>
         </section>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <section
+          aria-labelledby="live-settings-heading"
+          className="space-y-5 border-b border-border/70 py-6"
+        >
+          <h2 id="live-settings-heading" className="text-sm font-semibold">
+            Live stats
+          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <label
+              htmlFor="live-stats-enabled"
+              className="flex items-center gap-2.5 text-sm"
+            >
+              <Checkbox
+                id="live-stats-enabled"
+                checked={settings.liveStats}
+                onCheckedChange={(liveStats) => update({ liveStats })}
+              />
+              Enable live stats automatically
+            </label>
+            <fieldset className="flex items-center gap-3">
+              <legend className="sr-only">Refresh interval</legend>
+              <span className="text-xs text-muted-foreground">Refresh</span>
+              <div className="flex gap-1 rounded-lg border bg-muted/20 p-0.5">
+                {[1, 2, 5].map((value) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    variant={
+                      settings.intervalSeconds === value ? "secondary" : "ghost"
+                    }
+                    aria-pressed={settings.intervalSeconds === value}
+                    onClick={() => update({ intervalSeconds: value })}
+                  >
+                    {value} second{value === 1 ? "" : "s"}
+                  </Button>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+          <fieldset>
+            <legend className="mb-3 text-xs text-muted-foreground">
+              Visible stats
+            </legend>
+            <div className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
+              {statIds.map((id) => (
+                <label
+                  key={id}
+                  htmlFor={`visible-stat-${id}`}
+                  className="flex items-center gap-2.5 text-sm"
+                >
+                  <Checkbox
+                    id={`visible-stat-${id}`}
+                    checked={settings.visibleStats.includes(id)}
+                    onCheckedChange={(checked) =>
+                      update((old) => ({
+                        ...old,
+                        visibleStats: checked
+                          ? [...old.visibleStats, id]
+                          : old.visibleStats.filter((value) => value !== id),
+                      }))
+                    }
+                  />
+                  {labels[id]}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        </section>
+        <section
+          aria-labelledby="updates-heading"
+          className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 py-6"
+        >
+          <h2 id="updates-heading" className="text-sm font-semibold">
+            Application updates
+          </h2>
+          <UpdateControl />
+        </section>
+        <footer className="flex flex-wrap items-center justify-between gap-3 py-5">
           <p role="status" className="text-xs text-muted-foreground">
             {error
               ? "Changes not saved"
@@ -183,7 +171,7 @@ export function SettingsPage() {
                 : "Saved on this device"}
           </p>
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             onClick={() =>
               update({ ...defaultSettings, visibleStats: [...statIds] })
@@ -191,7 +179,7 @@ export function SettingsPage() {
           >
             Restore default settings
           </Button>
-        </div>
+        </footer>
       </div>
     </main>
   );

@@ -81,11 +81,7 @@ export function ThemePicker() {
   const { settings, update } = useAppSettings();
   return (
     <fieldset className="space-y-3">
-      <legend className="text-sm font-medium">Color theme</legend>
-      <p className="text-sm text-muted-foreground">
-        Choose a dark palette for the app, editor and terminals. Your choice is
-        saved on this device.
-      </p>
+      <legend className="sr-only">Color theme</legend>
       <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 xl:grid-cols-4">
         {themes.map((theme) => (
           <label
@@ -111,16 +107,9 @@ export function ThemePicker() {
                 />
               )}
             </span>
-            <span className="mt-1 mb-1 px-1 text-xs leading-relaxed text-muted-foreground">
-              {theme.description}
-            </span>
           </label>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">
-        VS Code-inspired palettes adapted for VPS Pilot. Preview values are
-        illustrative.
-      </p>
     </fieldset>
   );
 }
