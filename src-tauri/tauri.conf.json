@@ -32,7 +32,19 @@
       "icons/vps-pilot/icon.ico",
       "icons/vps-pilot/icon.icns"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "linux": {
+      "deb": {
+        "depends": [
+          "libpam0g"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "pam"
+        ]
+      }
+    }
   },
   "plugins": {
     "updater": {

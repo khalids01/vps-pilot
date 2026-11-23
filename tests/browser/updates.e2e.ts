@@ -12,6 +12,7 @@ async function mockDesktop(page: import("@playwright/test").Page, mode = "availa
         unregisterCallback: () => {},
         invoke: async (cmd: string, args: Record<string, any> = {}) => {
           calls.push(cmd);
+          if (cmd === "app_security_status") return { enabled: false, locked: false, available: false };
           if (cmd === "app_bootstrap") return {
             settings:{liveStats:true,intervalSeconds:1,visibleStats:["cpu","ram","storage","diskIo","network"],zoomPercent:100},
             documents:JSON.parse(localStorage.getItem("__fixture_update_docs") ?? "{}")

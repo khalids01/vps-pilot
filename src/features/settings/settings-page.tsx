@@ -1,6 +1,7 @@
 import { Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DeviceSecuritySettings } from "@/features/security/device-lock";
 import { UpdateControl } from "@/features/updates/update-control";
 import {
   defaultSettings,
@@ -32,6 +33,7 @@ export function SettingsPage() {
             Saved on this device. No cloud account or sync required.
           </p>
         </div>
+        <DeviceSecuritySettings />
         <section
           className="space-y-3 rounded-xl border bg-card p-5"
           aria-labelledby="updates-heading"

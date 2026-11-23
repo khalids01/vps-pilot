@@ -356,3 +356,18 @@ scratch dirs (including Debian Nginx cache paths) and only the CHOWN capability 
 Nginx's private cache ownership. Tests verify stale-save refusal, apply/restore,
 real HTTP output, stopped Traefik recovery and protected backups. No claim of
 upstream/TLS health verification or universal custom-service compatibility.
+
+## Linux device authentication
+
+Run `python3 tests/fixtures/linux-device-auth.py --context desktop-linux` with an
+explicit local Unix-socket Docker context. The fixture compiles the production
+PAM and app-password modules, creates a disposable non-root account, and checks correct/wrong
+passwords, account expiry, root rejection and missing, writable or permissive PAM
+policies. Its random password travels only on stdin; no host mounts, host account
+changes or VPS connections are used. The container is removed on completion.
+
+Linux development builds need `libpam0g-dev` and `libclang-dev` on Debian/Ubuntu
+in addition to the existing Tauri dependencies. Runtime packages require PAM;
+the app verifies the current OS user through `/etc/pam.d/login` without editing
+that policy. Fingerprint-only and multi-step authentication are outside this
+password flow. macOS/Windows builds keep their existing native provider.

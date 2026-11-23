@@ -209,7 +209,30 @@ Manrope is bundled locally for consistent typography without a network connectio
 3. Leave **Password** blank to use your SSH agent, selected private key, or
    default `~/.ssh/id_ed25519` / `~/.ssh/id_rsa`. If your server needs a password,
    enter it. Encrypted keys have a separate **Key passphrase** field. The host
-   key is checked again before authentication. Neither credential is saved.
+   key is checked again before authentication. Select **Remember password on this
+   device** to save a successfully authenticated SSH password in the OS credential
+   store (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
+   On later connections select **Use saved password**; **Forget saved password**
+   removes it. If the store is unavailable, use manual entry. Key passphrases are
+   never saved. Passwords and encryption keys never enter SQLite.
+
+   In **Settings → Security**, use **Set password** to create a password for
+   VPS Pilot. Initial setup enables app locking. **Change password** requires
+   the current password and a new password of at least eight characters. This
+   does not change the PC login password. Only a salted Argon2id verifier is saved
+   in the app's private lock configuration; passwords never enter SQLite or
+   browser storage. Changing an existing password preserves a disabled lock.
+
+   Existing device locks keep their OS authentication until an app password is
+   set. On Linux, this legacy flow verifies the PC login password through PAM;
+   migrating an enabled lock requires that existing authentication. The lock
+   screen labels that input **PC login password** and the separate app password
+   **Password**. The eye button shows/hides the field; **Clear** empties it.
+
+   Locking applies at startup, when the window loses focus and after five
+   minutes without interaction. Workspaces remain mounted behind the lock while
+   native IPC rejects new actions. Disabling locking requires authentication.
+   Existing sudo command approvals remain required.
 4. Switch VPS tabs to check connection isolation. Disconnect explicitly, or close
    the real tab and confirm disconnect. Saved profiles remain available.
 

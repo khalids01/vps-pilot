@@ -374,6 +374,7 @@ test.beforeEach(async ({ page }) => {
             }
             args.output.onmessage({status:"succeeded"});return null;
           }
+          if (cmd === "app_security_status") return { enabled: false, locked: false, available: false };
           if (cmd === "app_bootstrap") {
             if ((window as any).__databaseUnavailable) throw new Error("Fixture database unavailable");
             return {

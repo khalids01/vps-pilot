@@ -101,7 +101,7 @@ jobs:
           workspaces: src-tauri -> target
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev pkg-config libpam0g-dev libclang-dev
       - run: bun install --frozen-lockfile
       - run: bun run scripts/check-release.ts
       - run: bun run check

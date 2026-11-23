@@ -736,3 +736,56 @@ Keep the landing page small and independent, with GitHub dark styling, concise
 product copy, README screenshots, and Linux/macOS/Windows installer cards. Deploy
 on every main push and after release publication. Embed one published release
 snapshot so the displayed version and exact installer URLs remain consistent.
+
+## Local credential saving and device lock — authorized 2026-11-18
+
+Optional SSH password saving uses the OS credential store only; SQLite contains
+no passwords or encryption keys. Bind credentials to app profile ID, host, port
+and username; save only after successful password authentication. Saved-password
+use is explicit, with manual entry and a Forget action available. Key passphrases
+remain transient. Stable storage identifiers preserve credentials across updates.
+Device lock is optional and enabled/disabled only after native authentication.
+Supported macOS/Windows authentication protects startup, native window focus loss,
+and five minutes of inactivity. Linux offers keyring storage but no device lock
+through the selected provider. Enforce the lock at native application IPC dispatch;
+status/unlock/authenticated configuration remain available while locked. Existing
+in-flight jobs are not replayed or canceled automatically. Sudo approvals remain.
+
+
+## Linux device lock — user correction, 2026-11-23
+
+Add Linux authentication to the existing optional device lock. This supersedes
+Linux being unavailable through the biometric provider. Verify the current real
+non-root OS user through the fixed system PAM login policy; never accept a
+renderer-supplied username/service, use environment usernames, elevate, run a
+shell or modify host PAM policies. The Linux login password is transient, cleared
+on submit/visibility loss, and never saved or logged. Require PAM authentication,
+account validity, unchanged username and an actual password challenge. Reject
+empty/NUL/oversized passwords and repeated secret prompts rather than replaying a
+password into another factor. Show actual availability and system-policy errors;
+keep macOS/Windows native authentication and native IPC lock enforcement intact.
+Validate success, wrong-password rejection, expired accounts and missing/permissive
+policies only in an explicitly selected disposable local Linux container. No VPS
+connections or real user passwords in fixtures. Package Linux PAM runtime and
+build dependencies; fingerprint-only/MFA policies are not promised.
+
+## Lock screen, app password and Settings refinement — authorized 2026-11-24
+
+Use a compact centered lock card with only its title, labeled password input,
+placeholder, accessible show/hide eye button, and adjacent Clear/Unlock actions.
+Remove explanatory subtitles. Settings uses restrained sections, compact controls
+and existing theme previews. Preserve all settings and session behavior.
+
+Add a VPS Pilot app password, separate from the PC account password. Set/change
+in Settings; an existing app password requires the current password, and migration
+from an enabled legacy device lock requires its existing OS authentication. Never
+change the PC account password. Keep legacy native/PAM unlocking until migration;
+label only that legacy Linux input as PC login password. Store only an Argon2id
+salted verifier in the versioned, owner-only local lock configuration, not raw
+passwords in SQLite, logs, browser storage or command history. This authorizes an
+app-password verifier as local lock metadata, separate from saved SSH credentials
+which continue using the OS credential store. Preserve legacy boolean lock files,
+refuse malformed/newer data, write atomically and retain old credentials after a
+failed change. First password setup enables locking; later changes preserve an
+explicitly disabled lock. Keep native lock enforcement, current-password checks,
+bounded hashing parameters, attempt backoff and focus/inactivity invalidation.

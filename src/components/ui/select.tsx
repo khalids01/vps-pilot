@@ -2,8 +2,21 @@ import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { cn } from "cn";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import type * as React from "react";
+import { useLockableOpen } from "@/features/security/lock-context";
 
-const Select = SelectPrimitive.Root;
+const Select: typeof SelectPrimitive.Root = (props) => {
+  const lockable = useLockableOpen(props.open, props.defaultOpen);
+  return (
+    <SelectPrimitive.Root
+      {...props}
+      open={lockable.open}
+      onOpenChange={(open, details) => {
+        lockable.setOpen(open);
+        props.onOpenChange?.(open, details);
+      }}
+    />
+  );
+};
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (

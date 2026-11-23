@@ -2,6 +2,7 @@
 identifier = "ssh-connection"
 description = "Allow saved-profile management, host identity review, and authenticated SSH connection lifecycle. Includes interactive remote PTYs and fixed read-only inspections; no local shell or arbitrary file access."
 commands.allow = [
+  "app_security_status", "app_security_unlock", "app_security_enable", "app_security_change_password", "app_security_lock", "app_security_activity", "ssh_password_forget",
   "ssh_proxy_workspace_review",
   "ssh_proxy_workspace_execute",
   "ssh_proxy_workspace_reject",

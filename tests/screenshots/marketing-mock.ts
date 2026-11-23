@@ -17,6 +17,10 @@ const fixedNow = Date.parse("2026-11-11T10:30:00Z");
 
 export const marketingAllowedCommands = [
   "app_bootstrap",
+  "app_security_status",
+  "app_security_activity",
+  "plugin:event|listen",
+  "plugin:event|unlisten",
   "app_save_settings",
   "app_save_document",
   "app_apply_zoom",
@@ -471,6 +475,8 @@ export async function installMarketingMock(
               unexpected.push(cmd);
               throw new Error("Unexpected native call: " + cmd);
             }
+            if (cmd === "app_security_status") return { enabled: false, locked: false, available: false };
+            if (cmd === "app_security_activity" || cmd.startsWith("plugin:event|")) return 0;
             if (cmd === "app_bootstrap") {
               return { settings, documents };
             }

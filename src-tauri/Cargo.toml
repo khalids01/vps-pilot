@@ -29,5 +29,11 @@ russh-sftp = "3"
 sha2 = "0.10"
 zip = { version = "9", default-features = false }
 rand = "0.10"
+argon2 = { version = "0.6", features = ["zeroize"] }
+keyring = "4.2"
+tauri-plugin-biometry = "=0.2.8"
+[target.'cfg(target_os = "linux")'.dependencies]
+pam-client = { version = "0.5", default-features = false }
+nix = { version = "0.32", features = ["user"] }
 [dev-dependencies]
 tokio-stream = { version = "0.1.17", features = ["net"] }

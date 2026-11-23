@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Container,
   Folder,
@@ -165,6 +166,8 @@ function RemoteWorkspaceContent({
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [verified, setVerified] = useState(false);
   const [password, setPassword] = useState("");
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [useSavedPassword, setUseSavedPassword] = useState(false);
   const [passphrase, setPassphrase] = useState("");
   const [challengeConsumed, setChallengeConsumed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -618,6 +621,8 @@ function RemoteWorkspaceContent({
                           inspection?.challengeId ?? "",
                           credential,
                           keyPassphrase,
+                          rememberPassword,
+                          useSavedPassword,
                         );
                         if (request.current === current) {
                           setPhase(null);
@@ -648,7 +653,9 @@ function RemoteWorkspaceContent({
                           autoComplete="off"
                           value={password}
                           maxLength={4096}
-                          disabled={busy || challengeConsumed}
+                          disabled={
+                            busy || challengeConsumed || useSavedPassword
+                          }
                           onChange={(event) => setPassword(event.target.value)}
                         />
                       </label>
@@ -658,6 +665,55 @@ function RemoteWorkspaceContent({
                         ? "Leave blank to use your private key."
                         : "Leave blank to use your SSH agent or default key."}
                     </p>
+                    {profile.passwordAllowed !== false && (
+                      <div className="mt-3 space-y-3 text-sm">
+                        <label
+                          htmlFor={`use-saved-${profile.id}`}
+                          className="flex items-center gap-2"
+                        >
+                          <Checkbox
+                            id={`use-saved-${profile.id}`}
+                            checked={useSavedPassword}
+                            onCheckedChange={(value) => {
+                              setUseSavedPassword(value);
+                              setPassword("");
+                            }}
+                            disabled={busy}
+                          />
+                          Use saved password
+                        </label>
+                        <label
+                          htmlFor={`remember-${profile.id}`}
+                          className="flex items-center gap-2"
+                        >
+                          <Checkbox
+                            id={`remember-${profile.id}`}
+                            checked={rememberPassword}
+                            onCheckedChange={setRememberPassword}
+                            disabled={busy || useSavedPassword}
+                          />
+                          Remember password on this device
+                        </label>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={async () => {
+                            try {
+                              await invoke("ssh_password_forget", {
+                                profileId: profile.id,
+                              });
+                              setUseSavedPassword(false);
+                            } catch (error) {
+                              setError(safeError(error));
+                            }
+                          }}
+                        >
+                          Forget saved password
+                        </Button>
+                      </div>
+                    )}
                     <details
                       className="mt-5 text-sm"
                       open={profile.identityFile ? true : undefined}
@@ -685,7 +741,8 @@ function RemoteWorkspaceContent({
                       </label>
                     </details>
                     <p className="mt-4 text-xs text-muted-foreground">
-                      Credentials are never saved.
+                      Passwords are saved only when requested, in OS credential
+                      storage. Key passphrases remain temporary.
                     </p>
                   </form>
                 )}

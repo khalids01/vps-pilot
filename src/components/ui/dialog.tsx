@@ -3,9 +3,21 @@ import { cn } from "cn";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
+import { useLockableOpen } from "@/features/security/lock-context";
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+  const lockable = useLockableOpen(props.open, props.defaultOpen);
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      {...props}
+      open={lockable.open}
+      onOpenChange={(open, details) => {
+        lockable.setOpen(open);
+        props.onOpenChange?.(open, details);
+      }}
+    />
+  );
 }
 
 function DialogTrigger({ ...props }: DialogPrimitive.Trigger.Props) {

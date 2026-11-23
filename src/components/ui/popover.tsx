@@ -1,7 +1,20 @@
 import { Popover as Primitive } from "@base-ui/react/popover";
 import { cn } from "cn";
+import { useLockableOpen } from "@/features/security/lock-context";
 
-export const Popover = Primitive.Root;
+export const Popover: typeof Primitive.Root = (props) => {
+  const lockable = useLockableOpen(props.open, props.defaultOpen);
+  return (
+    <Primitive.Root
+      {...props}
+      open={lockable.open}
+      onOpenChange={(open, details) => {
+        lockable.setOpen(open);
+        props.onOpenChange?.(open, details);
+      }}
+    />
+  );
+};
 export const PopoverTrigger = Primitive.Trigger;
 export const PopoverTitle = Primitive.Title;
 export function PopoverContent({

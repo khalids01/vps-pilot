@@ -1,10 +1,35 @@
 import { ContextMenu as ContextPrimitive } from "@base-ui/react/context-menu";
 import { Menu as Primitive } from "@base-ui/react/menu";
 import { cn } from "cn";
+import { useLockableOpen } from "@/features/security/lock-context";
 
-export const Menu = Primitive.Root;
+export const Menu: typeof Primitive.Root = (props) => {
+  const lockable = useLockableOpen(props.open, props.defaultOpen);
+  return (
+    <Primitive.Root
+      {...props}
+      open={lockable.open}
+      onOpenChange={(open, details) => {
+        lockable.setOpen(open);
+        props.onOpenChange?.(open, details);
+      }}
+    />
+  );
+};
 export const MenuTrigger = Primitive.Trigger;
-export const ContextMenu = ContextPrimitive.Root;
+export const ContextMenu: typeof ContextPrimitive.Root = (props) => {
+  const lockable = useLockableOpen(props.open, props.defaultOpen);
+  return (
+    <ContextPrimitive.Root
+      {...props}
+      open={lockable.open}
+      onOpenChange={(open, details) => {
+        lockable.setOpen(open);
+        props.onOpenChange?.(open, details);
+      }}
+    />
+  );
+};
 export const ContextMenuTrigger = ContextPrimitive.Trigger;
 export function MenuItem({ className, ...props }: Primitive.Item.Props) {
   return (

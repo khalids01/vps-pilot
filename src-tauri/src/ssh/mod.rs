@@ -15,7 +15,7 @@ pub mod proxy_workspace;
 mod services;
 pub mod setup_access;
 pub mod setup_packages;
-mod store;
+pub(crate) mod store;
 pub mod streams;
 pub mod structured;
 #[cfg(test)]
@@ -152,7 +152,7 @@ impl SshService {
     pub fn profiles(&self) -> Result<Vec<Profile>, String> {
         Ok(self.store()?.database()?.profiles.clone())
     }
-    fn profile(&self, id: &str) -> Result<Profile, String> {
+    pub(crate) fn profile(&self, id: &str) -> Result<Profile, String> {
         self.store()?
             .database()?
             .profiles
@@ -640,21 +640,43 @@ pub async fn ssh_connect(
     challenge_id: String,
     password: Option<String>,
     passphrase: Option<String>,
+    remember_password: Option<bool>,
+    use_saved_password: Option<bool>,
 ) -> Result<(), String> {
+    let profile = service.profile(&profile_id)?;
+    let credential = if use_saved_password.unwrap_or(false) {
+        if !profile.password_allowed {
+            return Err("Password authentication is disabled.".into());
+        }
+        crate::security::password(&profile)?
+    } else {
+        Zeroizing::new(password.unwrap_or_default())
+    };
     if passphrase.is_some() {
         service
             .connect_with_credentials(
                 &profile_id,
                 &challenge_id,
-                password.unwrap_or_default(),
+                credential.to_string(),
                 passphrase,
             )
-            .await
+            .await?;
     } else {
         service
-            .connect(&profile_id, &challenge_id, password.unwrap_or_default())
-            .await
+            .connect(&profile_id, &challenge_id, credential.to_string())
+            .await?;
     }
+    if remember_password.unwrap_or(false) && !credential.is_empty() {
+        let authenticated = service
+            .statuses()
+            .await
+            .into_iter()
+            .any(|s| s.profile_id == profile_id && s.authentication_method == Some("password"));
+        if authenticated {
+            crate::security::save(&profile, &credential)?;
+        }
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn ssh_disconnect(

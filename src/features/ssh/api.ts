@@ -69,12 +69,16 @@ export const sshApi = {
     challengeId: string,
     password = "",
     passphrase?: string,
+    rememberPassword = false,
+    useSavedPassword = false,
   ) =>
     invoke<void>("ssh_connect", {
       profileId,
       challengeId,
       password,
       passphrase: passphrase || null,
+      rememberPassword,
+      useSavedPassword,
     }),
   disconnect: (profileId: string) =>
     invoke<void>("ssh_disconnect", { profileId }),
