@@ -20,7 +20,6 @@ permissions:
 jobs:
   deploy:
     permissions:
-      actions: read
       contents: read
       pages: write
       id-token: write
@@ -81,41 +80,53 @@ jobs:
         run: node scripts/build-website.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
+        id: upload
         with:
           name: ${{ env.PAGES_ARTIFACT_NAME }}
           path: _site
-      - name: Wait for Pages artifact metadata
+      - name: Deploy uploaded Pages artifact
+        id: deployment
         uses: actions/github-script@v8
+        env:
+          PAGES_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
         with:
           script: |
-            const name = process.env.PAGES_ARTIFACT_NAME;
-            for (let attempt = 1; attempt <= 10; attempt++) {
-              const {data} = await github.rest.actions.listWorkflowRunArtifacts({
-                ...context.repo, run_id: context.runId, name
-              });
-              if (data.artifacts.some(artifact => artifact.name === name && !artifact.expired)) return;
-              if (attempt < 10) await new Promise(resolve => setTimeout(resolve, 3000));
+            const artifactId = Number(process.env.PAGES_ARTIFACT_ID);
+            if (!Number.isSafeInteger(artifactId) || artifactId <= 0) {
+              throw new Error('Pages upload did not return an artifact ID.');
             }
-            throw new Error(`Pages artifact ${name} is not visible in this workflow run.`);
-      - name: Verify Pages deployment identity
-        uses: actions/github-script@v8
-        with:
-          script: |
-            if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-              throw new Error('Pages deployment requires id-token: write on this job and its caller.');
-            }
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            let idToken;
             for (let attempt = 1; attempt <= 3; attempt++) {
               try {
-                await core.getIDToken();
-                core.info('Pages deployment identity verified.');
+                idToken = await core.getIDToken();
                 break;
               } catch {
-                if (attempt === 3) throw new Error('GitHub OIDC is unavailable after three attempts. Retry this Pages job; desktop installers remain published.');
-                core.warning('GitHub OIDC request failed; retrying without exposing token details.');
-                await new Promise(resolve => setTimeout(resolve, 3000));
+                if (attempt === 3) throw new Error('Could not obtain a Pages deployment identity.');
+                await sleep(3000);
               }
             }
-      - uses: actions/deploy-pages@v4
-        id: deployment
-        with:
-          artifact_name: ${{ env.PAGES_ARTIFACT_NAME }}
+            let deployment;
+            try {
+              ({data: deployment} = await github.request('POST /repos/{owner}/{repo}/pages/deployments', {
+                ...context.repo,
+                artifact_id: artifactId,
+                pages_build_version: context.sha,
+                oidc_token: idToken
+              }));
+            } catch (error) {
+              throw new Error(`GitHub Pages rejected artifact ${artifactId} (HTTP ${error.status ?? 'unknown'}).`);
+            }
+            const deploymentId = deployment.id ?? deployment.status_url?.split('/').pop();
+            if (!deploymentId) throw new Error('GitHub Pages returned no deployment ID.');
+            core.setOutput('page_url', deployment.page_url);
+            const terminal = new Set(['deployment_failed', 'deployment_content_failed', 'deployment_cancelled', 'deployment_lost']);
+            for (let attempt = 0; attempt < 120; attempt++) {
+              const {data} = await github.request('GET /repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}', {
+                ...context.repo, pages_deployment_id: deploymentId
+              });
+              if (data.status === 'succeed') return;
+              if (terminal.has(data.status)) throw new Error(`GitHub Pages deployment ended with ${data.status}.`);
+              await sleep(5000);
+            }
+            throw new Error('Timed out waiting for GitHub Pages to publish.');

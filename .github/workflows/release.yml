@@ -266,7 +266,6 @@ jobs:
   deploy-downloads:
     needs: [prepare, publish]
     permissions:
-      actions: read
       contents: read
       pages: write
       id-token: write
