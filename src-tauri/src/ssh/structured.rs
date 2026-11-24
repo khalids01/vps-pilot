@@ -177,10 +177,17 @@ fn firewall(title: &str, text: &str) -> Section {
         })
         .collect();
     let mut result = table(title, &["Rule", "Destination", "Action", "Source"], rows);
-    if text.lines().any(|line| line.trim() == "Status: inactive") {
+    if text.contains("UFW is not installed.") {
+        result.message = Some("UFW is not installed.".into());
+    } else if text.contains("need to be root") {
+        result.state = "unavailable".into();
+        result.message = Some("Permission needed to read UFW rules.".into());
+    } else if text.lines().any(|line| line.trim() == "Status: inactive") {
         result.message = Some("UFW is inactive.".into());
     } else if text.lines().any(|line| line.trim() == "Status: active") {
         result.message = Some("UFW is active.".into());
+    } else {
+        result.state = "unavailable".into();
     }
     result
 }
@@ -387,6 +394,22 @@ fn section(title: &str, text: &str) -> Section {
             words(text, 4),
         ),
         "UFW state" => firewall("Firewall rules", text),
+        "UFW defaults" => table(
+            title,
+            &["Direction", "Configured policy"],
+            words(text, 2)
+                .into_iter()
+                .filter_map(|row| {
+                    let direction = match row[0].as_str() {
+                        "DEFAULT_INPUT_POLICY" => "Incoming",
+                        "DEFAULT_OUTPUT_POLICY" => "Outgoing",
+                        "DEFAULT_FORWARD_POLICY" => "Routed",
+                        _ => return None,
+                    };
+                    Some(vec![direction.into(), row[1].clone()])
+                })
+                .collect(),
+        ),
         "Directory sizes" => table(
             title,
             &["Size KiB", "Directory"],

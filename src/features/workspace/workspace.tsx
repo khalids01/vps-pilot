@@ -48,7 +48,6 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
-import { HelperWorkspace } from "@/features/helper/helper-workspace";
 import { SettingsPage } from "@/features/settings/settings-page";
 import {
   address,
@@ -155,7 +154,7 @@ const tools = [
   },
   {
     id: "firewall",
-    label: "Firewall",
+    label: "UFW Firewall",
     icon: Shield,
     description: "Firewall rules with protection for active SSH access.",
   },
@@ -296,7 +295,8 @@ function ServerWorkspace({
   sidebarCollapsed: boolean;
   onSidebarCollapsedChange: (collapsed: boolean) => void;
 }) {
-  const selectedTool = preferences.tool;
+  const selectedTool =
+    preferences.tool === "helper" ? "overview" : preferences.tool;
   const [terminalOpened, setTerminalOpened] = useState(
     selectedTool === "terminal",
   );
@@ -332,29 +332,28 @@ function ServerWorkspace({
                   </SidebarGroupLabel>
                   <SidebarGroupContent>
                     <SidebarMenu>
-                      {items.map(({ id, label, icon: Icon }) => {
-                        const active = !settingsOpen && selectedTool === id;
-                        return (
-                          <SidebarMenuItem
-                            key={id}
-                            className={id === "helper" ? "mt-4" : undefined}
-                          >
-                            <SidebarMenuButton
-                              isActive={active}
-                              aria-current={active ? "page" : undefined}
-                              aria-label={label}
-                              tooltip={label}
-                              onClick={() => navigateToTool(id)}
-                              className={`h-10 gap-3 px-3 data-active:text-primary! ${active ? "" : "text-muted-foreground"}`}
-                            >
-                              <Icon className="size-4" aria-hidden="true" />
-                              <span className="truncate transition-opacity duration-200 group-data-[collapsible=icon]:opacity-0">
-                                {label}
-                              </span>
-                            </SidebarMenuButton>
-                          </SidebarMenuItem>
-                        );
-                      })}
+                      {items
+                        .filter(({ id }) => id !== "helper")
+                        .map(({ id, label, icon: Icon }) => {
+                          const active = !settingsOpen && selectedTool === id;
+                          return (
+                            <SidebarMenuItem key={id}>
+                              <SidebarMenuButton
+                                isActive={active}
+                                aria-current={active ? "page" : undefined}
+                                aria-label={label}
+                                tooltip={label}
+                                onClick={() => navigateToTool(id)}
+                                className={`h-10 gap-3 px-3 data-active:text-primary! ${active ? "" : "text-muted-foreground"}`}
+                              >
+                                <Icon className="size-4" aria-hidden="true" />
+                                <span className="truncate transition-opacity duration-200 group-data-[collapsible=icon]:opacity-0">
+                                  {label}
+                                </span>
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          );
+                        })}
                     </SidebarMenu>
                   </SidebarGroupContent>
                 </SidebarGroup>
@@ -416,14 +415,6 @@ function ServerWorkspace({
                 category={preferences.softwareCategory}
                 onCategoryChange={(softwareCategory) =>
                   onPreferencesChange({ softwareCategory })
-                }
-              />
-            ) : selectedTool === "helper" ? (
-              <HelperWorkspace
-                server={server}
-                scenario={preferences.helperScenario}
-                onScenarioChange={(helperScenario) =>
-                  onPreferencesChange({ helperScenario })
                 }
               />
             ) : selectedTool !== "terminal" ? (

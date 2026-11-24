@@ -25,7 +25,7 @@ const tools: Record<ToolId, string> = {
   proxy: "Proxy",
   services: "Services",
   storage: "Storage",
-  firewall: "Firewall",
+  firewall: "UFW Firewall",
   helper: "Server helper",
   network: "Network",
   processes: "Processes",
@@ -98,14 +98,16 @@ export function CommandPalette({
           profile,
           run: () => onOpen(profile),
         },
-        ...Object.entries(tools).map(([tool, label]) => ({
-          id: `${profile.id}:${tool}`,
-          label: `${profile.name} → ${label}`,
-          detail,
-          profile,
-          tool: tool as ToolId,
-          run: () => onOpen(profile, tool as ToolId),
-        })),
+        ...Object.entries(tools)
+          .filter(([tool]) => tool !== "helper")
+          .map(([tool, label]) => ({
+            id: `${profile.id}:${tool}`,
+            label: `${profile.name} → ${label}`,
+            detail,
+            profile,
+            tool: tool as ToolId,
+            run: () => onOpen(profile, tool as ToolId),
+          })),
       ];
     }),
   ];

@@ -64,18 +64,27 @@ function Metric({
     </div>
   );
 }
-function badge(value: string) {
-  const good = /^(active|running|up\b|enabled|loaded|allow)/i.test(value);
+export function statusBadge(value: string) {
+  const good = /^(active|running|up\b|online|enabled|loaded|allow)/i.test(
+    value,
+  );
   const bad = /^(failed|dead|denied|deny|reject|error)/i.test(value);
+  const attention = /^(partial|limit|restarting|degraded)/i.test(value);
   return (
     <span
-      className={`inline-flex rounded-md px-2 py-1 text-[11px] ${good ? "bg-primary/10 text-primary" : bad ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}
+      className={`inline-flex rounded-md px-2 py-1 text-[11px] ${good ? "bg-primary/10 text-primary" : bad ? "bg-destructive/10 text-destructive" : attention ? "bg-amber-500/15 text-amber-600 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}
     >
       {value || "Unknown"}
     </span>
   );
 }
-export function ReportSection({ section }: { section: InspectionSection }) {
+export function ReportSection({
+  section,
+  preserveOrder = false,
+}: {
+  section: InspectionSection;
+  preserveOrder?: boolean;
+}) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{
     index: number;
@@ -125,7 +134,7 @@ export function ReportSection({ section }: { section: InspectionSection }) {
             {section.rows.length}
             {section.truncated ? "+" : ""}
           </span>
-          {section.state === "partial" && badge("Partial")}
+          {section.state === "partial" && statusBadge("Partial")}
         </div>
         {section.rows.length > 8 && (
           <div className="relative">
@@ -169,25 +178,29 @@ export function ReportSection({ section }: { section: InspectionSection }) {
                     }
                     className="px-4 py-2 font-normal"
                   >
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onClick={() =>
-                        setSort({
-                          index,
-                          descending:
-                            sort?.index === index ? !sort.descending : false,
-                        })
-                      }
-                    >
-                      {column.replace(/ (?:bytes|KiB)$/, "")}
-                      {sort?.index === index &&
-                        (sort.descending ? (
-                          <ArrowDown className="size-3" />
-                        ) : (
-                          <ArrowUp className="size-3" />
-                        ))}
-                    </button>
+                    {preserveOrder ? (
+                      column
+                    ) : (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() =>
+                          setSort({
+                            index,
+                            descending:
+                              sort?.index === index ? !sort.descending : false,
+                          })
+                        }
+                      >
+                        {column.replace(/ (?:bytes|KiB)$/, "")}
+                        {sort?.index === index &&
+                          (sort.descending ? (
+                            <ArrowDown className="size-3" />
+                          ) : (
+                            <ArrowUp className="size-3" />
+                          ))}
+                      </button>
+                    )}
                   </th>
                 ))}
               </tr>
@@ -201,16 +214,27 @@ export function ReportSection({ section }: { section: InspectionSection }) {
                       className={`max-w-md px-4 py-3 align-top ${section.columns.length === 1 ? "whitespace-pre-wrap break-words" : "break-words"}`}
                       title={value}
                     >
-                      {/^(Status|State|Boot state|Loaded|Action)$/.test(
+                      {/^(Status|State|Boot state|Runtime|At boot|Loaded|Action)$/.test(
                         section.columns[index] ?? "",
                       ) ? (
-                        badge(value)
+                        statusBadge(value)
                       ) : /^(Used|CPU %|Memory %)$/.test(
                           section.columns[index] ?? "",
                         ) && /^\d+(?:\.\d+)?%?$/.test(value) ? (
-                        <span className="tabular-nums">
+                        <span className="block min-w-14 tabular-nums">
                           {value}
                           {value.endsWith("%") ? "" : "%"}
+                          <span
+                            aria-hidden="true"
+                            className="mt-1 block h-1 overflow-hidden rounded-full bg-muted"
+                          >
+                            <span
+                              className="block h-full rounded-full bg-primary"
+                              style={{
+                                width: `${Math.min(100, Number.parseFloat(value))}%`,
+                              }}
+                            />
+                          </span>
                         </span>
                       ) : (
                         cell(value, section.columns[index] ?? "")

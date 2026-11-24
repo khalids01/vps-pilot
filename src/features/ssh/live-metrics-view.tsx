@@ -108,7 +108,13 @@ function Resource({
     </section>
   );
 }
-export function LiveMetricsPanel({ expanded = false }: { expanded?: boolean }) {
+export function LiveMetricsPanel({
+  expanded = false,
+  networkOnly = false,
+}: {
+  expanded?: boolean;
+  networkOnly?: boolean;
+}) {
   const live = useLiveMetrics();
   const { sample, point } = live;
   return (
@@ -120,66 +126,70 @@ export function LiveMetricsPanel({ expanded = false }: { expanded?: boolean }) {
           ? "Measured samples · up to 180 points · rates warm up after two samples"
           : "Not updating · last measurements may be stale"}
       </p>
-      <Resource
-        stat="cpu"
-        title="CPU"
-        value={percent(point?.cpu)}
-        detail="Across all logical CPUs"
-        field="cpu"
-        percentage
-      />
-      <Resource
-        stat="ram"
-        title="RAM"
-        value={percent(point?.memory)}
-        detail={
-          sample
-            ? `${bytes(sample.memoryTotal - sample.memoryAvailable)} used / ${bytes(sample.memoryTotal)} total · swap ${bytes(sample.swapTotal - sample.swapFree)}`
-            : "Waiting for memory counters"
-        }
-        field="memory"
-        percentage
-      />
-      <Resource
-        stat="storage"
-        title="Root filesystem /"
-        value={percent(point?.disk)}
-        detail={
-          sample?.capacity
-            ? `${bytes(sample.capacity.total - sample.capacity.free)} used / ${bytes(sample.capacity.total)} total · ${bytes(sample.capacity.available)} available`
-            : "Capacity unavailable"
-        }
-        field="disk"
-        percentage
-      >
-        <p className="text-[10px] text-muted-foreground">
-          Capacity cached for 60s
-          {sample?.capacity ? ` · measured ${sample.capacityAge}s ago` : ""}. No
-          directory scan.
-        </p>
-      </Resource>
-      <Resource
-        stat="diskIo"
-        title="Disk activity"
-        value={`R ${speed(point?.read)}`}
-        detail={`Write ${speed(point?.written)} · base block devices; virtual/stacked devices excluded`}
-        field="read"
-      >
-        <Sparkline
-          values={live.history.map((value) => value.written)}
-          label="Disk write rate history"
-        />
-      </Resource>
+      {!networkOnly && (
+        <>
+          <Resource
+            stat="cpu"
+            title="CPU"
+            value={percent(point?.cpu)}
+            detail="Across all logical CPUs"
+            field="cpu"
+            percentage
+          />
+          <Resource
+            stat="ram"
+            title="RAM"
+            value={percent(point?.memory)}
+            detail={
+              sample
+                ? `${bytes(sample.memoryTotal - sample.memoryAvailable)} used / ${bytes(sample.memoryTotal)} total · swap ${bytes(sample.swapTotal - sample.swapFree)}`
+                : "Waiting for memory counters"
+            }
+            field="memory"
+            percentage
+          />
+          <Resource
+            stat="storage"
+            title="Root filesystem /"
+            value={percent(point?.disk)}
+            detail={
+              sample?.capacity
+                ? `${bytes(sample.capacity.total - sample.capacity.free)} used / ${bytes(sample.capacity.total)} total · ${bytes(sample.capacity.available)} available`
+                : "Capacity unavailable"
+            }
+            field="disk"
+            percentage
+          >
+            <p className="text-[10px] text-muted-foreground">
+              Capacity cached for 60s
+              {sample?.capacity ? ` · measured ${sample.capacityAge}s ago` : ""}
+              . No directory scan.
+            </p>
+          </Resource>
+          <Resource
+            stat="diskIo"
+            title="Disk activity"
+            value={`R ${speed(point?.read)}`}
+            detail={`Write ${speed(point?.written)} · base block devices; virtual/stacked devices excluded`}
+            field="read"
+          >
+            <Sparkline
+              values={live.history.map((value) => value.written)}
+              label="Disk write rate history"
+            />
+          </Resource>
+        </>
+      )}
       <Resource
         stat="network"
-        title="Network"
-        value={`↓ ${speed(point?.received)}`}
-        detail={`Upload ${speed(point?.sent)} · interface ${sample?.networkInterface ?? "unavailable"}`}
+        title="Network receive rate"
+        value={speed(point?.received)}
+        detail={`Transmit ${speed(point?.sent)} · interface ${sample?.networkInterface ?? "unavailable"}`}
         field="received"
       >
         <Sparkline
           values={live.history.map((value) => value.sent)}
-          label="Network upload rate history"
+          label="Network transmit rate history"
         />
       </Resource>
       {point && (

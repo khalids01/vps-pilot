@@ -341,7 +341,7 @@ test.beforeEach(async ({ page }) => {
             const w=window as any;const r=w.__proxyReviews?.[args.reviewId];if(!r)throw "Review expired";delete w.__proxyReviews[args.reviewId];w.__proxyExecuted??=[];w.__proxyExecuted.push(r.operation);
             const instances=[{id:"system:caddy",identity:"a".repeat(64),manager:"caddy",kind:"system",name:"caddy.service",status:"active",config:"/etc/caddy/Caddyfile",roots:[{host:"/etc/caddy",container:"/etc/caddy",directory:true}],editable:true,actions:true},{id:"docker:"+"b".repeat(64),identity:"b".repeat(64),manager:"nginx",kind:"docker",name:"web-proxy",status:"running",config:"/etc/nginx/nginx.conf",roots:[{host:"/var/apps/nginx",container:"/etc/nginx",directory:true}],editable:true,actions:true,composeProject:"fixture",composeService:"proxy"},{id:"system:traefik",identity:"c".repeat(64),manager:"traefik",kind:"system",name:"traefik.service",status:"active",config:"/etc/traefik/traefik.yml",roots:[{host:"/etc/traefik",container:"/etc/traefik",directory:true}],editable:true,actions:true}];
             const instance=instances.find(i=>i.id===r.instanceId)??instances[0];
-            if(r.operation==="inventory")return {instances:w.__noCaddy?[]:instances,warnings:[]};
+            if(r.operation==="inventory"||r.operation==="inspect")return {instances:w.__noCaddy?[]:instances,warnings:[]};
             if(r.operation==="logs")return {logs:"fixture proxy logs"};
             if(r.operation==="save"&&w.__proxySaveFail)throw "Configuration changed outside VPS Pilot. Reopen configurations before saving.";
             if(r.operation==="save"&&instance.manager==="traefik"&&!args.acknowledgeTraefik)throw "Acknowledge validation limits";
@@ -887,7 +887,9 @@ test.beforeEach(async ({ page }) => {
               const text = cmd === "ssh_terminal_open" ? `${args.profileId} shell ready\r\n` : "=== Architecture ===\nx86_64\n";
               output.onmessage({ type: "data", id, sequence: 1, data: Array.from(new TextEncoder().encode(text)) });
               if (cmd !== "ssh_terminal_open") {
-                const report = (reports as any)[args.kind ?? "firewall"];
+                const report = args.kind === "firewall" && (window as any).__ufwNeedsSudo
+                  ? { overview: null, sections: [{ title: "Firewall rules", columns: [], rows: [], state: "unavailable", message: "Permission needed", truncated: false }] }
+                  : (reports as any)[args.kind ?? "firewall"];
                 output.onmessage({ type: "inspection", id, report });
                 streams.delete(id); output.onmessage({ type: "closed", id, code: 0, message: "Completed." });
               }
@@ -930,16 +932,49 @@ test("restoring VPS tabs does not connect or open terminals; inspection stays se
   expect(inspections).toEqual([{ cmd: "ssh_inspection_run", profileId: first }]);
 });
 
-test("sudo rejection executes nothing; fresh approval runs only on its server without persistence", async ({ page }) => {
-  await page.getByRole("navigation", { name: "Fixture Alpha tools" }).getByRole("button", { name: "Firewall", exact: true }).click();
-  await page.getByRole("button", { name: "Review command", exact: true }).click();
+test("server tools load snapshots on entry", async ({ page }) => {
+  const nav = page.getByRole("navigation", { name: "Fixture Alpha tools" });
+  await expect(nav.getByRole("button", { name: "Server helper", exact: true })).toHaveCount(0);
+  for (const [tool, evidence] of [
+    ["Services", "app.service"],
+    ["Network", "eth0"],
+    ["Processes", "worker"],
+    ["UFW Firewall", "22/tcp"],
+  ]) {
+    await nav.getByRole("button", { name: tool, exact: true }).click();
+    const inspection = page.getByRole("region", { name: `Fixture Alpha ${tool} inspection` });
+    await expect(inspection.getByText(evidence, { exact: true })).toBeVisible();
+  }
+  await nav.getByRole("button", { name: "PM2", exact: true }).click();
+  await expect(page.getByRole("region", { name: "PM2", exact: true }).getByText("web", { exact: true })).toBeVisible();
+});
+
+test("sudo rejection executes nothing; fresh approval runs only on its server without persistence", async ({ page }, testInfo) => {
+  await page.evaluate(() => { (window as any).__ufwNeedsSudo = true; });
+  await page.getByRole("navigation", { name: "Fixture Alpha tools" }).getByRole("button", { name: "UFW Firewall", exact: true }).click();
+  await page.getByRole("button", { name: "Read UFW status", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Fixture Alpha");
   await page.getByRole("button", { name: "Reject", exact: true }).click();
   expect(await page.evaluate(() => (window as any).__calls.filter((call: any) => call.cmd === "ssh_action_execute"))).toEqual([]);
-  await page.getByRole("button", { name: "Review command", exact: true }).click();
+  await page.getByRole("button", { name: "Read UFW status", exact: true }).click();
   await page.getByLabel("Sudo password (when needed)").fill("disposable-ui-secret");
   await page.getByRole("button", { name: "Approve and run", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  const firewall = page.getByRole("region", { name: "Fixture Alpha UFW Firewall inspection" });
+  await expect(firewall.getByRole("status")).toContainText("Active");
+  const rules = firewall.getByRole("table", { name: "UFW rules in evaluation order" });
+  await expect(rules.getByRole("row").nth(1)).toContainText("22/tcp");
+  await expect(rules.getByRole("row").nth(1)).toContainText("Incoming");
+  await expect(firewall.getByText("Permission needed", { exact: true })).toHaveCount(0);
+  const search = firewall.getByRole("textbox", { name: "Search firewall rules" });
+  await search.fill("does not match");
+  await expect(firewall.getByText("No rules match your search.")).toBeVisible();
+  await search.clear();
+  await firewall.screenshot({ path: testInfo.outputPath("ufw-approved.png"), animations: "disabled" });
+  await page.setViewportSize({ width: 430, height: 900 });
+  await expect(rules).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1366, height: 900 });
   await page.getByRole("button", { name: "Show command console", exact: true }).click();
   await expect(page.getByRole("region", { name: "Fixture Alpha command console" })).toContainText("Completed.");
   const executions = await page.evaluate(() => (window as any).__calls.filter((call: any) => call.cmd === "ssh_action_execute"));
@@ -1073,14 +1108,12 @@ test("Docker diagnostics and other inspections render application tables", async
   await expect(containers.getByRole("row")).toHaveCount(2);
   await expect(containers).toContainText("web-07");
   await page.screenshot({ path: testInfo.outputPath("docker-content.png") });
-  for (const tool of ["Services", "Proxy", "Network"]) {
+  for (const tool of ["Services", "Network"]) {
     await nav.getByRole("button", { name: tool, exact: true }).click();
-    await page.getByRole("button", { name: "Inspect", exact: true }).click();
     await expect(page.getByRole("main").getByRole("table").first()).toBeVisible();
     await expect(page.getByRole("main").locator("pre")).toHaveCount(0);
   }
   await nav.getByRole("button", { name: "Processes", exact: true }).click();
-  await page.getByRole("button", { name: "Inspect", exact: true }).click();
   const processes = page.getByRole("region", { name: "Processes", exact: true });
   await processes.getByRole("button", { name: "CPU %", exact: true }).click();
   await processes.getByRole("button", { name: "CPU %", exact: true }).click();
@@ -2272,12 +2305,11 @@ test("configuration inspection is explicit, shared across tools and retained acr
   const ssh=page.getByRole("region",{name:"SSH Access",exact:true});
   await expect(ssh).toContainText("Not independently verified");
   await expect(ssh).toContainText("Default invocation only");
-  await nav.getByRole("button",{name:"Firewall",exact:true}).click();
-  const firewall=page.getByRole("region",{name:"Firewall",exact:true});
-  await expect(firewall.getByRole("table").getByRole("row")).toHaveCount(3);
-  await expect(firewall).toContainText("Allows incoming connections");
-  await expect(firewall).toContainText("22/tcp (v6)");
-  await expect(firewall).toContainText("Cloud/provider restrictions are unknown");
+  await nav.getByRole("button",{name:"UFW Firewall",exact:true}).click();
+  const firewall=page.getByRole("region",{name:"Fixture Alpha UFW Firewall inspection",exact:true});
+  await expect(firewall.getByRole("table").getByRole("row")).toHaveCount(2);
+  await expect(firewall).toContainText("22/tcp");
+  await expect(firewall.getByRole("status")).toContainText("Active");
   await page.screenshot({path:testInfo.outputPath("firewall-inspected.png")});
   await page.getByRole("button",{name:"Fleet home",exact:true}).click();
   await page.getByRole("article",{name:"Fixture Alpha server"}).getByRole("button",{name:"Open workspace",exact:true}).click();
@@ -4885,7 +4917,7 @@ test("PM2 bulk commands reorder and continue after a project failure",async({pag
 
 test("Proxy workspace detects system and Docker instances and reviews config changes",async({page},testInfo)=>{
  await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Proxy",exact:true}).click();const proxy=page.getByRole("region",{name:"Proxy managers",exact:true});
- await proxy.getByRole("button",{name:"Detect",exact:true}).click();let approval=page.getByRole("dialog");await expect(approval).toContainText("Approve proxy inventory");await approval.getByRole("button",{name:"Approve",exact:true}).click();
+ let approval=page.getByRole("dialog");await expect(approval).toHaveCount(0);
  await expect(proxy.getByRole("article")).toHaveCount(3);const caddy=proxy.getByRole("article",{name:"caddy caddy.service"});const nginx=proxy.getByRole("article",{name:"nginx web-proxy"});await expect(nginx).toContainText("Compose · fixture / proxy");
  await caddy.getByRole("button",{name:"Configs",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();const editor=proxy.getByRole("region",{name:"Proxy configurations"});await expect(editor).toBeVisible();
  await editor.getByLabel("Proxy configuration editor",{exact:true}).fill(':8080 {\n respond "changed"\n}\n');await editor.getByRole("button",{name:"Review & apply",exact:true}).click();approval=page.getByRole("dialog",{name:"Review configuration changes",exact:true});await expect(approval.getByLabel("Proxy configuration diff",{exact:true})).toContainText('changed');expect(await page.evaluate(()=>(window as any).__proxyExecuted.filter((v:string)=>v==="save").length)).toBe(0);await approval.getByRole("button",{name:"Save & apply",exact:true}).click();await expect(proxy.getByRole("status")).toContainText("Backup saved");
@@ -4896,7 +4928,7 @@ test("Proxy workspace detects system and Docker instances and reviews config cha
 });
 
 test("Proxy workspace keeps failed drafts and clears configs on hiding",async({page})=>{
- await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Proxy",exact:true}).click();const proxy=page.getByRole("region",{name:"Proxy managers"});await proxy.getByRole("button",{name:"Detect",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();
+ await page.getByRole("navigation",{name:"Fixture Alpha tools"}).getByRole("button",{name:"Proxy",exact:true}).click();const proxy=page.getByRole("region",{name:"Proxy managers"});await expect(proxy.getByRole("article")).toHaveCount(3);
  const traefik=proxy.getByRole("article",{name:"traefik traefik.service"});await expect(traefik.getByRole("button",{name:"Reload",exact:true})).toHaveCount(0);await traefik.getByRole("button",{name:"Configs",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"Approve",exact:true}).click();
  const editor=proxy.getByRole("region",{name:"Proxy configurations"});await editor.getByLabel("Proxy configuration editor",{exact:true}).fill("entryPoints: {web: {address: ':8080'}}");await editor.getByRole("button",{name:"Review & apply",exact:true}).click();const approval=page.getByRole("dialog");await expect(approval.getByRole("button",{name:"Save & apply",exact:true})).toBeDisabled();await approval.getByRole("checkbox").check();await page.evaluate(()=>{(window as any).__proxySaveFail=true;});await approval.getByRole("button",{name:"Save & apply",exact:true}).click();await expect(proxy.getByRole("alert")).toContainText("Configuration changed outside");await expect(editor.getByLabel("Proxy configuration editor",{exact:true})).toContainText("8080");
  await page.evaluate(()=>{Object.defineProperty(document,"hidden",{configurable:true,get:()=>true});document.dispatchEvent(new Event("visibilitychange"));});await expect(editor).toHaveCount(0);expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain("8080");

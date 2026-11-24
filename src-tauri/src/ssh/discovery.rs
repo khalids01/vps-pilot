@@ -59,7 +59,8 @@ impl InspectionKind {
                 ("Journal usage", "journalctl --disk-usage"),
             ],
             Self::Firewall => &[
-                ("UFW state", "ufw status numbered"),
+                ("UFW state", "if ! command -v ufw >/dev/null 2>&1 && ! test -x /usr/sbin/ufw; then printf 'UFW is not installed.\\n'; elif test -x /usr/sbin/ufw; then /usr/sbin/ufw status numbered; else ufw status numbered; fi"),
+                ("UFW defaults", r#"test -r /etc/default/ufw && awk -F= '/^DEFAULT_(INPUT|OUTPUT|FORWARD)_POLICY=/ { gsub(/"/, "", $2); if ($2 ~ /^(ACCEPT|DROP|REJECT)$/) print $1, $2 }' /etc/default/ufw"#),
                 ("Listening ports", "ss -H -lntu"),
                 ("Existing SSH connection", "printf '%s\\n' \"$SSH_CONNECTION\""),
             ],

@@ -20,6 +20,8 @@ import { ProjectCommandRunner, ProjectMenu } from "./pm2-project-actions";
 import { usePm2Runs } from "./pm2-run-panel";
 import { ProjectEnv } from "./project-env";
 
+import { statusBadge } from "./structured-report";
+
 interface Process {
   runFolder?: string;
   id: number;
@@ -48,6 +50,7 @@ export function RemotePm2({
     folder: string;
   } | null>(null);
   const generation = useRef(0);
+  const lastRead = useRef<{ connectionId: string; time: number } | null>(null);
   const [availability, setAvailability] = useState("checking");
   const [commandRequest, setCommandRequest] = useState<{
     projects: Process[];
@@ -79,11 +82,12 @@ export function RemotePm2({
     profileRevision: profile.revision,
     connectionId,
   };
+  const restartCounts = useRef(new Map<number, number>());
+  const [restarted, setRestarted] = useState<number[]>([]);
   const refresh = useCallback(async () => {
     const seq = ++generation.current;
     setBusy(true);
     setError("");
-    setAvailability("checking");
     try {
       const result = await invoke<{ installed: boolean; processes: Process[] }>(
         "ssh_pm2_status",
@@ -94,8 +98,20 @@ export function RemotePm2({
         },
       );
       if (seq !== generation.current) return;
+      setRestarted(
+        result.processes
+          .filter((process) => {
+            const count = restartCounts.current.get(process.id);
+            return count !== undefined && process.restarts > count;
+          })
+          .map((process) => process.id),
+      );
+      const nextCounts = new Map(
+        result.processes.map((process) => [process.id, process.restarts]),
+      );
+      restartCounts.current = nextCounts;
       setRows(result.processes);
-      setChecked([]);
+      setChecked((selection) => selection.filter((id) => nextCounts.has(id)));
       setAvailability(
         !result.installed
           ? "missing"
@@ -106,29 +122,44 @@ export function RemotePm2({
     } catch (e) {
       if (seq === generation.current) {
         setError(safeError(e));
-        setAvailability("unknown");
-        setRows([]);
+        setAvailability((current) =>
+          current === "checking" ? "unknown" : current,
+        );
       }
     } finally {
       if (seq === generation.current) setBusy(false);
     }
   }, [profile.id, profile.revision, connectionId]);
   useEffect(() => {
+    void connectionId;
+    lastRead.current = null;
+    restartCounts.current.clear();
+    setRestarted([]);
+    void profile.revision;
+    void profile.id;
     setEnvProject(null);
     setSelected(null);
     setReview(null);
     setCommandRequest(null);
     setRows([]);
     setChecked([]);
-    if (connected && connectionId) void refresh();
-    else {
-      setAvailability("unknown");
-      setBusy(false);
-    }
+    setAvailability("unknown");
+    setBusy(false);
     return () => {
       generation.current++;
     };
-  }, [connected, connectionId, refresh]);
+  }, [connectionId, profile.id, profile.revision]);
+  useEffect(() => {
+    if (!active || !connected || !connectionId) return;
+    if (
+      lastRead.current?.connectionId === connectionId &&
+      Date.now() - lastRead.current.time < 30_000
+    )
+      return;
+    lastRead.current = { connectionId, time: Date.now() };
+    void refresh();
+  }, [active, connected, connectionId, refresh]);
+
   async function logs(process: Process) {
     setError("");
     try {
@@ -373,7 +404,7 @@ export function RemotePm2({
                         {p.name}
                       </label>
                     </td>
-                    <td>{p.status}</td>
+                    <td>{statusBadge(p.status)}</td>
                     <td>
                       {p.uptime && p.status === "online"
                         ? `${Math.max(0, Math.floor((Date.now() - p.uptime) / 60000))}m`
@@ -381,7 +412,14 @@ export function RemotePm2({
                     </td>
                     <td>{p.cpu}%</td>
                     <td>{Math.round(p.memory / 1048576)} MB</td>
-                    <td>{p.restarts}</td>
+                    <td>
+                      {p.restarts}
+                      {restarted.includes(p.id) && (
+                        <span className="ml-2 text-xs text-amber-600 dark:text-amber-300">
+                          Increased
+                        </span>
+                      )}
+                    </td>
                     <td className="flex gap-2 p-2">
                       <ProjectMenu
                         profileId={profile.id}

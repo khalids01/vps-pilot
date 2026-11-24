@@ -33,6 +33,7 @@ pub struct Request {
 #[serde(rename_all = "lowercase")]
 pub enum Operation {
     Inventory,
+    Inspect,
     Open,
     Logs,
     Validate,
@@ -57,7 +58,7 @@ impl Request {
         {
             return Err("Proxy request exceeds its limits.".into());
         }
-        if self.operation != Operation::Inventory {
+        if !matches!(self.operation, Operation::Inventory | Operation::Inspect) {
             let valid_id = ["system:caddy", "system:nginx", "system:traefik"]
                 .contains(&self.instance_id.as_str())
                 || self
@@ -210,8 +211,8 @@ pub async fn ssh_proxy_workspace_review(
     }
     let id = Uuid::new_v4().to_string();
     let operation = serde_json::to_value(request.operation).unwrap();
-    let plan = serde_json::json!({"id":id,"operation":operation,"instanceId":request.instance_id,"path":request.path,"privileged":true,
-        "command":format!("sudo -S -p '[VPS Pilot proxy sudo] ' -- /usr/bin/python3 -I -S -u -c {}",super::docker::quoted(&(include_str!("proxy_workspace.py").to_string()+"\n"+include_str!("proxy_privileged.py")))),"expiresInSeconds":120});
+    let plan = serde_json::json!({"id":id,"operation":operation,"instanceId":request.instance_id,"path":request.path,"privileged":request.operation != Operation::Inspect,
+        "command":if request.operation == Operation::Inspect { "Read systemd and Docker proxy inventory".into() } else { format!("sudo -S -p '[VPS Pilot proxy sudo] ' -- /usr/bin/python3 -I -S -u -c {}",super::docker::quoted(&(include_str!("proxy_workspace.py").to_string()+"\n"+include_str!("proxy_privileged.py")))) },"expiresInSeconds":120});
     // Keep the secret-bearing serialized payload zeroized; don't duplicate it in source metadata.
     let mut source = request;
     source.content.zeroize();

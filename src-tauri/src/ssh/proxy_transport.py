@@ -5,7 +5,10 @@ def main():
     raw = sys.stdin.buffer.readline(3 * 1024 * 1024)
     request = json.loads(raw)
     password = request.pop('password', '')
-    if os.geteuid() == 0:
+    inspection = request.get('operation') == 'inspect'
+    if inspection:
+        request['operation'] = 'inventory'
+    if os.geteuid() == 0 or inspection:
         scope = {'__name__': 'proxy_workspace'}
         exec(WORKER, scope)
         return scope['main'](request)

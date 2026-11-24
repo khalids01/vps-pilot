@@ -20,6 +20,7 @@ import type {
   ProxyIntent,
   ProxyResult,
 } from "./proxy-workspace-types";
+import { statusBadge } from "./structured-report";
 
 interface Plan {
   id: string;
@@ -28,6 +29,7 @@ interface Plan {
   path: string;
   instanceId: string;
 }
+
 export function RemoteProxy({
   profile,
   connected,
@@ -57,6 +59,9 @@ export function RemoteProxy({
     path: string;
   } | null>(null);
   const generation = useRef(0);
+  const inventoryRead = useRef<{ connectionId: string; time: number } | null>(
+    null,
+  );
   const pending = useRef<string | null>(null);
   const clearReview = useCallback(() => {
     const id = pending.current;
@@ -74,6 +79,7 @@ export function RemoteProxy({
     void profile.id;
     void profile.revision;
     void connectionId;
+    inventoryRead.current = null;
     generation.current++;
     setInstances([]);
     setDetected(false);
@@ -207,7 +213,7 @@ export function RemoteProxy({
         setActive(null);
         setMessage(
           (result.message ?? "") +
-            " Detect again to refresh the instance identity.",
+            " Refresh inventory to update the instance identity.",
         );
       }
     } catch (failure) {
@@ -216,6 +222,50 @@ export function RemoteProxy({
       if (current === generation.current) setBusy(false);
     }
   }
+  const inventory = useCallback(async () => {
+    if (!connected || !connectionId) return;
+    const current = ++generation.current;
+    inventoryRead.current = { connectionId, time: Date.now() };
+    setBusy(true);
+    setError("");
+    try {
+      const review = await invoke<Plan>("ssh_proxy_workspace_review", {
+        request: {
+          operation: "inspect",
+          profileId: profile.id,
+          profileRevision: profile.revision,
+          connectionId,
+        },
+      });
+      if (current !== generation.current) {
+        await invoke("ssh_proxy_workspace_reject", { reviewId: review.id });
+        return;
+      }
+      const result = await invoke<ProxyResult>("ssh_proxy_workspace_execute", {
+        reviewId: review.id,
+        password: "",
+        acknowledgeTraefik: false,
+      });
+      if (current !== generation.current) return;
+      setInstances(result.instances ?? []);
+      setWarnings(result.warnings ?? []);
+      setDetected(true);
+    } catch (failure) {
+      if (current === generation.current) setError(safeError(failure));
+    } finally {
+      if (current === generation.current) setBusy(false);
+    }
+  }, [connected, connectionId, profile.id, profile.revision]);
+  useEffect(() => {
+    if (!isActive || !connected || !connectionId) return;
+    if (
+      inventoryRead.current?.connectionId === connectionId &&
+      Date.now() - inventoryRead.current.time < 30_000
+    )
+      return;
+    void inventory();
+  }, [connected, connectionId, inventory, isActive]);
+
   const selected =
     instances.find((item) => item.id === intent?.instanceId) ?? active;
   const original =
@@ -224,11 +274,8 @@ export function RemoteProxy({
     <section aria-label="Proxy managers" className="min-w-0 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Proxy</h1>
-        <Button
-          disabled={!connected || busy}
-          onClick={() => review({ operation: "inventory" })}
-        >
-          {busy ? "Working…" : "Detect"}
+        <Button disabled={!connected || busy} onClick={() => void inventory()}>
+          {busy ? "Working…" : error ? "Retry" : "Refresh"}
         </Button>
       </div>
       {error && (
@@ -244,6 +291,16 @@ export function RemoteProxy({
           {message}
         </p>
       )}
+      {warnings.length > 0 && connected && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => void review({ operation: "inventory" })}
+        >
+          Read inventory with sudo
+        </Button>
+      )}
       {warnings.map((warning) => (
         <p key={warning} className="text-xs text-muted-foreground">
           {warning}
@@ -253,7 +310,9 @@ export function RemoteProxy({
         <p className="text-sm text-muted-foreground">
           {detected
             ? "No proxy instances detected."
-            : "Detect Caddy, Nginx and Traefik services and Docker containers."}
+            : connected
+              ? "Proxy inventory is unavailable."
+              : "Connect to load proxy instances."}
         </p>
       )}
       <div className="grid gap-3 lg:grid-cols-2">
@@ -271,10 +330,10 @@ export function RemoteProxy({
                     ? "Traefik"
                     : "Caddy"}{" "}
                 <span className="text-xs font-normal text-muted-foreground">
-                  {instance.kind === "docker" ? "Docker" : "System"}
+                  {instance.kind === "docker" ? "Docker" : "systemd"}
                 </span>
               </h2>
-              <span className="text-xs">{instance.status}</span>
+              {statusBadge(instance.status)}
             </div>
             <p className="break-all text-sm">{instance.name}</p>
             {instance.roots.map((root) => (

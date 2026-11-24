@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   ListChecks,
   Network,
-  Plug,
   Shield,
   Terminal,
   Unplug,
@@ -118,7 +117,7 @@ export function RemoteWorkspace(props: RemoteWorkspaceProps) {
 function RemoteWorkspaceContent({
   profile,
   status,
-  selectedTool,
+  selectedTool: requestedTool,
   active,
   onSelectTool,
   onSettings,
@@ -140,11 +139,12 @@ function RemoteWorkspaceContent({
     proxy: "Proxy",
     services: "Services",
     storage: "Storage",
-    firewall: "Firewall",
+    firewall: "UFW Firewall",
     helper: "Server helper",
     network: "Network",
     processes: "Processes",
   };
+  const selectedTool = requestedTool === "helper" ? "overview" : requestedTool;
   const tool = labels[selectedTool];
   const [proxyOpened, setProxyOpened] = useState(selectedTool === "proxy");
   const [pm2Opened, setPm2Opened] = useState(selectedTool === "pm2");
@@ -297,10 +297,9 @@ function RemoteWorkspaceContent({
                   { label: "PM2", icon: Workflow },
                   { label: "Proxy", icon: Network },
                   { label: "Services", icon: Workflow },
-                  { label: "Firewall", icon: Shield },
+                  { label: "UFW Firewall", icon: Shield },
                   { label: "Network", icon: Network },
                   { label: "Processes", icon: Workflow },
-                  { label: "Server helper", icon: Plug },
                 ].map(({ label, icon: Icon }) => {
                   const active = !settingsOpen && label === tool;
                   return (
@@ -396,8 +395,7 @@ function RemoteWorkspaceContent({
                 </div>
               )}
               {(selectedTool === "quick-setup" ||
-                selectedTool === "ssh-access" ||
-                selectedTool === "firewall") && (
+                selectedTool === "ssh-access") && (
                 <Suspense
                   fallback={
                     <p className="text-sm text-muted-foreground">
@@ -419,7 +417,6 @@ function RemoteWorkspaceContent({
                 className={
                   tool === "Quick Setup" ||
                   tool === "SSH Access" ||
-                  tool === "Firewall" ||
                   tool === "Terminal" ||
                   tool === "Files" ||
                   tool === "Docker" ||
@@ -434,15 +431,24 @@ function RemoteWorkspaceContent({
                   profile={profile}
                   connected={connected}
                   tool={tool}
-                  active={active}
+                  connectionId={status?.connectionId ?? undefined}
+                  active={active && !settingsOpen}
+                  autoLoad={[
+                    "services",
+                    "network",
+                    "processes",
+                    "firewall",
+                  ].includes(selectedTool)}
                 />
-                <div className="mt-5">
-                  <RemoteActions
-                    profile={profile}
-                    connected={connected}
-                    tool={tool}
-                  />
-                </div>
+                {selectedTool !== "firewall" && (
+                  <div className="mt-5">
+                    <RemoteActions
+                      profile={profile}
+                      connected={connected}
+                      tool={tool}
+                    />
+                  </div>
+                )}
               </div>
               {tool === "Server helper" && (
                 <section className="rounded-lg border p-6">

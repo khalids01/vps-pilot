@@ -56,10 +56,12 @@ export function RemoteActions({
   profile,
   connected,
   tool,
+  onReport,
 }: {
   profile: ServerProfile;
   connected: boolean;
   tool: string;
+  onReport?: (report: InspectionReport) => void;
 }) {
   const log = useCommandActivity();
   const [resultReports, setResultReports] = useState<
@@ -244,7 +246,8 @@ export function RemoteActions({
             publish("Output interrupted");
           });
       } else if (event.type === "inspection") {
-        setResultReports((all) => ({ ...all, [tool]: event.report }));
+        if (onReport) onReport(event.report);
+        else setResultReports((all) => ({ ...all, [tool]: event.report }));
       } else if (event.type === "closed") {
         ended = true;
         text += decoder.decode();
@@ -265,6 +268,10 @@ export function RemoteActions({
           } catch {}
         }
         publish(message);
+        if (onReport && event.code !== 0)
+          setError(
+            "Could not read UFW rules. Check sudo access and try again.",
+          );
         stream.current = null;
         setBusy(false);
         void streamApi.close(profile.id, event.id).catch(() => {});
@@ -302,14 +309,20 @@ export function RemoteActions({
       aria-label={`${profile.name} reviewed inspections`}
     >
       {available && (
-        <div className="space-y-3 rounded-lg border p-4">
-          <h3 className={tool === "Proxy" ? "hidden" : "text-sm font-medium"}>
+        <div
+          className={onReport ? undefined : "space-y-3 rounded-lg border p-4"}
+        >
+          <h3
+            className={
+              tool === "Proxy" || onReport ? "hidden" : "text-sm font-medium"
+            }
+          >
             {tool === "Proxy"
               ? "Caddy"
               : tool === "Software"
                 ? "Software preflight"
                 : tool === "Firewall"
-                  ? "Privileged UFW inspection"
+                  ? "UFW rules require elevated access"
                   : tool === "Services"
                     ? "Service journal"
                     : tool === "Docker"
@@ -445,7 +458,7 @@ export function RemoteActions({
           )}
           <Button
             size="sm"
-            variant="outline"
+            variant={onReport ? "default" : "outline"}
             disabled={
               !connected ||
               busy ||
@@ -460,11 +473,15 @@ export function RemoteActions({
             <ShieldCheck />
             {reviewing
               ? "Preparing review…"
-              : tool === "Proxy"
-                ? proxyOperation === "reload"
-                  ? "Reload"
-                  : "Restart"
-                : "Review command"}
+              : busy && onReport
+                ? "Reading UFW…"
+                : tool === "Proxy"
+                  ? proxyOperation === "reload"
+                    ? "Reload"
+                    : "Restart"
+                  : tool === "Firewall" && onReport
+                    ? "Read UFW status"
+                    : "Review command"}
           </Button>
         </div>
       )}
@@ -491,7 +508,7 @@ export function RemoteActions({
           {error}
         </p>
       )}
-      {activity && (
+      {activity && !onReport && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-4 py-3">
           <p role="status" className="text-xs text-muted-foreground">
             {activity.state}

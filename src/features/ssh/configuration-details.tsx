@@ -231,7 +231,7 @@ function toolActionLabel(tool: ToolId) {
   return tool === "ssh-access"
     ? "Open SSH Access"
     : tool === "firewall"
-      ? "Open Firewall"
+      ? "Open UFW Firewall"
       : tool === "docker"
         ? "Open Docker"
         : tool === "software"

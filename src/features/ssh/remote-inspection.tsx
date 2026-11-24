@@ -1,14 +1,20 @@
-import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { RefreshCw, Search, Shield, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { type ServerProfile, safeError } from "./api";
 import { useCommandActivity } from "./command-activity";
 import { type CpuSample, cpuUsage } from "./inspection-data";
 import { useLiveMetrics } from "./live-metrics";
 import { LiveMetricsPanel } from "./live-metrics-view";
+import { RemoteActions } from "./remote-actions";
 import type { InspectionReport } from "./report-types";
 import { type InspectionKind, streamApi } from "./streams";
-import { StructuredReport } from "./structured-report";
+import {
+  ReportSection,
+  StructuredReport,
+  statusBadge,
+} from "./structured-report";
 
 type Snapshot = {
   report: InspectionReport | null;
@@ -23,7 +29,7 @@ const views: Record<string, InspectionKind> = {
   Proxy: "proxy",
   Services: "services",
   Storage: "storage",
-  Firewall: "firewall",
+  "UFW Firewall": "firewall",
   Network: "network",
   Processes: "processes",
 };
@@ -44,12 +50,14 @@ export function RemoteInspection({
   connected,
   tool,
   active,
+  connectionId,
   autoLoad = false,
 }: {
   profile: ServerProfile;
   connected: boolean;
   tool: string;
   active: boolean;
+  connectionId?: string;
   autoLoad?: boolean;
 }) {
   const kind = views[tool] ?? "overview";
@@ -65,6 +73,7 @@ export function RemoteInspection({
   const stream = useRef<string | null>(null);
   const mounted = useRef(true);
   const generation = useRef(0);
+  const automaticallyLoaded = useRef(new Map<InspectionKind, number>());
   const run = useCallback(
     async (background = false) => {
       if (!connected || running.current) return;
@@ -80,6 +89,7 @@ export function RemoteInspection({
         if (generation.current !== current || ended) return;
         generation.current++;
         ended = true;
+        automaticallyLoaded.current.set(kind, Date.now());
         running.current = false;
         setBusy(false);
         log.update(runId, {
@@ -177,6 +187,7 @@ export function RemoteInspection({
                 runId,
               },
             }));
+            automaticallyLoaded.current.set(kind, Date.now());
             running.current = false;
             stream.current = null;
             setBusy(false);
@@ -206,6 +217,7 @@ export function RemoteInspection({
               runId,
             },
           }));
+          automaticallyLoaded.current.set(kind, Date.now());
           running.current = false;
           setBusy(false);
         }
@@ -228,19 +240,320 @@ export function RemoteInspection({
       setCpuPercent(null);
     }
   }, [connected]);
-  const automaticallyLoaded = useRef(new Set<InspectionKind>());
+  useEffect(() => {
+    automaticallyLoaded.current.clear();
+    if (connectionId) {
+      generation.current++;
+      if (stream.current)
+        void streamApi.close(profile.id, stream.current).catch(() => {});
+      stream.current = null;
+      running.current = false;
+      setBusy(false);
+      setSnapshots({});
+    }
+  }, [connectionId, profile.id]);
   useEffect(() => {
     if (
       !autoLoad ||
+      (!connectionId && kind !== "docker") ||
       !active ||
       !connected ||
-      automaticallyLoaded.current.has(kind)
+      busy ||
+      Date.now() - (automaticallyLoaded.current.get(kind) ?? 0) < 30_000
     )
       return;
-    automaticallyLoaded.current.add(kind);
-    void run();
-  }, [autoLoad, active, connected, kind, run]);
+    automaticallyLoaded.current.set(kind, Date.now());
+    void run(true);
+  }, [autoLoad, active, connected, connectionId, busy, kind, run]);
+  useEffect(() => {
+    if (!connected) automaticallyLoaded.current.clear();
+  }, [connected]);
+  const [serviceFilter, setServiceFilter] = useState("All");
   const snapshot = snapshots[kind];
+  const [privileged, setPrivileged] = useState<{
+    connectionId?: string;
+    report: InspectionReport;
+    time: number;
+  }>();
+  const rulesHeading = useId();
+  const [ruleSearch, setRuleSearch] = useState("");
+  if (kind === "firewall") {
+    const sections = snapshot?.report?.sections ?? [];
+    const automatic = sections.find(
+      (section) => section.title === "Firewall rules",
+    );
+    const approved =
+      privileged?.connectionId === connectionId
+        ? privileged?.report.sections.find(
+            (section) =>
+              section.title === "Firewall rules" &&
+              section.state !== "unavailable",
+          )
+        : undefined;
+    const needsApproval = automatic?.state === "unavailable";
+    const rules =
+      approved &&
+      (needsApproval || (privileged?.time ?? 0) >= (snapshot?.time ?? 0))
+        ? approved
+        : automatic;
+    const message = rules?.message ?? "";
+    const state =
+      message === "UFW is active."
+        ? "Active"
+        : message === "UFW is inactive."
+          ? "Inactive"
+          : message.includes("not installed")
+            ? "UFW missing"
+            : busy
+              ? "Reading firewall…"
+              : needsApproval
+                ? "Permission needed"
+                : connected
+                  ? "Status unavailable"
+                  : "Disconnected";
+    const verified = state === "Active" || state === "Inactive";
+    const observedAt = rules === approved ? privileged?.time : snapshot?.time;
+    const sshPort = sections.find(
+      (section) => section.title === "Active SSH connection",
+    )?.rows[0]?.[3];
+    const defaults =
+      sections.find((section) => section.title === "UFW defaults")?.rows ?? [];
+    const rows = rules?.rows ?? [];
+    const filtered = rows.filter((row) =>
+      row.join(" ").toLowerCase().includes(ruleSearch.trim().toLowerCase()),
+    );
+    const details = sections.filter(
+      (section) =>
+        section.title !== "Firewall rules" && section.title !== "UFW defaults",
+    );
+    return (
+      <section
+        className="space-y-5"
+        aria-label={`${profile.name} ${tool} inspection`}
+      >
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight">{tool}</h2>
+            <div
+              className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+              role="status"
+            >
+              {state === "Active" ? (
+                <ShieldCheck className="size-4 text-primary" />
+              ) : (
+                <Shield className="size-4 text-muted-foreground" />
+              )}
+              {statusBadge(state)}
+              {verified && observedAt && (
+                <span className="text-xs text-muted-foreground">
+                  Read at {new Date(observedAt).toLocaleTimeString()}
+                </span>
+              )}
+              {!connected && verified && (
+                <span className="text-xs text-muted-foreground">
+                  Disconnected · last result
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-start gap-2">
+            {needsApproval ? (
+              <RemoteActions
+                key={connectionId}
+                profile={profile}
+                connected={connected && !busy}
+                tool="Firewall"
+                onReport={(report) =>
+                  setPrivileged({ connectionId, report, time: Date.now() })
+                }
+              />
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void run()}
+                disabled={busy || !connected}
+              >
+                <RefreshCw className={busy ? "animate-spin" : ""} />
+                Refresh
+              </Button>
+            )}
+          </div>
+        </header>
+        {(sshPort || defaults.length > 0) && (
+          <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y py-3 text-sm">
+            {sshPort && (
+              <div>
+                <dt className="text-xs text-muted-foreground">
+                  Current SSH port
+                </dt>
+                <dd className="mt-0.5 font-medium tabular-nums">{sshPort}</dd>
+              </div>
+            )}
+            {defaults.map(([direction, policy]) => (
+              <div key={direction}>
+                <dt className="text-xs text-muted-foreground">
+                  {direction} by default
+                </dt>
+                <dd className="mt-0.5 font-medium">
+                  {policy === "ACCEPT"
+                    ? "Allow"
+                    : policy === "DROP"
+                      ? "Drop"
+                      : policy === "REJECT"
+                        ? "Reject"
+                        : policy}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <section aria-labelledby={rulesHeading} className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 id={rulesHeading} className="text-sm font-semibold">
+              Rules{" "}
+              {rows.length > 0 && (
+                <span className="ml-1 font-normal tabular-nums text-muted-foreground">
+                  {rows.length}
+                  {rules?.truncated ? "+" : ""}
+                </span>
+              )}
+            </h3>
+            {rows.length > 0 && (
+              <div className="relative w-full sm:w-56">
+                <Search
+                  className="pointer-events-none absolute top-2.5 left-2.5 size-3.5 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <Input
+                  className="h-8 pl-8 text-xs"
+                  aria-label="Search firewall rules"
+                  placeholder="Search port, source or action…"
+                  value={ruleSearch}
+                  onChange={(event) => setRuleSearch(event.target.value)}
+                />
+              </div>
+            )}
+          </div>
+          {filtered.length > 0 ? (
+            <div className="overflow-x-auto border-y">
+              <table
+                aria-label="UFW rules in evaluation order"
+                className="w-full min-w-[30rem] text-left text-sm"
+              >
+                <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
+                  <tr>
+                    {["#", "Action", "Direction", "Destination", "Source"].map(
+                      (column) => (
+                        <th
+                          key={column}
+                          scope="col"
+                          className="px-3 py-2.5 font-medium"
+                        >
+                          {column}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {filtered.map(([number, destination, decision, source]) => {
+                    const [action, direction] = (decision || "").split(/\s+/);
+                    return (
+                      <tr key={number} className="hover:bg-muted/25">
+                        <td className="px-3 py-2.5 tabular-nums text-muted-foreground">
+                          {number}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {statusBadge(
+                            action.charAt(0) + action.slice(1).toLowerCase(),
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {direction === "IN"
+                            ? "Incoming"
+                            : direction === "OUT"
+                              ? "Outgoing"
+                              : direction === "FWD"
+                                ? "Routed"
+                                : direction}
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-xs">
+                          {destination}
+                        </td>
+                        <td className="px-3 py-2.5">{source}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="border-y py-5 text-sm text-muted-foreground">
+              {rows.length
+                ? "No rules match your search."
+                : state === "Active"
+                  ? "No rules listed. The default policies apply."
+                  : state === "Inactive"
+                    ? "UFW is inactive. This read shows active rules only."
+                    : state === "UFW missing"
+                      ? "UFW was not found on this server."
+                      : busy
+                        ? "Reading UFW status and rules…"
+                        : needsApproval
+                          ? "Choose Read UFW status to approve reading the rules with sudo."
+                          : connected
+                            ? "Could not read UFW rules. Try Refresh."
+                            : "Connect to this server to read its firewall."}
+            </p>
+          )}
+          {(rules?.state === "partial" || rules?.truncated) && (
+            <p className="text-xs text-muted-foreground">
+              Some rules could not be displayed.
+            </p>
+          )}
+        </section>
+        {snapshot && (
+          <details className="border-b pb-3">
+            <summary className="cursor-pointer text-sm font-medium">
+              Connection and diagnostics
+            </summary>
+            <div className="mt-3 space-y-3 text-xs text-muted-foreground">
+              <p>
+                Provider firewalls are managed separately. Docker-published
+                ports can bypass UFW.
+              </p>
+              {details.map((section) => (
+                <div key={section.title}>
+                  <h4 className="mb-1 font-medium text-foreground">
+                    {section.title}
+                  </h4>
+                  {section.rows.length > 0 ? (
+                    <ul className="space-y-1">
+                      {Array.from(
+                        new Set(section.rows.map((row) => row.join(" · "))),
+                      ).map((row) => (
+                        <li key={row}>{row}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>{section.message ?? "No results"}</p>
+                  )}
+                </div>
+              ))}
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => log.reveal(snapshot.runId)}
+              >
+                View command
+              </Button>
+            </div>
+          </details>
+        )}
+      </section>
+    );
+  }
   return (
     <section
       className="space-y-5"
@@ -300,7 +613,82 @@ export function RemoteInspection({
           </Button>
         </div>
       )}
-      {snapshot?.report ? (
+      {kind === "network" && (liveMetrics.enabled || liveMetrics.point) && (
+        <LiveMetricsPanel networkOnly />
+      )}
+      {snapshot?.report && kind === "services" ? (
+        <div className="space-y-3">
+          <fieldset className="flex flex-wrap gap-2">
+            <legend className="sr-only">Filter services</legend>
+            {["All", "Running", "Stopped", "Failed"].map((filter) => (
+              <Button
+                key={filter}
+                size="sm"
+                variant={filter === serviceFilter ? "default" : "outline"}
+                aria-pressed={filter === serviceFilter}
+                onClick={() => setServiceFilter(filter)}
+              >
+                {filter}
+              </Button>
+            ))}
+          </fieldset>
+          {snapshot.report.sections
+            .filter((section) => section.title === "Service state")
+            .map((section) => {
+              const boot = snapshot.report?.sections.find(
+                (item) => item.title === "Boot enablement",
+              );
+              const bootByService = new Map(
+                boot?.rows.map(([name, state]) => [name, state]),
+              );
+              const states: Record<string, string> = {
+                Running: "active",
+                Stopped: "inactive",
+                Failed: "failed",
+              };
+              return (
+                <ReportSection
+                  key={section.title}
+                  section={{
+                    ...section,
+                    title: "System services",
+                    columns: ["Service", "Runtime", "At boot", "Description"],
+                    rows: section.rows
+                      .filter(
+                        (row) =>
+                          serviceFilter === "All" ||
+                          row[2] === states[serviceFilter],
+                      )
+                      .map(([name, , state, , description]) => [
+                        name,
+                        state,
+                        bootByService.get(name) ?? "Unavailable",
+                        description,
+                      ]),
+                  }}
+                />
+              );
+            })}
+        </div>
+      ) : snapshot?.report && kind === "network" ? (
+        <>
+          {snapshot.report.sections
+            .filter((section) => section.title !== "Routes")
+            .map((section) => (
+              <ReportSection key={section.title} section={section} />
+            ))}
+          <details className="rounded-lg border p-4">
+            <summary className="cursor-pointer text-sm font-medium">
+              Routes
+            </summary>
+            {snapshot.report.sections
+              .filter((section) => section.title === "Routes")
+              .map((section) => (
+                <ReportSection key={section.title} section={section} />
+              ))}
+          </details>
+        </>
+      ) : snapshot?.report ? (
         <StructuredReport report={snapshot.report} cpuPercent={cpuPercent} />
       ) : (
         <div className="rounded-xl border border-dashed px-6 py-12 text-center">
@@ -315,7 +703,9 @@ export function RemoteInspection({
             {snapshot?.state === "Inspection failed"
               ? "Open the command console for details."
               : connected
-                ? `Select Inspect to read ${profile.name}.`
+                ? autoLoad
+                  ? "Waiting to read server information."
+                  : `Select Inspect to read ${profile.name}.`
                 : "Connect to this server to inspect it."}
           </p>
         </div>
