@@ -413,7 +413,7 @@ struct Fixture {
     channel_opens: Arc<AtomicUsize>,
     auth_count: Arc<AtomicUsize>,
     shutdown: server::RunningServerHandle,
-    task: Option<JoinHandle<()>>,
+    task: Option<JoinHandle<TcpListener>>,
     commands: Arc<Mutex<Vec<String>>>,
     sizes: Arc<Mutex<Vec<(u32, u32)>>>,
     sudo_inputs: Arc<AtomicUsize>,
@@ -443,7 +443,7 @@ impl Fixture {
         host_key: Option<PrivateKey>,
     ) -> Self {
         Self::start_with_options(
-            port,
+            TcpListener::bind(("127.0.0.1", port)).await.unwrap(),
             pause,
             accepted_key,
             allow_none,
@@ -473,7 +473,7 @@ impl Fixture {
         )
         .unwrap();
         Self::start_with_options(
-            port,
+            TcpListener::bind(("127.0.0.1", port)).await.unwrap(),
             None,
             None,
             false,
@@ -516,7 +516,7 @@ impl Fixture {
         )
         .unwrap();
         Self::start_with_options(
-            port,
+            TcpListener::bind(("127.0.0.1", port)).await.unwrap(),
             None,
             None,
             false,
@@ -537,7 +537,7 @@ impl Fixture {
     }
     #[allow(clippy::too_many_arguments)]
     async fn start_with_options(
-        port: u16,
+        socket: TcpListener,
         pause: Option<Arc<Notify>>,
         accepted_key: Option<keys::PublicKey>,
         allow_none: bool,
@@ -547,7 +547,6 @@ impl Fixture {
         gate_explicit_key_on_install: bool,
         install: Option<InstallFixture>,
     ) -> Self {
-        let socket = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
         let port = socket.local_addr().unwrap().port();
         let auth_count = Arc::new(AtomicUsize::new(0));
         let service_snapshot = Arc::new(Mutex::new("=== OS ===\nID=debian\nVERSION_ID=\"12\"\n=== Architecture ===\nx86_64\nId=app.service\nLoadState=loaded\nNeedDaemonReload=no\nType=simple\nDropInPaths=\nJob=\nRequiredBy=\nBoundBy=\nConsistsOf=\nFragmentPath=/etc/systemd/system/app.service\nRefuseManualStart=no\nRefuseManualStop=no\nActiveState=active\n=== Dependents ===\napp.service\n=== Unit file revision ===\n1:2:3:4:5\n".into()));
@@ -619,6 +618,7 @@ impl Fixture {
             let running = server.run_on_socket(config, &socket);
             let _ = sender.send(running.handle());
             let _ = running.await;
+            socket
         });
         Self {
             channels_closed,
@@ -637,11 +637,9 @@ impl Fixture {
             admin_requests,
         }
     }
-    async fn stop(&mut self) {
+    async fn stop_and_take_listener(mut self) -> TcpListener {
         self.shutdown.shutdown("Fixture stopped".into());
-        if let Some(task) = self.task.take() {
-            task.await.unwrap();
-        }
+        self.task.take().unwrap().await.unwrap()
     }
 }
 impl Drop for Fixture {
@@ -838,7 +836,7 @@ async fn renaming_a_connected_profile_preserves_its_identity_and_connection() {
 
 #[tokio::test]
 async fn host_key_changes_between_review_and_authentication_never_receive_a_password() {
-    let mut fixture = Fixture::start(0, None).await;
+    let fixture = Fixture::start(0, None).await;
     let (_dir, service) = service();
     let profile = service.save_profile(input(fixture.port)).await.unwrap();
     let original = service.inspect(&profile.id).await.unwrap();
@@ -846,9 +844,10 @@ async fn host_key_changes_between_review_and_authentication_never_receive_a_pass
         .trust(&profile.id, &original.challenge_id)
         .await
         .unwrap();
-    let port = fixture.port;
-    fixture.stop().await;
-    let replacement = Fixture::start(port, None).await;
+    // Keep the endpoint reserved while replacing the server and its host key.
+    let socket = fixture.stop_and_take_listener().await;
+    let replacement =
+        Fixture::start_with_options(socket, None, None, false, None, None, None, false, None).await;
     let error = service
         .connect(&profile.id, &original.challenge_id, FIXTURE_PASSWORD.into())
         .await
