@@ -1,6 +1,7 @@
-# VPS Pilot 0.2.18
+# VPS Pilot 0.2.19
 
-- Refresh the PM2 toolbar with a compact refresh icon, selected-app actions menu and New app in the header.
-- Expand command runs into the page with colored statuses, step progress, ANSI log colors and explicit successful completion messages.
-- Redesign the public download page with GitHub dark styling, app screenshots and platform installer cards.
-- Deploy the landing page on every main push and after release publication, keeping its displayed version and installer links tied to the same published release.
+- Open PM2, Proxy, Services, UFW Firewall, Network, and Processes to load their status automatically.
+- Read UFW status and search rules in a single table. See the SSH port and configured defaults when available.
+- Filter services by runtime state, see live network traffic, and compare CPU and memory use by process.
+- Save SSH passwords in the system credential store and protect the app with a password.
+- Find theme and app settings in a simpler layout.
