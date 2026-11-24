@@ -20,10 +20,13 @@ permissions:
 jobs:
   deploy:
     permissions:
+      actions: read
       contents: read
       pages: write
       id-token: write
     runs-on: ubuntu-22.04
+    env:
+      PAGES_ARTIFACT_NAME: github-pages-${{ github.run_attempt }}
     concurrency:
       group: pages
       cancel-in-progress: false
@@ -79,7 +82,21 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
+          name: ${{ env.PAGES_ARTIFACT_NAME }}
           path: _site
+      - name: Wait for Pages artifact metadata
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const name = process.env.PAGES_ARTIFACT_NAME;
+            for (let attempt = 1; attempt <= 10; attempt++) {
+              const {data} = await github.rest.actions.listWorkflowRunArtifacts({
+                ...context.repo, run_id: context.runId, name
+              });
+              if (data.artifacts.some(artifact => artifact.name === name && !artifact.expired)) return;
+              if (attempt < 10) await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+            throw new Error(`Pages artifact ${name} is not visible in this workflow run.`);
       - name: Verify Pages deployment identity
         uses: actions/github-script@v8
         with:
@@ -100,3 +117,5 @@ jobs:
             }
       - uses: actions/deploy-pages@v4
         id: deployment
+        with:
+          artifact_name: ${{ env.PAGES_ARTIFACT_NAME }}
