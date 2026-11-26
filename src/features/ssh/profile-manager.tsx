@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -38,6 +39,7 @@ import {
 
 interface Props {
   open: boolean;
+  editProfile?: ServerProfile | null;
   onOpenChange: (open: boolean) => void;
   onOpenServer: (profile: ServerProfile) => void;
   onDeleteServer: (profile: ServerProfile) => void;
@@ -53,6 +55,18 @@ const blankProfile = (): ProfileInput => ({
   identityFile: null,
   passwordAllowed: true,
 });
+function profileDraft(profile: ServerProfile): ProfileInput {
+  return {
+    id: profile.id,
+    name: profile.name,
+    host: profile.host,
+    port: profile.port,
+    username: profile.username,
+    identityFile: profile.identityFile ?? null,
+    passwordAllowed: profile.passwordAllowed !== false,
+  };
+}
+
 export function ProfileManager(props: Props) {
   const [busy, setBusy] = useState(false);
   return (
@@ -70,6 +84,7 @@ export function ProfileManager(props: Props) {
 }
 function ConnectionPicker({
   onOpenChange,
+  editProfile,
   onOpenServer,
   onDeleteServer,
   samples,
@@ -78,8 +93,10 @@ function ConnectionPicker({
   setBusy,
 }: Props & { busy: boolean; setBusy: (busy: boolean) => void }) {
   const fleet = useFleet();
-  const [view, setView] = useState("connections");
-  const [draft, setDraft] = useState<ProfileInput>(blankProfile);
+  const [view, setView] = useState(editProfile ? "new" : "connections");
+  const [draft, setDraft] = useState<ProfileInput>(() =>
+    editProfile ? profileDraft(editProfile) : blankProfile(),
+  );
   const [search, setSearch] = useState("");
   const [command, setCommand] = useState("");
   const [commandError, setCommandError] = useState("");
@@ -160,7 +177,9 @@ function ConnectionPicker({
         <DialogDescription>
           {removing
             ? "Removes the saved profile from this app. Your server and SSH config stay unchanged."
-            : "Choose a server or add a connection."}
+            : draft.id && view === "new"
+              ? "Disconnect the server before changing its host, port, user, or authentication."
+              : "Choose a server or add a connection."}
         </DialogDescription>
       </DialogHeader>
       <Tabs
@@ -377,8 +396,9 @@ function ConnectionPicker({
                   />
                   <Button
                     variant="outline"
-                    size="icon"
-                    aria-label="Choose private key"
+                    type="button"
+                    className="shrink-0"
+                    size="sm"
                     disabled={busy}
                     onClick={async () => {
                       try {
@@ -387,19 +407,42 @@ function ConnectionPicker({
                           directory: false,
                           title: "Choose SSH private key",
                         });
-                        if (path) setDraft({ ...draft, identityFile: path });
+                        if (path)
+                          setDraft((current) => ({
+                            ...current,
+                            identityFile: path,
+                          }));
                       } catch (error) {
                         setError(safeError(error));
                       }
                     }}
                   >
                     <FolderOpen aria-hidden="true" />
+                    Choose key file
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Passwords and key passphrases are requested when connecting.
+                  Select the private key file for this server. Leave the path
+                  blank to use SSH agent or default keys.
                 </p>
               </div>
+              <label
+                htmlFor="profile-key-only"
+                className="flex items-center gap-2 text-sm"
+              >
+                <Checkbox
+                  id="profile-key-only"
+                  checked={draft.passwordAllowed === false}
+                  disabled={busy}
+                  onCheckedChange={(checked) =>
+                    setDraft((current) => ({
+                      ...current,
+                      passwordAllowed: !checked,
+                    }))
+                  }
+                />
+                Use SSH keys only
+              </label>
               {error && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
@@ -415,7 +458,11 @@ function ConnectionPicker({
                   Back
                 </Button>
                 <Button type="submit" disabled={busy}>
-                  {busy ? "Saving…" : "Open workspace"}
+                  {busy
+                    ? "Saving…"
+                    : draft.id
+                      ? "Save connection"
+                      : "Open workspace"}
                 </Button>
               </div>
             </form>
@@ -596,16 +643,7 @@ function ConnectionPicker({
                             disabled={busy}
                             aria-label={`Edit ${profile.name}`}
                             onClick={() => {
-                              setDraft({
-                                id: profile.id,
-                                name: profile.name,
-                                host: profile.host,
-                                port: profile.port,
-                                username: profile.username,
-                                identityFile: profile.identityFile ?? null,
-                                passwordAllowed:
-                                  profile.passwordAllowed !== false,
-                              });
+                              setDraft(profileDraft(profile));
                               setView("new");
                               setError("");
                             }}

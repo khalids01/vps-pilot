@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   ListChecks,
   Network,
+  Pencil,
   Shield,
   Terminal,
   Unplug,
@@ -90,6 +91,7 @@ interface RemoteWorkspaceProps {
   settingsOpen: boolean;
   sidebarCollapsed: boolean;
   onSidebarCollapsedChange: (collapsed: boolean) => void;
+  onEditConnection: () => void;
   onOpenProfile?: (profileId: string) => void;
 }
 export function RemoteWorkspace(props: RemoteWorkspaceProps) {
@@ -124,6 +126,7 @@ function RemoteWorkspaceContent({
   settingsOpen,
   sidebarCollapsed,
   onSidebarCollapsedChange,
+  onEditConnection,
   onOpenProfile,
 }: RemoteWorkspaceProps) {
   const queryClient = useQueryClient();
@@ -249,6 +252,15 @@ function RemoteWorkspaceContent({
               </dd>
             </dl>
           </details>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEditConnection}
+            disabled={busy}
+          >
+            <Pencil aria-hidden="true" />
+            Edit connection
+          </Button>
           {connected ? (
             <Button
               size="sm"
@@ -668,9 +680,24 @@ function RemoteWorkspaceContent({
                     )}
                     <p className="mt-2 text-xs text-muted-foreground">
                       {profile.identityFile
-                        ? "Leave blank to use your private key."
-                        : "Leave blank to use your SSH agent or default key."}
+                        ? `Private key: ${profile.identityFile.replace(/^.*[\\/]/, "")}`
+                        : "SSH agent or default keys"}
+                      {profile.passwordAllowed !== false &&
+                        " · Leave the password blank to use a key."}
                     </p>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      className="mt-2"
+                      disabled={busy}
+                      onClick={() => void cancel().then(onEditConnection)}
+                    >
+                      <KeyRound aria-hidden="true" />
+                      {profile.identityFile
+                        ? "Change key file"
+                        : "Set a key file"}
+                    </Button>
                     {profile.passwordAllowed !== false && (
                       <div className="mt-3 space-y-3 text-sm">
                         <label

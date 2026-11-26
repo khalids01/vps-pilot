@@ -670,6 +670,7 @@ test.beforeEach(async ({ page }) => {
           }
           if(cmd==="ssh_file_reject"){fileReviews.delete(args.token);return;}
           if(cmd==="ssh_file_download")return true;
+          if (cmd === "plugin:dialog|open") return "/home/tester/.ssh/vps_fixture";
           if (cmd === "ssh_profiles") return profiles;
           if (cmd === "ssh_save_profile") {
             const input=args.input;
@@ -1439,6 +1440,26 @@ test("fleet organization and ordering persist and are searchable in the connecti
   await expect(page.getByRole("button",{name:"Open Fixture Alpha",exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"Open Fixture Beta",exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>(window as any).__calls.some((call:any)=>["ssh_connect","ssh_save_profile","ssh_inspection_run"].includes(call.cmd)))).toBe(false);
+});
+
+test("workspace connection editor saves a new endpoint and chosen private key", async ({ page }) => {
+  await page.evaluate(() => { (window as any).__configurationDisconnected = true; });
+  await page.getByRole("button", { name: "Edit connection", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit connection" });
+  await expect(editor.getByLabel("Port", { exact: true })).toHaveValue("22");
+  await editor.getByLabel(/Host/).fill("203.0.113.40");
+  await editor.getByLabel("Port", { exact: true }).fill("2222");
+  await editor.getByRole("button", { name: "Choose key file" }).click();
+  await expect(editor.getByLabel(/Private key/)).toHaveValue("/home/tester/.ssh/vps_fixture");
+  await editor.getByRole("checkbox", { name: "Use SSH keys only" }).check();
+  await editor.getByRole("button", { name: "Save connection" }).click();
+  await expect(editor).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit connection", exact: true }).click();
+  await expect(editor.getByLabel(/Host/)).toHaveValue("203.0.113.40");
+  await expect(editor.getByLabel("Port", { exact: true })).toHaveValue("2222");
+  await expect(editor.getByRole("checkbox", { name: "Use SSH keys only" })).toBeChecked();
+  await expect(editor.getByLabel(/Private key/)).toHaveValue("/home/tester/.ssh/vps_fixture");
+  expect(await page.evaluate(() => (window as any).__calls.some((call: any) => call.cmd === "ssh_connect"))).toBe(false);
 });
 
 test("renaming a server updates fleet cards and VPS tabs without reconnecting or remounting sessions",async({page})=>{

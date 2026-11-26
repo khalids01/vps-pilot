@@ -477,6 +477,7 @@ function WorkspaceContent() {
   const fleetOpen = preferences.page === "fleet" || !openServerIds.length;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [editProfile, setEditProfile] = useState<ServerProfile | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [closeError, setCloseError] = useState("");
   const [closing, setClosing] = useState(false);
@@ -735,6 +736,10 @@ function WorkspaceContent() {
                   <RemoteWorkspace
                     key={profile.revision}
                     profile={profile}
+                    onEditConnection={() => {
+                      setEditProfile(profile);
+                      setManagerOpen(true);
+                    }}
                     onOpenProfile={async (profileId) => {
                       const result = await queryClient.fetchQuery({
                         queryKey: profileQueryKey,
@@ -897,7 +902,11 @@ function WorkspaceContent() {
         samples={closedServers}
         onOpenSample={openSample}
         open={managerOpen}
-        onOpenChange={setManagerOpen}
+        editProfile={editProfile}
+        onOpenChange={(open) => {
+          setManagerOpen(open);
+          if (!open) setEditProfile(null);
+        }}
         onOpenServer={openRemote}
         onDeleteServer={(profile) => {
           fleet.remove(profile.id);
